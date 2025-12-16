@@ -33,12 +33,12 @@ Offline-first lab notebook prototype built with React + TypeScript (Vite). Creat
 - npm
 
 ```bash
-cd web
-npm install
 npm run dev
 ```
 
 Open the dev server URL Vite prints (usually `http://localhost:5173`).
+
+Alternative: on Windows, double-click `run-dev.cmd`.
 
 ### Playwright browsers (for tests/screenshots)
 
