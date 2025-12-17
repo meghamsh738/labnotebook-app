@@ -60,22 +60,33 @@ export type BlockType =
   | 'quote'
   | 'divider'
 
+export interface TextRun {
+  text: string
+  bold?: boolean
+  italic?: boolean
+  underline?: boolean
+}
+
 export interface BlockBase {
   id: string
   type: BlockType
   updatedAt?: string
   updatedBy?: string
+  locked?: boolean
+  align?: 'left' | 'center' | 'right' | 'justify'
 }
 
 export interface HeadingBlock extends BlockBase {
   type: 'heading'
   text: string
   level?: 1 | 2 | 3
+  runs?: TextRun[]
 }
 
 export interface ParagraphBlock extends BlockBase {
   type: 'paragraph'
   text: string
+  runs?: TextRun[]
 }
 
 export interface TableBlock extends BlockBase {
@@ -101,6 +112,7 @@ export interface ChecklistItem {
   text: string
   done: boolean
   timerMinutes?: number
+  runs?: TextRun[]
 }
 
 export interface ChecklistBlock extends BlockBase {
@@ -111,6 +123,7 @@ export interface ChecklistBlock extends BlockBase {
 export interface QuoteBlock extends BlockBase {
   type: 'quote'
   text: string
+  runs?: TextRun[]
 }
 
 export interface DividerBlock extends BlockBase {
