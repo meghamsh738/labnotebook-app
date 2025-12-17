@@ -1,9 +1,9 @@
 import type React from 'react'
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
-import { createEditor, Editor, Element as SlateElement, Node, Path, Range, Transforms } from 'slate'
+import { createEditor, Editor, Element as SlateElement, Node, Path, Range, Text, Transforms } from 'slate'
 import type { Descendant } from 'slate'
-import { Slate, Editable, withReact, ReactEditor, useSlateStatic } from 'slate-react'
-import type { RenderElementProps } from 'slate-react'
+import { Slate, Editable, withReact, ReactEditor, useSlate, useSlateStatic } from 'slate-react'
+import type { RenderElementProps, RenderLeafProps } from 'slate-react'
 import lunr from 'lunr'
 import { cacheFile, getCachedFile } from './idb'
 import { writeFileToCache, restoreCacheHandle, ensureCacheDir, pickCacheDir, clearCacheHandle } from './fileCache'
@@ -19,6 +19,7 @@ import type {
   Project,
   ChecklistItem,
   PinnedRegion,
+  TextRun,
 } from './domain/types'
 
 const dtFormat = new Intl.DateTimeFormat('en-US', {
@@ -53,6 +54,29 @@ type ChangeQueueItem = {
   lastError?: string
 }
 
+const LOCKED_TEMPLATE_SECTION_LABELS = new Set(['Summary', 'Protocol', 'Objective', 'Aim', 'Procedure', 'Experiment', 'Results'])
+
+function applyLockedTemplateHeadings(entry: Entry): Entry {
+  const lockedIds = new Set<string>()
+  for (const region of entry.pinnedRegions ?? []) {
+    if (!LOCKED_TEMPLATE_SECTION_LABELS.has(region.label)) continue
+    for (const blockId of region.blockIds) lockedIds.add(blockId)
+  }
+
+  if (lockedIds.size === 0) return entry
+
+  let changed = false
+  const nextContent = entry.content.map((block) => {
+    if (block.type !== 'heading') return block
+    if (!lockedIds.has(block.id)) return block
+    if (block.locked === true) return block
+    changed = true
+    return { ...block, locked: true }
+  })
+
+  return changed ? { ...entry, content: nextContent } : entry
+}
+
 function buildTemplate(templateId: EntryTemplateId, entryId: string, nowIso: string): { content: Block[]; pinnedRegions: PinnedRegion[] } {
   if (templateId === 'blank') {
     return {
@@ -61,28 +85,29 @@ function buildTemplate(templateId: EntryTemplateId, entryId: string, nowIso: str
     }
   }
 
-  const summaryHeadingId = newId('b-')
-  const summaryBodyId = newId('b-')
-  const protocolHeadingId = newId('b-')
-  const protocolChecklistId = newId('b-')
+  const aimHeadingId = newId('b-')
+  const aimBodyId = newId('b-')
+  const experimentHeadingId = newId('b-')
+  const experimentChecklistId = newId('b-')
+  const experimentNotesId = newId('b-')
   const resultsHeadingId = newId('b-')
   const resultsBodyId = newId('b-')
 
   const content: Block[] = [
-    { id: summaryHeadingId, type: 'heading', level: 2, text: 'Summary', updatedAt: nowIso, updatedBy: 'me' },
-    { id: summaryBodyId, type: 'paragraph', text: 'What happened? What changed? 1–2 sentences.', updatedAt: nowIso, updatedBy: 'me' },
-    { id: protocolHeadingId, type: 'heading', level: 2, text: 'Protocol', updatedAt: nowIso, updatedBy: 'me' },
+    { id: aimHeadingId, type: 'heading', level: 2, text: 'Aim', locked: true, updatedAt: nowIso, updatedBy: 'me' },
+    { id: aimBodyId, type: 'paragraph', text: 'What is the goal of this experiment?', updatedAt: nowIso, updatedBy: 'me' },
+    { id: experimentHeadingId, type: 'heading', level: 2, text: 'Experiment', locked: true, updatedAt: nowIso, updatedBy: 'me' },
     {
-      id: protocolChecklistId,
+      id: experimentChecklistId,
       type: 'checklist',
       items: [
         { id: newId('ci-'), text: 'Step 1…', done: false },
-        { id: newId('ci-'), text: 'Step 2…', done: false },
       ],
       updatedAt: nowIso,
       updatedBy: 'me',
     },
-    { id: resultsHeadingId, type: 'heading', level: 2, text: 'Results', updatedAt: nowIso, updatedBy: 'me' },
+    { id: experimentNotesId, type: 'paragraph', text: 'Notes, deviations, timings.', updatedAt: nowIso, updatedBy: 'me' },
+    { id: resultsHeadingId, type: 'heading', level: 2, text: 'Results', locked: true, updatedAt: nowIso, updatedBy: 'me' },
     { id: resultsBodyId, type: 'paragraph', text: 'Key observations, metrics, anomalies.', updatedAt: nowIso, updatedBy: 'me' },
   ]
 
@@ -90,15 +115,15 @@ function buildTemplate(templateId: EntryTemplateId, entryId: string, nowIso: str
     {
       id: newId('region-'),
       entryId,
-      label: 'Summary',
-      blockIds: [summaryHeadingId, summaryBodyId],
+      label: 'Aim',
+      blockIds: [aimHeadingId, aimBodyId],
       linkedAttachments: [],
     },
     {
       id: newId('region-'),
       entryId,
-      label: 'Protocol',
-      blockIds: [protocolHeadingId, protocolChecklistId],
+      label: 'Experiment',
+      blockIds: [experimentHeadingId, experimentChecklistId, experimentNotesId],
       linkedAttachments: [],
     },
     {
@@ -399,6 +424,40 @@ type EditorAttachmentContextValue = {
 const EditorAttachmentContext = createContext<EditorAttachmentContextValue | null>(null)
 
 function App() {
+  const [projects, setProjects] = useState<Project[]>(() => {
+    if (typeof window === 'undefined') return sampleData.projects
+    try {
+      const saved = window.localStorage.getItem('labnote.projects')
+      if (saved) {
+        const parsed = JSON.parse(saved) as Project[]
+        const byId = new Map(parsed.map((p) => [p.id, p]))
+        for (const seeded of sampleData.projects) {
+          if (!byId.has(seeded.id)) byId.set(seeded.id, seeded)
+        }
+        return Array.from(byId.values())
+      }
+    } catch (err) {
+      console.warn('Unable to read cached projects', err)
+    }
+    return sampleData.projects
+  })
+  const [experiments, setExperiments] = useState<Experiment[]>(() => {
+    if (typeof window === 'undefined') return sampleData.experiments
+    try {
+      const saved = window.localStorage.getItem('labnote.experiments')
+      if (saved) {
+        const parsed = JSON.parse(saved) as Experiment[]
+        const byId = new Map(parsed.map((ex) => [ex.id, ex]))
+        for (const seeded of sampleData.experiments) {
+          if (!byId.has(seeded.id)) byId.set(seeded.id, seeded)
+        }
+        return Array.from(byId.values())
+      }
+    } catch (err) {
+      console.warn('Unable to read cached experiments', err)
+    }
+    return sampleData.experiments
+  })
   const [entryDrafts, setEntryDrafts] = useState<Record<string, Entry>>(() => {
     if (typeof window === 'undefined') {
       return Object.fromEntries(sampleData.entries.map((e) => [e.id, e]))
@@ -407,7 +466,7 @@ function App() {
       const saved = window.localStorage.getItem('labnote.entries')
       if (saved) {
         const parsed = JSON.parse(saved) as Record<string, Entry>
-        return parsed
+        return Object.fromEntries(Object.entries(parsed).map(([id, entry]) => [id, applyLockedTemplateHeadings(entry)]))
       }
     } catch (err) {
       console.warn('Unable to read cached entries', err)
@@ -419,10 +478,12 @@ function App() {
     sampleData.entries[0]?.id ?? ''
   )
   const [newEntryOpen, setNewEntryOpen] = useState(false)
+  const [newExperimentOpen, setNewExperimentOpen] = useState(false)
   const [autoEditEntryId, setAutoEditEntryId] = useState<string | null>(null)
   const [query, setQuery] = useState('')
   const [selectedTags, setSelectedTags] = useState<string[]>([])
   const [selectedProject, setSelectedProject] = useState<string>('all')
+  const [selectedExperiment, setSelectedExperiment] = useState<string>('all')
   const [filterHasImage, setFilterHasImage] = useState(false)
   const [filterHasFile, setFilterHasFile] = useState(false)
   const [datePreset, setDatePreset] = useState<'all' | '7d' | '30d'>('all')
@@ -433,6 +494,80 @@ function App() {
   const [fsEnabled, setFsEnabled] = useState(false)
   const [fsNeedsPermission, setFsNeedsPermission] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [detailsOpen, setDetailsOpen] = useState(false)
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const id = window.setTimeout(() => {
+      try {
+        window.localStorage.setItem('labnote.projects', JSON.stringify(projects))
+      } catch (err) {
+        console.warn('Unable to cache projects', err)
+      }
+    }, 250)
+    return () => window.clearTimeout(id)
+  }, [projects])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const id = window.setTimeout(() => {
+      try {
+        window.localStorage.setItem('labnote.experiments', JSON.stringify(experiments))
+      } catch (err) {
+        console.warn('Unable to cache experiments', err)
+      }
+    }, 250)
+    return () => window.clearTimeout(id)
+  }, [experiments])
+
+  const createProject = useCallback(
+    (title: string): string => {
+      const cleaned = title.trim().replace(/\s+/g, ' ')
+      if (!cleaned) {
+        throw new Error('Project name is required.')
+      }
+
+      const existing = projects.find((p) => p.title.trim().toLowerCase() === cleaned.toLowerCase())
+      if (existing) return existing.id
+
+      const project: Project = {
+        id: newId('proj-'),
+        labId: sampleData.labs[0]?.id ?? sampleData.users[0]?.settings.defaultLabId ?? 'lab',
+        title: cleaned,
+        tags: [],
+      }
+
+      setProjects((prev) => [...prev, project])
+      return project.id
+    },
+    [projects]
+  )
+
+  const createExperiment = useCallback(
+    (opts: { title: string; projectId: string; protocolRef?: string; defaultRawDataPath?: string }): string => {
+      const cleanedTitle = opts.title.trim().replace(/\s+/g, ' ')
+      if (!cleanedTitle) throw new Error('Experiment name is required.')
+      if (!opts.projectId) throw new Error('Project is required.')
+
+      const existing = experiments.find(
+        (ex) => ex.projectId === opts.projectId && ex.title.trim().toLowerCase() === cleanedTitle.toLowerCase()
+      )
+      if (existing) return existing.id
+
+      const experiment: Experiment = {
+        id: newId('exp-'),
+        projectId: opts.projectId,
+        title: cleanedTitle,
+        protocolRef: opts.protocolRef?.trim() || undefined,
+        defaultRawDataPath: opts.defaultRawDataPath?.trim() || undefined,
+        startDatetime: new Date().toISOString(),
+      }
+
+      setExperiments((prev) => [...prev, experiment])
+      return experiment.id
+    },
+    [experiments]
+  )
 
   const refreshFsState = useCallback(async () => {
     try {
@@ -683,7 +818,7 @@ function App() {
 
   const addAttachments = useCallback(
     async (entryId: string, files: File[]) => {
-      if (!files.length) return
+      if (!files.length) return []
 
       const saved: Attachment[] = []
 
@@ -733,9 +868,46 @@ function App() {
           },
         }
       })
+
+      return saved
     },
     []
   )
+
+  const addFileDestination = useCallback((entryId: string, val: { path: string; label?: string }): Attachment => {
+    const rawPath = val.path.trim()
+    if (!rawPath) {
+      throw new Error('Path is required.')
+    }
+
+    const filename = rawPath.split(/[\\/]/).filter(Boolean).pop() ?? val.label ?? 'file'
+    const id = `att-${crypto.randomUUID?.() ?? Math.random().toString(36).slice(2)}`
+    const att: Attachment = {
+      id,
+      entryId,
+      type: 'raw',
+      filename: filename.trim() || 'file',
+      filesize: '—',
+      storagePath: rawPath,
+    }
+
+    setAttachmentsStore((prev) => [att, ...prev])
+    setEntryDrafts((prev) => {
+      const current = prev[entryId]
+      if (!current) return prev
+      const updatedLinked = Array.from(new Set([...current.linkedFiles, att.id]))
+      return {
+        ...prev,
+        [entryId]: {
+          ...current,
+          linkedFiles: updatedLinked,
+          lastEditedDatetime: new Date().toISOString(),
+        },
+      }
+    })
+
+    return att
+  }, [])
 
   // Hydrate cached attachment thumbnails/URLs from IndexedDB and fs handles
 	  useEffect(() => {
@@ -805,12 +977,12 @@ function App() {
 
   const exportExperiment = useCallback(
     async (experimentId: string, format: 'markdown' | 'pdf') => {
-      const experiment = sampleData.experiments.find((ex) => ex.id === experimentId)
+      const experiment = experiments.find((ex) => ex.id === experimentId)
       if (!experiment) {
         window.alert('Experiment not found.')
         return
       }
-      const project = sampleData.projects.find((p) => p.id === experiment.projectId)
+      const project = projects.find((p) => p.id === experiment.projectId)
       const entries = entryList
         .filter((e) => e.experimentId === experimentId)
         .sort((a, b) => a.createdDatetime.localeCompare(b.createdDatetime))
@@ -1060,8 +1232,8 @@ function App() {
 	        console.warn('Export failed', err)
 	        window.alert('Export failed. Check console for details.')
 	      }
-	    },
-	    [attachmentsStore, attachmentUrls, entryList]
+    },
+    [attachmentsStore, attachmentUrls, entryList, experiments, projects]
 	  )
 
   const index = useMemo(() => {
@@ -1102,6 +1274,11 @@ function App() {
     const now = new Date()
     return entryList.filter((entry) => {
       if (selectedProject !== 'all' && entry.projectId !== selectedProject) return false
+      if (selectedExperiment === 'none') {
+        if (entry.experimentId) return false
+      } else if (selectedExperiment !== 'all' && entry.experimentId !== selectedExperiment) {
+        return false
+      }
       if (selectedTags.length && !selectedTags.every((t) => entry.tags.includes(t))) return false
       if (filterHasImage) {
         const hasImage = attachmentsForEntry(entry.id).some((a) => a.type === 'image')
@@ -1122,12 +1299,46 @@ function App() {
       if (!q) return matchedIds.includes(entry.id)
       return matchedIds.includes(entry.id)
     })
-  }, [query, selectedProject, selectedTags, filterHasImage, filterHasFile, matchedIds, datePreset, entryList, attachmentsForEntry])
+  }, [
+    query,
+    selectedProject,
+    selectedExperiment,
+    selectedTags,
+    filterHasImage,
+    filterHasFile,
+    matchedIds,
+    datePreset,
+    entryList,
+    attachmentsForEntry,
+  ])
+
+  // Keep experiment filter in sync with project filter.
+  useEffect(() => {
+    if (selectedExperiment === 'all' || selectedExperiment === 'none') return
+    const ex = experiments.find((e) => e.id === selectedExperiment)
+    if (!ex) {
+      setSelectedExperiment('all')
+      return
+    }
+    if (selectedProject !== 'all' && ex.projectId !== selectedProject) {
+      setSelectedExperiment('all')
+    }
+  }, [experiments, selectedExperiment, selectedProject])
 
   const entry = entryDrafts[selectedEntryId]
-  const project = entry?.projectId ? sampleData.projects.find((p) => p.id === entry.projectId) : undefined
-  const experiment = entry?.experimentId ? sampleData.experiments.find((ex) => ex.id === entry.experimentId) : undefined
+  const project = entry?.projectId ? projects.find((p) => p.id === entry.projectId) : undefined
+  const experiment = entry?.experimentId ? experiments.find((ex) => ex.id === entry.experimentId) : undefined
   const attachments = entry ? attachmentsForEntry(entry.id) : []
+
+  const selectedExperimentObj =
+    selectedExperiment !== 'all' && selectedExperiment !== 'none'
+      ? experiments.find((ex) => ex.id === selectedExperiment)
+      : undefined
+  const fallbackProjectId = sampleData.users[1]?.settings.defaultProjectId ?? projects[0]?.id ?? ''
+  const defaultProjectIdForNewEntry =
+    selectedProject !== 'all'
+      ? selectedProject
+      : selectedExperimentObj?.projectId ?? fallbackProjectId
 
   // Keep selection in sync with filtered list
   useEffect(() => {
@@ -1143,14 +1354,16 @@ function App() {
       <div className="app-shell">
         <Sidebar
           labs={sampleData.labs}
-          projects={sampleData.projects}
-          experiments={sampleData.experiments}
+          projects={projects}
+          experiments={experiments}
           entries={filteredEntries}
           selectedEntryId={selectedEntryId}
           query={query}
           onQueryChange={setQuery}
           selectedProject={selectedProject}
           onSelectProject={setSelectedProject}
+          selectedExperiment={selectedExperiment}
+          onSelectExperiment={setSelectedExperiment}
           selectedTags={selectedTags}
           onToggleTag={(tag) =>
             setSelectedTags((prev) =>
@@ -1165,6 +1378,7 @@ function App() {
           onSelectDatePreset={setDatePreset}
           onSelectEntry={setSelectedEntryId}
           onNewEntry={() => setNewEntryOpen(true)}
+          onNewExperiment={() => setNewExperimentOpen(true)}
           onQuickCapture={() => handleCreateEntry({ templateId: 'blank', quickCapture: true })}
           onOpenSettings={() => setSettingsOpen(true)}
         />
@@ -1189,6 +1403,7 @@ function App() {
             })
           }
           onAddAttachments={addAttachments}
+          onAddFileDestination={addFileDestination}
           onEnqueueChange={(entryId, blockIds, ts) =>
             setChangeQueue((prev) => [
               {
@@ -1204,37 +1419,56 @@ function App() {
           }
           changeQueue={changeQueue.filter((c) => c.entryId === selectedEntryId)}
           syncing={syncing}
-          onSyncNow={() => syncNow({ entryId: selectedEntryId, includeFailed: true })}
-          onClearSynced={() => clearSyncedChanges(selectedEntryId)}
-          fsEnabled={fsEnabled}
-          fsNeedsPermission={fsNeedsPermission}
-          onPromptFs={handlePromptFs}
+          onOpenDetails={() => setDetailsOpen(true)}
           autoEditEntryId={autoEditEntryId}
           onConsumeAutoEdit={() => setAutoEditEntryId(null)}
           onExportExperiment={exportExperiment}
         />
-        <MetaPanel
-          entry={entry}
-          project={project}
-          experiment={experiment}
-          attachments={attachments}
-          onTogglePinned={togglePinned}
-          missing={missingAttachments}
-          attachmentUrls={attachmentUrls}
-          changeQueue={changeQueue.filter((c) => c.entryId === selectedEntryId)}
-          syncing={syncing}
-          onSyncNow={() => syncNow({ entryId: selectedEntryId, includeFailed: true })}
-          onRetryChange={retryChange}
-          onClearSynced={() => clearSyncedChanges(selectedEntryId)}
-        />
       </div>
+
+      {detailsOpen && (
+        <div className="drawer-overlay" role="presentation" onMouseDown={() => setDetailsOpen(false)}>
+          <div className="drawer" role="presentation" onMouseDown={(e) => e.stopPropagation()}>
+            <MetaPanel
+              entry={entry}
+              project={project}
+              experiment={experiment}
+              attachments={attachments}
+              onTogglePinned={togglePinned}
+              missing={missingAttachments}
+              attachmentUrls={attachmentUrls}
+              changeQueue={changeQueue.filter((c) => c.entryId === selectedEntryId)}
+              syncing={syncing}
+              onSyncNow={() => syncNow({ entryId: selectedEntryId, includeFailed: true })}
+              onRetryChange={retryChange}
+              onClearSynced={() => clearSyncedChanges(selectedEntryId)}
+              onClose={() => setDetailsOpen(false)}
+            />
+          </div>
+        </div>
+      )}
       {newEntryOpen && (
         <NewEntryModal
           onClose={() => setNewEntryOpen(false)}
-          projects={sampleData.projects}
-          experiments={sampleData.experiments}
-          defaultProjectId={selectedProject !== 'all' ? selectedProject : (sampleData.users[1]?.settings.defaultProjectId ?? '')}
+          projects={projects}
+          experiments={experiments}
+          defaultProjectId={defaultProjectIdForNewEntry}
+          defaultExperimentId={selectedExperiment !== 'all' && selectedExperiment !== 'none' ? selectedExperiment : ''}
+          onCreateProject={createProject}
+          onCreateExperiment={createExperiment}
           onCreate={(val) => handleCreateEntry(val)}
+        />
+      )}
+      {newExperimentOpen && (
+        <NewExperimentModal
+          onClose={() => setNewExperimentOpen(false)}
+          projects={projects}
+          defaultProjectId={defaultProjectIdForNewEntry}
+          onCreateProject={createProject}
+          onCreate={(val) => {
+            createExperiment(val)
+            setNewExperimentOpen(false)
+          }}
         />
       )}
       {settingsOpen && (
@@ -1263,6 +1497,8 @@ interface SidebarProps {
   onQueryChange: (val: string) => void
   selectedProject: string
   onSelectProject: (id: string) => void
+  selectedExperiment: string
+  onSelectExperiment: (id: string) => void
   selectedTags: string[]
   onToggleTag: (tag: string) => void
   filterHasImage: boolean
@@ -1273,6 +1509,7 @@ interface SidebarProps {
   onSelectDatePreset: (val: 'all' | '7d' | '30d') => void
   onSelectEntry: (id: string) => void
   onNewEntry: () => void
+  onNewExperiment: () => void
   onQuickCapture: () => void
   onOpenSettings: () => void
 }
@@ -1287,6 +1524,8 @@ function Sidebar({
   onQueryChange,
   selectedProject,
   onSelectProject,
+  selectedExperiment,
+  onSelectExperiment,
   selectedTags,
   onToggleTag,
   filterHasImage,
@@ -1297,6 +1536,7 @@ function Sidebar({
   onSelectDatePreset,
   onSelectEntry,
   onNewEntry,
+  onNewExperiment,
   onQuickCapture,
   onOpenSettings,
 }: SidebarProps) {
@@ -1305,7 +1545,12 @@ function Sidebar({
     () => Array.from(new Set(projects.flatMap((p) => p.tags))).slice(0, 12),
     [projects]
   )
+  const visibleExperiments = useMemo(() => {
+    if (selectedProject === 'all') return experiments
+    return experiments.filter((ex) => ex.projectId === selectedProject)
+  }, [experiments, selectedProject])
   const searchRef = useRef<HTMLInputElement | null>(null)
+  const [showAdvanced, setShowAdvanced] = useState(false)
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -1344,108 +1589,41 @@ function Sidebar({
 
       <div className="quick-actions">
         <button className="ghost" onClick={onNewEntry}>+ New Entry</button>
-        <button className="ghost" disabled title="Not implemented yet">New Experiment</button>
+        <button className="ghost" onClick={onNewExperiment}>New Experiment</button>
         <button className="accent" onClick={onQuickCapture}>Quick Capture</button>
       </div>
 
       <section className="sidebar-section">
-        <div className="section-title">Projects</div>
-        <div className="project-pills">
-          <button
-            className={`pill ${selectedProject === 'all' ? 'active-pill' : ''}`}
-            onClick={() => onSelectProject('all')}
-          >
-            All
-          </button>
-          {projects.map((p) => (
-            <button
-              key={p.id}
-              className={`pill ${selectedProject === p.id ? 'active-pill' : ''}`}
-              onClick={() => onSelectProject(p.id)}
-            >
-              {p.title}
-            </button>
-          ))}
-        </div>
+        <div className="section-title">Filter</div>
+        <label className="field">
+          <span className="muted tiny">Project</span>
+          <select value={selectedProject} onChange={(e) => onSelectProject(e.target.value)}>
+            <option value="all">All projects</option>
+            {projects.map((p) => (
+              <option key={p.id} value={p.id}>{p.title}</option>
+            ))}
+          </select>
+        </label>
+
+        <label className="field">
+          <span className="muted tiny">Experiment</span>
+          <select value={selectedExperiment} onChange={(e) => onSelectExperiment(e.target.value)}>
+            <option value="all">All experiments</option>
+            <option value="none">General notes</option>
+            {visibleExperiments.map((ex) => (
+              <option key={ex.id} value={ex.id}>{ex.title}</option>
+            ))}
+          </select>
+        </label>
       </section>
 
       <section className="sidebar-section">
-        <div className="section-title">Tag filters</div>
-        <div className="chip-row">
-          {allTags.map((tag) => (
-            <button
-              key={tag}
-              className={`pill soft ${selectedTags.includes(tag) ? 'active-pill' : ''}`}
-              onClick={() => onToggleTag(tag)}
-            >
-              {tag}
-            </button>
-          ))}
-        </div>
-      </section>
-
-      <section className="sidebar-section">
-        <div className="section-title">Attachments</div>
-        <div className="chip-row">
-          <button
-            className={`pill soft ${filterHasImage ? 'active-pill' : ''}`}
-            onClick={onToggleHasImage}
-          >
-            Has image
-          </button>
-          <button
-            className={`pill soft ${filterHasFile ? 'active-pill' : ''}`}
-            onClick={onToggleHasFile}
-          >
-            Has file/raw/pdf
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+          <div className="section-title">Entries</div>
+          <button className="pill soft" type="button" onClick={() => setShowAdvanced((v) => !v)}>
+            {showAdvanced ? 'Less' : 'More'}
           </button>
         </div>
-      </section>
-
-      <section className="sidebar-section">
-        <div className="section-title">Date</div>
-        <div className="chip-row">
-          <button
-            className={`pill soft ${datePreset === 'all' ? 'active-pill' : ''}`}
-            onClick={() => onSelectDatePreset('all')}
-          >
-            All time
-          </button>
-          <button
-            className={`pill soft ${datePreset === '7d' ? 'active-pill' : ''}`}
-            onClick={() => onSelectDatePreset('7d')}
-          >
-            Last 7d
-          </button>
-          <button
-            className={`pill soft ${datePreset === '30d' ? 'active-pill' : ''}`}
-            onClick={() => onSelectDatePreset('30d')}
-          >
-            Last 30d
-          </button>
-        </div>
-      </section>
-
-      <section className="sidebar-section">
-        <div className="section-title">Experiments</div>
-        <div className="experiment-list">
-          {experiments.map((ex) => (
-            <div key={ex.id} className="experiment-card">
-              <div>
-                <p className="muted tiny">Protocol</p>
-                <div className="title-sm">{ex.title}</div>
-                {ex.protocolRef && <p className="muted tiny">{ex.protocolRef}</p>}
-              </div>
-              {ex.startDatetime && (
-                <span className="tiny muted">{dateOnly.format(new Date(ex.startDatetime))}</span>
-              )}
-            </div>
-          ))}
-        </div>
-      </section>
-
-      <section className="sidebar-section">
-        <div className="section-title">Recent entries</div>
         <div className="muted tiny" style={{ marginBottom: 6 }}>
           Showing {entries.length} item{entries.length === 1 ? '' : 's'}
         </div>
@@ -1471,6 +1649,67 @@ function Sidebar({
             </button>
           ))}
         </div>
+
+        {showAdvanced && (
+          <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div>
+              <div className="section-title">Tag filters</div>
+              <div className="chip-row">
+                {allTags.map((tag) => (
+                  <button
+                    key={tag}
+                    className={`pill soft ${selectedTags.includes(tag) ? 'active-pill' : ''}`}
+                    onClick={() => onToggleTag(tag)}
+                  >
+                    {tag}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <div className="section-title">Attachments</div>
+              <div className="chip-row">
+                <button
+                  className={`pill soft ${filterHasImage ? 'active-pill' : ''}`}
+                  onClick={onToggleHasImage}
+                >
+                  Has image
+                </button>
+                <button
+                  className={`pill soft ${filterHasFile ? 'active-pill' : ''}`}
+                  onClick={onToggleHasFile}
+                >
+                  Has file/raw/pdf
+                </button>
+              </div>
+            </div>
+
+            <div>
+              <div className="section-title">Date</div>
+              <div className="chip-row">
+                <button
+                  className={`pill soft ${datePreset === 'all' ? 'active-pill' : ''}`}
+                  onClick={() => onSelectDatePreset('all')}
+                >
+                  All time
+                </button>
+                <button
+                  className={`pill soft ${datePreset === '7d' ? 'active-pill' : ''}`}
+                  onClick={() => onSelectDatePreset('7d')}
+                >
+                  Last 7d
+                </button>
+                <button
+                  className={`pill soft ${datePreset === '30d' ? 'active-pill' : ''}`}
+                  onClick={() => onSelectDatePreset('30d')}
+                >
+                  Last 30d
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </section>
     </aside>
   )
@@ -1483,15 +1722,12 @@ interface EditorPaneProps {
   attachments: Attachment[]
   attachmentUrls: Record<string, string>
   onUpdateEntry: (entryId: string, content: Block[]) => void
-  onAddAttachments: (entryId: string, files: File[]) => void
+  onAddAttachments: (entryId: string, files: File[]) => Promise<Attachment[]>
+  onAddFileDestination: (entryId: string, val: { path: string; label?: string }) => Attachment
   onEnqueueChange: (entryId: string, blockIds: string[], timestamp: string) => void
   changeQueue: ChangeQueueItem[]
   syncing: boolean
-  onSyncNow: () => void
-  onClearSynced: () => void
-  fsEnabled: boolean
-  fsNeedsPermission: boolean
-  onPromptFs: () => void
+  onOpenDetails: () => void
   autoEditEntryId: string | null
   onConsumeAutoEdit: () => void
   onExportExperiment: (experimentId: string, format: 'markdown' | 'pdf') => Promise<void>
@@ -1505,19 +1741,15 @@ function EditorPane({
   attachmentUrls,
   onUpdateEntry,
   onAddAttachments,
+  onAddFileDestination,
   onEnqueueChange,
   changeQueue,
   syncing,
-  onSyncNow,
-  onClearSynced,
-  fsEnabled,
-  fsNeedsPermission,
-  onPromptFs,
+  onOpenDetails,
   autoEditEntryId,
   onConsumeAutoEdit,
   onExportExperiment,
 }: EditorPaneProps) {
-  const [showFsPrompt, setShowFsPrompt] = useState(false)
   const [exporting, setExporting] = useState(false)
   const [isEditing, setIsEditing] = useState(false)
   const [editor] = useState(() => withChecklists(withReact(createEditor() as ReactEditor)))
@@ -1546,7 +1778,6 @@ function EditorPane({
 
   const pendingCount = changeQueue.filter((c) => c.status === 'pending').length
   const failedCount = changeQueue.filter((c) => c.status === 'failed').length
-  const syncedCount = changeQueue.filter((c) => c.status === 'synced').length
   const hasWork = pendingCount > 0 || failedCount > 0
 
   const handleUpdateBlock = useCallback(
@@ -1585,23 +1816,37 @@ function EditorPane({
   const handleDrop: React.DragEventHandler = (event) => {
     event.preventDefault()
     const files = Array.from(event.dataTransfer.files)
-    onAddAttachments(entry.id, files)
+    void (async () => {
+      const saved = await onAddAttachments(entry.id, files)
+      if (!isEditing) return
+      const blocks: Block[] = saved.map((att) => {
+        const blockId = newId('b-')
+        if (att.type === 'image') return { id: blockId, type: 'image', attachmentId: att.id, caption: att.filename }
+        return { id: blockId, type: 'file', attachmentId: att.id, label: att.filename }
+      })
+      insertAttachmentMetaBlocks(editor, blocks)
+    })()
   }
 
   const handlePaste: React.ClipboardEventHandler = (event) => {
     const files = Array.from(event.clipboardData.files)
     if (files.length) {
       event.preventDefault()
-      onAddAttachments(entry.id, files)
+      void (async () => {
+        const saved = await onAddAttachments(entry.id, files)
+        if (!isEditing) return
+        const blocks: Block[] = saved.map((att) => {
+          const blockId = newId('b-')
+          if (att.type === 'image') return { id: blockId, type: 'image', attachmentId: att.id, caption: att.filename }
+          return { id: blockId, type: 'file', attachmentId: att.id, label: att.filename }
+        })
+        insertAttachmentMetaBlocks(editor, blocks)
+      })()
     }
   }
 
   return (
     <main className="panel editor" onDrop={handleDrop} onDragOver={(e) => e.preventDefault()} onPaste={handlePaste}>
-      {showFsPrompt && fsPromptVisibleBanner(fsEnabled, () => {
-        onPromptFs()
-        setShowFsPrompt(false)
-      }, () => setShowFsPrompt(false))}
       <div className="editor-header">
         <div className="breadcrumbs">
           <span>{project?.title ?? 'Project'}</span>
@@ -1611,28 +1856,9 @@ function EditorPane({
           <span className={`status-chip ${syncing || hasWork ? 'warning' : 'success'}`}>
             {syncing ? 'Syncing…' : failedCount ? `${failedCount} failed` : pendingCount ? `${pendingCount} pending` : 'Synced'}
           </span>
-          <button className="ghost" disabled={!hasWork || syncing} onClick={onSyncNow}>
-            {failedCount ? 'Retry failed' : 'Sync now'}
-          </button>
-          <button className="ghost" disabled={syncedCount === 0 || syncing} onClick={onClearSynced}>
-            Clear synced
-          </button>
+          <div className="spacer" />
           {experiment ? (
             <>
-              <button
-                className="ghost"
-                disabled={exporting}
-                onClick={async () => {
-                  setExporting(true)
-                  try {
-                    await onExportExperiment(experiment.id, 'markdown')
-                  } finally {
-                    setExporting(false)
-                  }
-                }}
-              >
-                Export Markdown
-              </button>
               <button
                 className="ghost"
                 disabled={exporting}
@@ -1647,37 +1873,34 @@ function EditorPane({
               >
                 Export PDF
               </button>
+              <button
+                className="ghost"
+                disabled={exporting}
+                onClick={async () => {
+                  setExporting(true)
+                  try {
+                    await onExportExperiment(experiment.id, 'markdown')
+                  } finally {
+                    setExporting(false)
+                  }
+                }}
+              >
+                Export MD
+              </button>
             </>
           ) : (
-            <button className="ghost" disabled title="Attach this note to an experiment to export a bundle.">Export</button>
-          )}
-          {fsEnabled && <span className="pill soft">Disk cache</span>}
-          {!fsEnabled && fsNeedsPermission && (
-            <span className="status-chip warning">Disk cache needs permission</span>
-          )}
-          {!fsEnabled && (
-            <button className="ghost" onClick={() => setShowFsPrompt(true)}>
-              {fsNeedsPermission ? 'Fix disk cache' : 'Enable disk cache'}
+            <button className="ghost" disabled title="Attach this note to an experiment to export a bundle.">
+              Export PDF
             </button>
           )}
-        </div>
-        <div className="meta-row">
-          <span className="muted tiny">Created {dtFormat.format(new Date(entry.createdDatetime))}</span>
-          <span className="dot" />
-          <span className="muted tiny">Last edited {dtFormat.format(new Date(entry.lastEditedDatetime))}</span>
-          <span className="dot" />
-          <span className="status-chip warning">Offline-first</span>
-        </div>
-        <div className="title-row">
-          <h1>{entry.title}</h1>
-          {experiment && <span className="pill">{experiment.protocolRef}</span>}
-          <div className="spacer" />
-          {!isEditing && (
-            <button className="ghost" onClick={() => setIsEditing(true)}>
-              Edit note
+          <button className="ghost" type="button" onClick={onOpenDetails}>
+            Details
+          </button>
+          {!isEditing ? (
+            <button className="accent" onClick={() => setIsEditing(true)}>
+              Edit
             </button>
-          )}
-          {isEditing && (
+          ) : (
             <div className="edit-actions">
               <button className="ghost" onClick={() => setIsEditing(false)}>
                 Cancel
@@ -1687,6 +1910,15 @@ function EditorPane({
               </button>
             </div>
           )}
+        </div>
+        <div className="meta-row">
+          <span className="muted tiny">Created {dtFormat.format(new Date(entry.createdDatetime))}</span>
+          <span className="dot" />
+          <span className="muted tiny">Last edited {dtFormat.format(new Date(entry.lastEditedDatetime))}</span>
+        </div>
+        <div className="title-row">
+          <h1>{entry.title}</h1>
+          {experiment?.protocolRef && <span className="pill">{experiment.protocolRef}</span>}
         </div>
       </div>
 
@@ -1720,11 +1952,36 @@ function EditorPane({
               initialValue={editorValue}
               onChange={setEditorValue}
             >
+              <EditorInsertBar
+                entryId={entry.id}
+                onAddAttachments={onAddAttachments}
+                onAddFileDestination={onAddFileDestination}
+              />
               <Editable
                 renderElement={renderElement}
+                renderLeaf={renderLeaf}
                 className="slate-editor"
                 placeholder="Type your lab note..."
                 onKeyDown={(event) => {
+                  if ((event.ctrlKey || event.metaKey) && !event.altKey) {
+                    const key = event.key.toLowerCase()
+                    if (key === 'b') {
+                      event.preventDefault()
+                      toggleMark(editor, 'bold')
+                      return
+                    }
+                    if (key === 'i') {
+                      event.preventDefault()
+                      toggleMark(editor, 'italic')
+                      return
+                    }
+                    if (key === 'u') {
+                      event.preventDefault()
+                      toggleMark(editor, 'underline')
+                      return
+                    }
+                  }
+
                   if (event.key !== 'Enter' && event.key !== 'Backspace') return
 
                   const selection = editor.selection
@@ -1795,7 +2052,7 @@ function EditorPane({
             </Slate>
           </EditorAttachmentContext.Provider>
           <div className="muted tiny">
-            Drag/drop or paste files to attach (images get previews). Editable blocks: headings, paragraphs, quotes, checklists. Other blocks stay read-only.
+            Tip: use the insert bar above; drag/drop or paste files into the editor.
           </div>
         </div>
       )}
@@ -1816,6 +2073,7 @@ interface MetaPanelProps {
   onSyncNow: () => void
   onRetryChange: (changeId: string) => void
   onClearSynced: () => void
+  onClose?: () => void
 }
 
 function MetaPanel({
@@ -1831,11 +2089,23 @@ function MetaPanel({
   onSyncNow,
   onRetryChange,
   onClearSynced,
+  onClose,
 }: MetaPanelProps) {
   const pinned = entry?.pinnedRegions ?? []
 
   return (
     <aside className="panel meta">
+      {onClose && (
+        <div className="drawer-head">
+          <div>
+            <div className="title-sm">Details</div>
+            {entry?.title && <div className="muted tiny">{entry.title}</div>}
+          </div>
+          <button className="ghost" type="button" onClick={onClose}>
+            Close
+          </button>
+        </div>
+      )}
       <section>
         <div className="section-title">Project</div>
         {project ? (
@@ -2022,31 +2292,38 @@ interface BlockRendererProps {
 
 const renderElement = (props: RenderElementProps) => {
   const { element, attributes, children } = props
+  const align = isTextAlignValue(element.align) ? element.align : undefined
+  const style: React.CSSProperties | undefined = align ? { textAlign: align } : undefined
+  const locked = element.locked === true
   switch (element.type) {
     case 'heading-two':
-      return (
-        <h2 className="block-heading h2" {...attributes}>
+      return locked ? (
+        <h2 className="block-heading h2 locked-block" {...attributes} style={style} contentEditable={false}>
+          {children}
+        </h2>
+      ) : (
+        <h2 className="block-heading h2" {...attributes} style={style}>
           {children}
         </h2>
       )
     case 'heading-three':
-      return (
-        <h3 className="block-heading h3" {...attributes}>
+      return locked ? (
+        <h3 className="block-heading h3 locked-block" {...attributes} style={style} contentEditable={false}>
+          {children}
+        </h3>
+      ) : (
+        <h3 className="block-heading h3" {...attributes} style={style}>
           {children}
         </h3>
       )
     case 'quote':
       return (
-        <blockquote className="quote" {...attributes}>
+        <blockquote className="quote" {...attributes} style={style}>
           {children}
         </blockquote>
       )
     case 'checklist':
-      return (
-        <div className="checklist" {...attributes}>
-          {children}
-        </div>
-      )
+      return <ChecklistElement {...props} />
     case 'check-item':
       return <CheckItemElement {...props} />
     case 'attachment':
@@ -2067,11 +2344,390 @@ const renderElement = (props: RenderElementProps) => {
       )
     default:
       return (
-        <p className="block-paragraph" {...attributes}>
+        <p className="block-paragraph" {...attributes} style={style}>
           {children}
         </p>
       )
   }
+}
+
+const renderLeaf = ({ attributes, children, leaf }: RenderLeafProps) => {
+  let content = children
+  if ((leaf as unknown as { underline?: boolean }).underline) content = <u>{content}</u>
+  if ((leaf as unknown as { italic?: boolean }).italic) content = <em>{content}</em>
+  if ((leaf as unknown as { bold?: boolean }).bold) content = <strong>{content}</strong>
+  return <span {...attributes}>{content}</span>
+}
+
+type MarkFormat = 'bold' | 'italic' | 'underline'
+type TextAlign = 'left' | 'center' | 'right' | 'justify'
+
+function isTextAlignValue(value: unknown): value is TextAlign {
+  return value === 'left' || value === 'center' || value === 'right' || value === 'justify'
+}
+
+function isMarkActive(editor: ReactEditor, format: MarkFormat): boolean {
+  const marks = Editor.marks(editor) as Record<string, unknown> | null
+  return marks?.[format] === true
+}
+
+function toggleMark(editor: ReactEditor, format: MarkFormat) {
+  if (isMarkActive(editor, format)) {
+    Editor.removeMark(editor, format)
+  } else {
+    Editor.addMark(editor, format, true)
+  }
+}
+
+function getActiveBlockEntry(editor: ReactEditor): [SlateElement, Path] | null {
+  const entry = Editor.above(editor, {
+    match: (n) => SlateElement.isElement(n) && typeof (n as { blockId?: unknown }).blockId === 'string',
+  })
+  return entry ? (entry as [SlateElement, Path]) : null
+}
+
+function insertHeadingBlock(editor: ReactEditor, level: 2 | 3 = 2) {
+  const entry = getActiveBlockEntry(editor)
+  const insertAt = entry ? Path.next(entry[1]) : [editor.children.length]
+  const blockId = newId('b-')
+  const headingNode: Descendant = {
+    type: level === 3 ? 'heading-three' : 'heading-two',
+    blockId,
+    children: [{ text: '' }],
+  }
+  const paragraphNode: Descendant = { type: 'paragraph', blockId: newId('b-'), children: [{ text: '' }] }
+  Transforms.insertNodes(editor, [headingNode, paragraphNode], { at: insertAt })
+  Transforms.select(editor, Editor.start(editor, insertAt))
+  ReactEditor.focus(editor)
+}
+
+function insertSection(editor: ReactEditor, label: string) {
+  const entry = getActiveBlockEntry(editor)
+  const insertAt = entry ? Path.next(entry[1]) : [editor.children.length]
+  const headingNode: Descendant = {
+    type: 'heading-two',
+    blockId: newId('b-'),
+    children: [{ text: label }],
+  }
+  const paragraphNode: Descendant = { type: 'paragraph', blockId: newId('b-'), children: [{ text: '' }] }
+  Transforms.insertNodes(editor, [headingNode, paragraphNode], { at: insertAt })
+  const paragraphPath = Path.next(insertAt)
+  Transforms.select(editor, Editor.start(editor, paragraphPath))
+  ReactEditor.focus(editor)
+}
+
+function insertSectionWithChecklist(editor: ReactEditor, label: string) {
+  const entry = getActiveBlockEntry(editor)
+  const insertAt = entry ? Path.next(entry[1]) : [editor.children.length]
+  const headingNode: Descendant = {
+    type: 'heading-two',
+    blockId: newId('b-'),
+    children: [{ text: label }],
+  }
+  const checklistNode: Descendant = {
+    type: 'checklist',
+    blockId: newId('b-'),
+    children: [{ type: 'check-item', itemId: newId('ci-'), done: false, children: [{ text: '' }] }],
+  }
+  const paragraphNode: Descendant = { type: 'paragraph', blockId: newId('b-'), children: [{ text: '' }] }
+  Transforms.insertNodes(editor, [headingNode, checklistNode, paragraphNode], { at: insertAt })
+
+  const base = typeof insertAt[0] === 'number' ? (insertAt[0] as number) : editor.children.length
+  const checklistTextPath: Path = [base + 1, 0, 0]
+  Transforms.select(editor, Editor.start(editor, checklistTextPath))
+  ReactEditor.focus(editor)
+}
+
+function insertAttachmentMetaBlocks(editor: ReactEditor, blocks: Array<Block>) {
+  if (blocks.length === 0) return
+  const entry = getActiveBlockEntry(editor)
+  const insertAt = entry ? Path.next(entry[1]) : [editor.children.length]
+
+  const nodes: Descendant[] = blocks.map((block) => ({
+    type: 'attachment',
+    blockId: block.id,
+    meta: block,
+    children: [{ text: '' }],
+  }))
+  const paragraphNode: Descendant = { type: 'paragraph', blockId: newId('b-'), children: [{ text: '' }] }
+
+  Transforms.insertNodes(editor, [...nodes, paragraphNode], { at: insertAt })
+
+  const base = typeof insertAt[0] === 'number' ? (insertAt[0] as number) : editor.children.length
+  const paragraphPath: Path = [base + nodes.length]
+  Transforms.select(editor, Editor.start(editor, paragraphPath))
+  ReactEditor.focus(editor)
+}
+
+function insertChecklistBlock(editor: ReactEditor) {
+  const entry = getActiveBlockEntry(editor)
+  const insertAt = entry ? Path.next(entry[1]) : [editor.children.length]
+  const blockId = newId('b-')
+  const checklistNode: Descendant = {
+    type: 'checklist',
+    blockId,
+    children: [{ type: 'check-item', itemId: newId('ci-'), done: false, children: [{ text: '' }] }],
+  }
+  Transforms.insertNodes(editor, checklistNode, { at: insertAt })
+  Transforms.select(editor, Editor.start(editor, insertAt.concat(0, 0)))
+  ReactEditor.focus(editor)
+}
+
+function insertDividerBlock(editor: ReactEditor) {
+  const entry = getActiveBlockEntry(editor)
+  const insertAt = entry ? Path.next(entry[1]) : [editor.children.length]
+  const blockId = newId('b-')
+  const dividerNode: Descendant = { type: 'divider', blockId, meta: { id: blockId, type: 'divider' }, children: [{ text: '' }] }
+  Transforms.insertNodes(editor, dividerNode, { at: insertAt })
+
+  const paragraphPath = Path.next(insertAt)
+  const paragraphNode: Descendant = { type: 'paragraph', blockId: newId('b-'), children: [{ text: '' }] }
+  Transforms.insertNodes(editor, paragraphNode, { at: paragraphPath })
+  Transforms.select(editor, Editor.start(editor, paragraphPath.concat(0)))
+  ReactEditor.focus(editor)
+}
+
+function FileDestinationModal({
+  onClose,
+  onSubmit,
+}: {
+  onClose: () => void
+  onSubmit: (val: { path: string; label?: string }) => void
+}) {
+  const [label, setLabel] = useState('')
+  const [path, setPath] = useState('')
+  const [error, setError] = useState<string | null>(null)
+  const pathRef = useRef<HTMLInputElement | null>(null)
+
+  useEffect(() => {
+    window.setTimeout(() => pathRef.current?.focus(), 0)
+  }, [])
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [onClose])
+
+  return (
+    <div className="modal-overlay" role="dialog" aria-modal="true" onMouseDown={onClose}>
+      <div className="modal" onMouseDown={(e) => e.stopPropagation()} style={{ width: 'min(640px, 100%)' }}>
+        <div className="modal-head">
+          <div>
+            <div className="title-sm">Add file destination</div>
+            <div className="muted tiny">Store a path to raw data or output files (no upload).</div>
+          </div>
+          <button className="ghost" onClick={onClose} type="button">Close</button>
+        </div>
+
+        <div className="modal-grid">
+          <label className="field">
+            <span className="muted tiny">Label (optional)</span>
+            <input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="e.g. qPCR export (CT)" />
+          </label>
+
+          <label className="field">
+            <span className="muted tiny">Path</span>
+            <input
+              ref={pathRef}
+              value={path}
+              onChange={(e) => {
+                setError(null)
+                setPath(e.target.value)
+              }}
+              placeholder="e.g. \\\\labserver\\project\\2025-12-17\\run1.csv"
+              onKeyDown={(e) => {
+                if (e.key !== 'Enter') return
+                e.preventDefault()
+                const cleaned = path.trim()
+                if (!cleaned) {
+                  setError('Path is required.')
+                  return
+                }
+                onSubmit({ path: cleaned, label: label.trim() || undefined })
+              }}
+            />
+            {error && <div className="field-error tiny">{error}</div>}
+          </label>
+        </div>
+
+        <div className="modal-actions">
+          <button className="ghost" onClick={onClose} type="button">Cancel</button>
+          <button
+            className="accent"
+            type="button"
+            onClick={() => {
+              const cleaned = path.trim()
+              if (!cleaned) {
+                setError('Path is required.')
+                return
+              }
+              onSubmit({ path: cleaned, label: label.trim() || undefined })
+            }}
+          >
+            Add
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function EditorInsertBar({
+  entryId,
+  onAddAttachments,
+  onAddFileDestination,
+}: {
+  entryId: string
+  onAddAttachments: (entryId: string, files: File[]) => Promise<Attachment[]>
+  onAddFileDestination: (entryId: string, val: { path: string; label?: string }) => Attachment
+}) {
+  const editor = useSlate()
+  const imgRef = useRef<HTMLInputElement | null>(null)
+  const fileRef = useRef<HTMLInputElement | null>(null)
+  const [destOpen, setDestOpen] = useState(false)
+
+  const insertFromAttachments = useCallback(
+    (attachments: Attachment[]) => {
+      const blocks: Block[] = attachments.map((att) => {
+        const blockId = newId('b-')
+        if (att.type === 'image') {
+          return { id: blockId, type: 'image', attachmentId: att.id, caption: att.filename }
+        }
+        return { id: blockId, type: 'file', attachmentId: att.id, label: att.filename }
+      })
+      insertAttachmentMetaBlocks(editor, blocks)
+    },
+    [editor]
+  )
+
+  const pickAndInsert = useCallback(
+    async (files: FileList | null) => {
+      if (!files?.length) return
+      const saved = await onAddAttachments(entryId, Array.from(files))
+      insertFromAttachments(saved)
+    },
+    [entryId, insertFromAttachments, onAddAttachments]
+  )
+
+  return (
+    <>
+      <div className="editor-toolbar" contentEditable={false}>
+        <div className="toolbar-group">
+          <button className="pill soft" type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => insertHeadingBlock(editor, 2)}>
+            + Header
+          </button>
+          <button className="pill soft" type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => insertChecklistBlock(editor)}>
+            + Checks
+          </button>
+        </div>
+
+        <div className="toolbar-sep" />
+
+        <div className="toolbar-group">
+          <button className="pill soft" type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => insertSection(editor, 'Aim')}>
+            + Aim
+          </button>
+          <button className="pill soft" type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => insertSectionWithChecklist(editor, 'Experiment')}>
+            + Experiment
+          </button>
+          <button className="pill soft" type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => insertSection(editor, 'Results')}>
+            + Results
+          </button>
+        </div>
+
+        <div className="toolbar-sep" />
+
+        <div className="toolbar-group">
+          <button className="pill soft" type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => imgRef.current?.click()}>
+            + Image
+          </button>
+          <button className="pill soft" type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => fileRef.current?.click()}>
+            + File
+          </button>
+          <button className="pill soft" type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => setDestOpen(true)}>
+            + File destination
+          </button>
+          <button className="pill soft" type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => insertDividerBlock(editor)}>
+            + Divider
+          </button>
+        </div>
+      </div>
+
+      <input
+        ref={imgRef}
+        type="file"
+        accept="image/*"
+        multiple
+        style={{ display: 'none' }}
+        onChange={(e) => {
+          void pickAndInsert(e.target.files)
+          e.currentTarget.value = ''
+        }}
+      />
+      <input
+        ref={fileRef}
+        type="file"
+        multiple
+        style={{ display: 'none' }}
+        onChange={(e) => {
+          void pickAndInsert(e.target.files)
+          e.currentTarget.value = ''
+        }}
+      />
+
+      {destOpen && (
+        <FileDestinationModal
+          onClose={() => setDestOpen(false)}
+          onSubmit={(val) => {
+            const attachment = onAddFileDestination(entryId, val)
+            const blockId = newId('b-')
+            const block: Block = { id: blockId, type: 'file', attachmentId: attachment.id, label: val.label ?? attachment.filename }
+            insertAttachmentMetaBlocks(editor, [block])
+            setDestOpen(false)
+          }}
+        />
+      )}
+    </>
+  )
+}
+
+function ChecklistElement({ element, attributes, children }: RenderElementProps) {
+  const editor = useSlateStatic()
+  const canAdd = element.locked !== true
+
+  return (
+    <div className="checklist" {...attributes}>
+      {children}
+      <div className="checklist-actions" contentEditable={false}>
+        <button
+          type="button"
+          className="pill soft"
+          disabled={!canAdd}
+          title={canAdd ? 'Add a new checklist item' : 'This checklist is locked'}
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={() => {
+            if (!canAdd) return
+            const checklistPath = ReactEditor.findPath(editor, element)
+            const nextIndex = Array.isArray(element.children) ? element.children.length : 0
+            const itemPath = checklistPath.concat(nextIndex)
+            Transforms.insertNodes(
+              editor,
+              { type: 'check-item', itemId: newId('ci-'), done: false, children: [{ text: '' }] },
+              { at: itemPath }
+            )
+            Transforms.select(editor, Editor.start(editor, itemPath.concat(0)))
+            ReactEditor.focus(editor)
+          }}
+        >
+          + Step
+        </button>
+        <span className="muted tiny">Tip: press Enter to add a step</span>
+      </div>
+    </div>
+  )
 }
 
 function CheckItemElement({ element, attributes, children }: RenderElementProps) {
@@ -2154,6 +2810,70 @@ function AttachmentElement({ element, attributes, children }: RenderElementProps
   )
 }
 
+function mergeRuns(runs: TextRun[]): TextRun[] {
+  const out: TextRun[] = []
+  for (const run of runs) {
+    const prev = out[out.length - 1]
+    const sameMarks =
+      prev &&
+      (prev.bold ?? false) === (run.bold ?? false) &&
+      (prev.italic ?? false) === (run.italic ?? false) &&
+      (prev.underline ?? false) === (run.underline ?? false)
+
+    if (prev && sameMarks) {
+      prev.text += run.text
+    } else {
+      out.push({ ...run })
+    }
+  }
+  return out
+}
+
+function runsFromSlateChildren(children: Descendant[]): TextRun[] | undefined {
+  const raw: TextRun[] = []
+  for (const child of children) {
+    if (Text.isText(child)) {
+      raw.push({
+        text: child.text,
+        bold: (child as unknown as { bold?: boolean }).bold === true ? true : undefined,
+        italic: (child as unknown as { italic?: boolean }).italic === true ? true : undefined,
+        underline: (child as unknown as { underline?: boolean }).underline === true ? true : undefined,
+      })
+      continue
+    }
+
+    // Fallback (should be rare for this prototype): flatten nested nodes to plain text.
+    raw.push({ text: Node.string(child) })
+  }
+
+  const merged = mergeRuns(raw)
+  const hasFormatting = merged.some((r) => r.bold || r.italic || r.underline) || merged.length > 1
+  return hasFormatting ? merged : undefined
+}
+
+function slateTextChildrenFromRuns(runs: TextRun[] | undefined, fallbackText: string): Descendant[] {
+  if (runs && runs.length) {
+    return runs.map((r) => ({
+      text: r.text,
+      bold: r.bold === true ? true : undefined,
+      italic: r.italic === true ? true : undefined,
+      underline: r.underline === true ? true : undefined,
+    }))
+  }
+  return [{ text: fallbackText }]
+}
+
+function renderTextRuns(runs: TextRun[] | undefined, fallbackText: string) {
+  if (!runs || runs.length === 0) return fallbackText
+  return runs.map((run, idx) => {
+    let node: React.ReactNode = run.text
+    if (run.underline) node = <u>{node}</u>
+    if (run.italic) node = <em>{node}</em>
+    if (run.bold) node = <strong>{node}</strong>
+    return <span key={idx}>{node}</span>
+  })
+}
+
 const blocksToSlate = (blocks: Block[]): Descendant[] => {
   return blocks.map((block) => {
     switch (block.type) {
@@ -2161,12 +2881,24 @@ const blocksToSlate = (blocks: Block[]): Descendant[] => {
         return {
           type: block.level === 3 ? 'heading-three' : 'heading-two',
           blockId: block.id,
-          children: [{ text: block.text }],
+          locked: block.locked === true,
+          align: block.align,
+          children: slateTextChildrenFromRuns(block.runs, block.text),
         }
       case 'paragraph':
-        return { type: 'paragraph', blockId: block.id, children: [{ text: block.text }] }
+        return {
+          type: 'paragraph',
+          blockId: block.id,
+          align: block.align,
+          children: slateTextChildrenFromRuns(block.runs, block.text),
+        }
       case 'quote':
-        return { type: 'quote', blockId: block.id, children: [{ text: block.text }] }
+        return {
+          type: 'quote',
+          blockId: block.id,
+          align: block.align,
+          children: slateTextChildrenFromRuns(block.runs, block.text),
+        }
       case 'checklist':
         return {
           type: 'checklist',
@@ -2175,7 +2907,7 @@ const blocksToSlate = (blocks: Block[]): Descendant[] => {
             type: 'check-item',
             itemId: item.id,
             done: item.done,
-            children: [{ text: item.text }],
+            children: slateTextChildrenFromRuns(item.runs, item.text),
           })),
         }
       case 'divider':
@@ -2203,37 +2935,48 @@ const slateToBlocks = (nodes: Descendant[]): Block[] => {
     }
 
     const blockId = typeof node.blockId === 'string' ? node.blockId : undefined
+    const align = isTextAlignValue(node.align) ? node.align : undefined
     switch (node.type) {
       case 'heading-two':
         return {
           id: ensureId(blockId),
           type: 'heading',
           level: 2,
+          locked: node.locked === true,
+          align,
           text: Node.string(node),
+          runs: runsFromSlateChildren(node.children as unknown as Descendant[]),
         }
       case 'heading-three':
         return {
           id: ensureId(blockId),
           type: 'heading',
           level: 3,
+          locked: node.locked === true,
+          align,
           text: Node.string(node),
+          runs: runsFromSlateChildren(node.children as unknown as Descendant[]),
         }
       case 'quote':
         return {
           id: ensureId(blockId),
           type: 'quote',
+          align,
           text: Node.string(node),
+          runs: runsFromSlateChildren(node.children as unknown as Descendant[]),
         }
       case 'checklist':
         return {
           id: ensureId(blockId),
           type: 'checklist',
+          align,
           items: (node.children as unknown as Descendant[])
             .filter((child): child is SlateElement => SlateElement.isElement(child))
             .map((child) => ({
               id: typeof child.itemId === 'string' ? child.itemId : newId('ci-'),
               text: Node.string(child),
               done: child.done === true,
+              runs: runsFromSlateChildren(child.children as unknown as Descendant[]),
             })),
         }
       case 'divider':
@@ -2249,35 +2992,23 @@ const slateToBlocks = (nodes: Descendant[]): Block[] => {
         return {
           id: ensureId(blockId),
           type: 'paragraph',
+          align,
           text: Node.string(node),
+          runs: runsFromSlateChildren(node.children as unknown as Descendant[]),
         }
     }
   })
 }
 
-function fsPromptVisibleBanner(fsEnabled: boolean, onEnable: () => void, onDismiss: () => void) {
-  if (fsEnabled) return null
-  return (
-    <div className="banner">
-      <div>
-        <strong>Enable disk cache?</strong> Faster large attachments and offline access.
-      </div>
-      <div style={{ display: 'flex', gap: 8 }}>
-        <button className="ghost" onClick={onDismiss}>Later</button>
-        <button className="accent" onClick={onEnable}>Enable</button>
-      </div>
-    </div>
-  )
-}
-
 function BlockRenderer({ block, attachments, attachmentUrls, onUpdateBlock }: BlockRendererProps) {
+  const style = block.align ? ({ textAlign: block.align } as const) : undefined
   switch (block.type) {
     case 'heading':
-      if (block.level === 1) return <h1 className="block-heading h1">{block.text}</h1>
-      if (block.level === 3) return <h3 className="block-heading h3">{block.text}</h3>
-      return <h2 className="block-heading h2">{block.text}</h2>
+      if (block.level === 1) return <h1 className="block-heading h1" style={style}>{renderTextRuns(block.runs, block.text)}</h1>
+      if (block.level === 3) return <h3 className="block-heading h3" style={style}>{renderTextRuns(block.runs, block.text)}</h3>
+      return <h2 className="block-heading h2" style={style}>{renderTextRuns(block.runs, block.text)}</h2>
     case 'paragraph':
-      return <p className="block-paragraph">{block.text}</p>
+      return <p className="block-paragraph" style={style}>{renderTextRuns(block.runs, block.text)}</p>
     case 'checklist':
       // View-mode quick toggle (edit mode uses Slate)
       return (
@@ -2350,7 +3081,7 @@ function BlockRenderer({ block, attachments, attachmentUrls, onUpdateBlock }: Bl
       )
     }
     case 'quote':
-      return <blockquote className="quote">{block.text}</blockquote>
+      return <blockquote className="quote" style={style}>{renderTextRuns(block.runs, block.text)}</blockquote>
     case 'divider':
       return <hr className="divider" />
     default:
@@ -2367,7 +3098,7 @@ function ChecklistRow({ item, onToggleDone }: { item: ChecklistItem; onToggleDon
         onChange={(e) => onToggleDone?.(e.target.checked)}
         disabled={!onToggleDone}
       />
-      <span>{item.text}</span>
+      <span>{renderTextRuns(item.runs, item.text)}</span>
       {item.timerMinutes && <span className="pill soft">{item.timerMinutes} min</span>}
     </label>
   )
@@ -2380,19 +3111,40 @@ function NewEntryModal({
   projects,
   experiments,
   defaultProjectId,
+  defaultExperimentId,
+  onCreateProject,
+  onCreateExperiment,
   onCreate,
 }: {
   onClose: () => void
   projects: Project[]
   experiments: Experiment[]
   defaultProjectId: string
+  defaultExperimentId?: string
+  onCreateProject: (title: string) => string
+  onCreateExperiment: (opts: { title: string; projectId: string }) => string
   onCreate: (val: { title?: string; projectId?: string; experimentId?: string; templateId: EntryTemplateId }) => void
 }) {
   const [title, setTitle] = useState('')
-  const [projectId, setProjectId] = useState(defaultProjectId)
-  const [experimentId, setExperimentId] = useState<string>('')
+  const resolvedDefaultProjectId = projects.some((p) => p.id === defaultProjectId)
+    ? defaultProjectId
+    : (projects[0]?.id ?? '')
+  const [projectId, setProjectId] = useState(resolvedDefaultProjectId)
+  const resolvedDefaultExperimentId =
+    defaultExperimentId && experiments.some((ex) => ex.id === defaultExperimentId && ex.projectId === resolvedDefaultProjectId)
+      ? defaultExperimentId
+      : ''
+  const [experimentId, setExperimentId] = useState<string>(resolvedDefaultExperimentId)
   const [templateId, setTemplateId] = useState<EntryTemplateId>('experiment')
+  const [creatingProject, setCreatingProject] = useState(false)
+  const [newProjectTitle, setNewProjectTitle] = useState('')
+  const [projectError, setProjectError] = useState<string | null>(null)
+  const [creatingExperiment, setCreatingExperiment] = useState(false)
+  const [newExperimentTitle, setNewExperimentTitle] = useState('')
+  const [experimentError, setExperimentError] = useState<string | null>(null)
   const titleRef = useRef<HTMLInputElement | null>(null)
+  const newProjectRef = useRef<HTMLInputElement | null>(null)
+  const newExperimentRef = useRef<HTMLInputElement | null>(null)
 
   useEffect(() => {
     window.setTimeout(() => titleRef.current?.focus(), 0)
@@ -2407,6 +3159,45 @@ function NewEntryModal({
   }, [onClose])
 
   const projectExperiments = experiments.filter((ex) => (projectId ? ex.projectId === projectId : true))
+
+  const handleAddProject = () => {
+    const cleaned = newProjectTitle.trim().replace(/\s+/g, ' ')
+    if (!cleaned) {
+      setProjectError('Project name is required.')
+      return
+    }
+    try {
+      const id = onCreateProject(cleaned)
+      setProjectId(id)
+      setExperimentId('')
+      setCreatingProject(false)
+      setNewProjectTitle('')
+      setProjectError(null)
+    } catch (err) {
+      setProjectError(err instanceof Error ? err.message : 'Unable to create project.')
+    }
+  }
+
+  const handleAddExperiment = () => {
+    const cleaned = newExperimentTitle.trim().replace(/\s+/g, ' ')
+    if (!cleaned) {
+      setExperimentError('Experiment name is required.')
+      return
+    }
+    if (!projectId) {
+      setExperimentError('Select a project first.')
+      return
+    }
+    try {
+      const id = onCreateExperiment({ title: cleaned, projectId })
+      setExperimentId(id)
+      setCreatingExperiment(false)
+      setNewExperimentTitle('')
+      setExperimentError(null)
+    } catch (err) {
+      setExperimentError(err instanceof Error ? err.message : 'Unable to create experiment.')
+    }
+  }
 
   return (
     <div className="modal-overlay" role="dialog" aria-modal="true" onMouseDown={onClose}>
@@ -2427,21 +3218,126 @@ function NewEntryModal({
 
           <label className="field">
             <span className="muted tiny">Project</span>
-            <select value={projectId} onChange={(e) => setProjectId(e.target.value)}>
-              {projects.map((p) => (
-                <option key={p.id} value={p.id}>{p.title}</option>
-              ))}
-            </select>
+            {!creatingProject ? (
+              <div className="field-row">
+                <select
+                  value={projectId}
+                  onChange={(e) => {
+                    const nextProjectId = e.target.value
+                    setProjectId(nextProjectId)
+                    if (!experimentId) return
+                    const stillValid = experiments.some((ex) => ex.id === experimentId && ex.projectId === nextProjectId)
+                    if (!stillValid) setExperimentId('')
+                  }}
+                >
+                  {projects.map((p) => (
+                    <option key={p.id} value={p.id}>{p.title}</option>
+                  ))}
+                </select>
+                <button
+                  className="ghost"
+                  type="button"
+                  onClick={() => {
+                    setCreatingProject(true)
+                    setProjectError(null)
+                    setNewProjectTitle('')
+                    window.setTimeout(() => newProjectRef.current?.focus(), 0)
+                  }}
+                >
+                  + Project
+                </button>
+              </div>
+            ) : (
+              <div className="field-row">
+                <input
+                  ref={newProjectRef}
+                  value={newProjectTitle}
+                  onChange={(e) => {
+                    setProjectError(null)
+                    setNewProjectTitle(e.target.value)
+                  }}
+                  placeholder="New project name"
+                  onKeyDown={(e) => {
+                    if (e.key !== 'Enter') return
+                    e.preventDefault()
+                    handleAddProject()
+                  }}
+                />
+                <button className="accent" type="button" onClick={handleAddProject}>
+                  Add
+                </button>
+                <button
+                  className="ghost"
+                  type="button"
+                  onClick={() => {
+                    setCreatingProject(false)
+                    setProjectError(null)
+                    setNewProjectTitle('')
+                  }}
+                >
+                  Cancel
+                </button>
+              </div>
+            )}
+            {projectError && <div className="field-error tiny">{projectError}</div>}
           </label>
 
           <label className="field">
             <span className="muted tiny">Experiment (optional)</span>
-            <select value={experimentId} onChange={(e) => setExperimentId(e.target.value)}>
-              <option value="">General note</option>
-              {projectExperiments.map((ex) => (
-                <option key={ex.id} value={ex.id}>{ex.title}</option>
-              ))}
-            </select>
+            {!creatingExperiment ? (
+              <div className="field-row">
+                <select value={experimentId} onChange={(e) => setExperimentId(e.target.value)}>
+                  <option value="">General note</option>
+                  {projectExperiments.map((ex) => (
+                    <option key={ex.id} value={ex.id}>{ex.title}</option>
+                  ))}
+                </select>
+                <button
+                  className="ghost"
+                  type="button"
+                  onClick={() => {
+                    setCreatingExperiment(true)
+                    setExperimentError(null)
+                    setNewExperimentTitle('')
+                    window.setTimeout(() => newExperimentRef.current?.focus(), 0)
+                  }}
+                >
+                  + Experiment
+                </button>
+              </div>
+            ) : (
+              <div className="field-row">
+                <input
+                  ref={newExperimentRef}
+                  value={newExperimentTitle}
+                  onChange={(e) => {
+                    setExperimentError(null)
+                    setNewExperimentTitle(e.target.value)
+                  }}
+                  placeholder="New experiment name"
+                  onKeyDown={(e) => {
+                    if (e.key !== 'Enter') return
+                    e.preventDefault()
+                    handleAddExperiment()
+                  }}
+                />
+                <button className="accent" type="button" onClick={handleAddExperiment}>
+                  Add
+                </button>
+                <button
+                  className="ghost"
+                  type="button"
+                  onClick={() => {
+                    setCreatingExperiment(false)
+                    setExperimentError(null)
+                    setNewExperimentTitle('')
+                  }}
+                >
+                  Cancel
+                </button>
+              </div>
+            )}
+            {experimentError && <div className="field-error tiny">{experimentError}</div>}
           </label>
 
           <div className="field">
@@ -2453,7 +3349,7 @@ function NewEntryModal({
                 onClick={() => setTemplateId('experiment')}
               >
                 <div className="title-sm">Experiment note</div>
-                <div className="muted tiny">Prefills Summary / Protocol / Results pinned regions.</div>
+                <div className="muted tiny">Prefills Aim / Experiment / Results sections.</div>
               </button>
               <button
                 type="button"
@@ -2481,6 +3377,196 @@ function NewEntryModal({
             }
           >
             Create entry
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function NewExperimentModal({
+  onClose,
+  projects,
+  defaultProjectId,
+  onCreateProject,
+  onCreate,
+}: {
+  onClose: () => void
+  projects: Project[]
+  defaultProjectId: string
+  onCreateProject: (title: string) => string
+  onCreate: (val: { title: string; projectId: string; protocolRef?: string; defaultRawDataPath?: string }) => void
+}) {
+  const resolvedDefaultProjectId = projects.some((p) => p.id === defaultProjectId)
+    ? defaultProjectId
+    : (projects[0]?.id ?? '')
+
+  const [title, setTitle] = useState('')
+  const [projectId, setProjectId] = useState(resolvedDefaultProjectId)
+  const [creatingProject, setCreatingProject] = useState(false)
+  const [newProjectTitle, setNewProjectTitle] = useState('')
+  const [projectError, setProjectError] = useState<string | null>(null)
+  const [protocolRef, setProtocolRef] = useState('')
+  const [defaultRawDataPath, setDefaultRawDataPath] = useState('')
+  const [error, setError] = useState<string | null>(null)
+  const titleRef = useRef<HTMLInputElement | null>(null)
+  const newProjectRef = useRef<HTMLInputElement | null>(null)
+
+  useEffect(() => {
+    window.setTimeout(() => titleRef.current?.focus(), 0)
+  }, [])
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [onClose])
+
+  const handleAddProject = () => {
+    const cleaned = newProjectTitle.trim().replace(/\s+/g, ' ')
+    if (!cleaned) {
+      setProjectError('Project name is required.')
+      return
+    }
+    try {
+      const id = onCreateProject(cleaned)
+      setProjectId(id)
+      setCreatingProject(false)
+      setNewProjectTitle('')
+      setProjectError(null)
+    } catch (err) {
+      setProjectError(err instanceof Error ? err.message : 'Unable to create project.')
+    }
+  }
+
+  return (
+    <div className="modal-overlay" role="dialog" aria-modal="true" onMouseDown={onClose}>
+      <div className="modal" onMouseDown={(e) => e.stopPropagation()}>
+        <div className="modal-head">
+          <div>
+            <div className="title-sm">New experiment</div>
+            <div className="muted tiny">Create an experiment under a project.</div>
+          </div>
+          <button className="ghost" onClick={onClose} type="button">Close</button>
+        </div>
+
+        <div className="modal-grid">
+          <label className="field">
+            <span className="muted tiny">Title</span>
+            <input
+              ref={titleRef}
+              value={title}
+              onChange={(e) => {
+                setError(null)
+                setTitle(e.target.value)
+              }}
+              placeholder="e.g. Day 5 – imaging session"
+            />
+          </label>
+
+          <label className="field">
+            <span className="muted tiny">Project</span>
+            {!creatingProject ? (
+              <div className="field-row">
+                <select value={projectId} onChange={(e) => setProjectId(e.target.value)}>
+                  {projects.map((p) => (
+                    <option key={p.id} value={p.id}>{p.title}</option>
+                  ))}
+                </select>
+                <button
+                  className="ghost"
+                  type="button"
+                  onClick={() => {
+                    setCreatingProject(true)
+                    setProjectError(null)
+                    setNewProjectTitle('')
+                    window.setTimeout(() => newProjectRef.current?.focus(), 0)
+                  }}
+                >
+                  + Project
+                </button>
+              </div>
+            ) : (
+              <div className="field-row">
+                <input
+                  ref={newProjectRef}
+                  value={newProjectTitle}
+                  onChange={(e) => {
+                    setProjectError(null)
+                    setNewProjectTitle(e.target.value)
+                  }}
+                  placeholder="New project name"
+                  onKeyDown={(e) => {
+                    if (e.key !== 'Enter') return
+                    e.preventDefault()
+                    handleAddProject()
+                  }}
+                />
+                <button className="accent" type="button" onClick={handleAddProject}>
+                  Add
+                </button>
+                <button
+                  className="ghost"
+                  type="button"
+                  onClick={() => {
+                    setCreatingProject(false)
+                    setProjectError(null)
+                    setNewProjectTitle('')
+                  }}
+                >
+                  Cancel
+                </button>
+              </div>
+            )}
+            {projectError && <div className="field-error tiny">{projectError}</div>}
+          </label>
+
+          <label className="field" style={{ gridColumn: '1 / -1' }}>
+            <span className="muted tiny">Protocol ref (optional)</span>
+            <input
+              value={protocolRef}
+              onChange={(e) => setProtocolRef(e.target.value)}
+              placeholder="e.g. PR-2025-12-IMAGING"
+            />
+          </label>
+
+          <label className="field" style={{ gridColumn: '1 / -1' }}>
+            <span className="muted tiny">Default raw data path (optional)</span>
+            <input
+              value={defaultRawDataPath}
+              onChange={(e) => setDefaultRawDataPath(e.target.value)}
+              placeholder="e.g. \\\\labserver\\project\\2025-12-17\\"
+            />
+            {error && <div className="field-error tiny">{error}</div>}
+          </label>
+        </div>
+
+        <div className="modal-actions">
+          <button className="ghost" onClick={onClose} type="button">Cancel</button>
+          <button
+            className="accent"
+            type="button"
+            onClick={() => {
+              const cleaned = title.trim().replace(/\s+/g, ' ')
+              if (!cleaned) {
+                setError('Experiment title is required.')
+                return
+              }
+              if (!projectId) {
+                setError('Project is required.')
+                return
+              }
+              onCreate({
+                title: cleaned,
+                projectId,
+                protocolRef: protocolRef.trim() || undefined,
+                defaultRawDataPath: defaultRawDataPath.trim() || undefined,
+              })
+            }}
+          >
+            Create experiment
           </button>
         </div>
       </div>

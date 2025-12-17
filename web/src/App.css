@@ -8,7 +8,7 @@
 
 .app-shell {
   display: grid;
-  grid-template-columns: 290px 1fr 320px;
+  grid-template-columns: 290px 1fr;
   gap: 16px;
   height: calc(100vh - 36px);
 }
@@ -344,6 +344,10 @@
   color: #b7c6e2;
 }
 
+.locked-block {
+  cursor: default;
+}
+
 .block-paragraph {
   margin: 0;
   line-height: 1.6;
@@ -354,6 +358,13 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+.checklist-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-left: 2px;
 }
 
 .check-row {
@@ -525,6 +536,36 @@
   gap: 8px;
 }
 
+.editor-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 2px 0 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.toolbar-group {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.toolbar-sep {
+  width: 1px;
+  background: var(--border);
+  align-self: stretch;
+  margin: 0 4px;
+}
+
+.editor-toolbar .pill {
+  cursor: pointer;
+}
+
+.editor-toolbar .pill:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
 .slate-editor {
   min-height: 260px;
   outline: none;
@@ -602,6 +643,34 @@
   z-index: 50;
 }
 
+.drawer-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(5, 10, 20, 0.62);
+  display: flex;
+  justify-content: flex-end;
+  padding: 18px;
+  z-index: 55;
+}
+
+.drawer {
+  width: min(380px, 92vw);
+  height: calc(100vh - 36px);
+}
+
+.drawer > .panel.meta {
+  height: 100%;
+}
+
+.drawer-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+
 .modal {
   width: min(760px, 100%);
   border-radius: 16px;
@@ -632,6 +701,22 @@
   display: flex;
   flex-direction: column;
   gap: 6px;
+}
+
+.field-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.field-row input,
+.field-row select {
+  flex: 1;
+  min-width: 0;
+}
+
+.field-error {
+  color: #f7c266;
 }
 
 .field input,
