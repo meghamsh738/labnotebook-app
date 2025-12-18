@@ -38,7 +38,7 @@ test('generate feature screenshots', async ({ page }) => {
   await page.getByRole('button', { name: '+ New Entry' }).click()
   await page.getByLabel('Title').fill('Template example')
   await page.getByRole('button', { name: 'Create entry' }).click()
-  await expect(page.getByRole('button', { name: 'Save' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Template example' })).toBeVisible()
   await page.getByRole('button', { name: 'Save' }).click()
   await page.screenshot({ path: path.join(outDir, '03-template-entry.png'), fullPage: true })
 
@@ -60,15 +60,13 @@ test('generate feature screenshots', async ({ page }) => {
   await page.context().setOffline(true)
   await page.locator('.check-row input[type="checkbox"]').first().click()
   await expect(statusChip).toContainText(/failed/i)
-
   await page.getByRole('button', { name: 'Details' }).click()
-  await expect(page.getByText('Sync queue')).toBeVisible()
   await page.getByText('Sync queue').scrollIntoViewIfNeeded()
   await page.screenshot({ path: path.join(outDir, '06-sync-failed.png'), fullPage: true })
   await page.context().setOffline(false)
-  await page.locator('.panel.meta').getByRole('button', { name: /retry failed/i }).click()
+  await page.getByRole('button', { name: 'Retry failed' }).click()
   await expect(statusChip).toContainText('Synced')
-  await page.locator('.drawer-head').getByRole('button', { name: 'Close' }).click()
+  await page.getByRole('button', { name: 'Close' }).click()
 
   const [popup] = await Promise.all([
     page.waitForEvent('popup'),

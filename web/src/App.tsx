@@ -495,6 +495,34 @@ function App() {
   const [fsNeedsPermission, setFsNeedsPermission] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [detailsOpen, setDetailsOpen] = useState(false)
+  const [theme, setTheme] = useState<'light' | 'dark'>(() => {
+    if (typeof window === 'undefined') return 'light'
+    try {
+      const saved = window.localStorage.getItem('labnote.theme')
+      if (saved === 'dark' || saved === 'light') return saved
+    } catch (err) {
+      console.warn('Unable to read cached theme', err)
+    }
+    return window.matchMedia?.('(prefers-color-scheme: dark)')?.matches ? 'dark' : 'light'
+  })
+
+  useEffect(() => {
+    if (typeof document === 'undefined') return
+    if (theme === 'dark') {
+      document.documentElement.setAttribute('data-theme', 'dark')
+    } else {
+      document.documentElement.removeAttribute('data-theme')
+    }
+  }, [theme])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    try {
+      window.localStorage.setItem('labnote.theme', theme)
+    } catch (err) {
+      console.warn('Unable to cache theme', err)
+    }
+  }, [theme])
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -1000,26 +1028,26 @@ function App() {
     <title>${safeFileName(experiment.title)}</title>
     <style>
       :root { color-scheme: light; }
-      body { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial; margin: 28px; color: #0b1220; }
+      body { font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 28px; color: #111113; }
       header { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 18px; }
       h1 { margin: 0; font-size: 22px; }
       h2 { margin: 18px 0 6px; font-size: 18px; }
-      h3 { margin: 14px 0 6px; font-size: 15px; color: #243048; }
-      .meta { color: #475569; font-size: 12px; }
-      .entry { border-top: 1px solid #e2e8f0; padding-top: 14px; margin-top: 14px; }
-      blockquote { border-left: 3px solid #10b981; padding: 10px 12px; margin: 10px 0; background: #f0fdf4; }
+      h3 { margin: 14px 0 6px; font-size: 15px; color: #5E5E66; }
+      .meta { color: #5E5E66; font-size: 12px; }
+      .entry { border-top: 1px solid #E7E7EA; padding-top: 14px; margin-top: 14px; }
+      blockquote { border-left: 3px solid #4F7CF7; padding: 10px 12px; margin: 10px 0; background: rgba(79,124,247,0.14); }
       ul.checklist { list-style: none; padding-left: 0; }
       ul.checklist li { margin: 6px 0; }
       .cb { display: inline-block; width: 20px; }
       figure { margin: 12px 0; }
-      figure img { max-width: 100%; border-radius: 10px; border: 1px solid #e2e8f0; }
-      figcaption { font-size: 12px; color: #475569; margin-top: 6px; }
+      figure img { max-width: 100%; border-radius: 10px; border: 1px solid #E7E7EA; }
+      figcaption { font-size: 12px; color: #5E5E66; margin-top: 6px; }
       table { border-collapse: collapse; width: 100%; }
-      th, td { border: 1px solid #e2e8f0; padding: 8px 10px; font-size: 12px; text-align: left; }
-      th { background: #f8fafc; }
-      .caption { font-size: 12px; color: #475569; margin-top: 6px; }
+      th, td { border: 1px solid #E7E7EA; padding: 8px 10px; font-size: 12px; text-align: left; }
+      th { background: #FBFBFC; }
+      .caption { font-size: 12px; color: #5E5E66; margin-top: 6px; }
       .toolbar { margin-top: 8px; }
-      .toolbar button { border-radius: 10px; border: 1px solid #cbd5e1; background: #ffffff; padding: 8px 12px; cursor: pointer; }
+      .toolbar button { border-radius: 10px; border: 1px solid #D7D7DD; background: #ffffff; padding: 8px 12px; cursor: pointer; }
       @media print { .toolbar { display: none; } body { margin: 0.5in; } }
     </style>
   </head>
@@ -1474,6 +1502,8 @@ function App() {
       {settingsOpen && (
         <SettingsModal
           onClose={() => setSettingsOpen(false)}
+          theme={theme}
+          onThemeChange={setTheme}
           fsEnabled={fsEnabled}
           fsNeedsPermission={fsNeedsPermission}
           fsSupported={typeof (window as unknown as DirectoryPickerWindow).showDirectoryPicker === 'function'}
@@ -1793,6 +1823,29 @@ function EditorPane({
     [entry, onUpdateEntry, onEnqueueChange]
   )
 
+  const viewSections = useMemo(() => {
+    const blocks = entry?.content ?? []
+    const sections: Array<{ key: string; blocks: Block[] }> = []
+    let current: { key: string; blocks: Block[] } | null = null
+
+    for (const block of blocks) {
+      if (block.type === 'heading' && block.level === 2) {
+        current = { key: block.id, blocks: [block] }
+        sections.push(current)
+        continue
+      }
+
+      if (!current) {
+        current = { key: 'intro', blocks: [] }
+        sections.push(current)
+      }
+
+      current.blocks.push(block)
+    }
+
+    return sections
+  }, [entry?.content])
+
   if (!entry) {
     return (
       <main className="panel editor">
@@ -1848,97 +1901,103 @@ function EditorPane({
   return (
     <main className="panel editor" onDrop={handleDrop} onDragOver={(e) => e.preventDefault()} onPaste={handlePaste}>
       <div className="editor-header">
-        <div className="breadcrumbs">
-          <span>{project?.title ?? 'Project'}</span>
-          <span>/</span>
-          <span>{experiment?.title ?? 'General note'}</span>
-          <span className="pill soft">{entry.dateBucket}</span>
-          <span className={`status-chip ${syncing || hasWork ? 'warning' : 'success'}`}>
-            {syncing ? 'Syncing…' : failedCount ? `${failedCount} failed` : pendingCount ? `${pendingCount} pending` : 'Synced'}
-          </span>
-          <div className="spacer" />
-          {experiment ? (
-            <>
-              <button
-                className="ghost"
-                disabled={exporting}
-                onClick={async () => {
-                  setExporting(true)
-                  try {
-                    await onExportExperiment(experiment.id, 'pdf')
-                  } finally {
-                    setExporting(false)
-                  }
-                }}
-              >
+        <div className="editor-header-inner">
+          <div className="breadcrumbs">
+            <span>{project?.title ?? 'Project'}</span>
+            <span>/</span>
+            <span>{experiment?.title ?? 'General note'}</span>
+            <span className="pill soft">{entry.dateBucket}</span>
+            <span className={`status-chip ${syncing || hasWork ? 'warning' : 'success'}`}>
+              {syncing ? 'Syncing…' : failedCount ? `${failedCount} failed` : pendingCount ? `${pendingCount} pending` : 'Synced'}
+            </span>
+            <div className="spacer" />
+            {experiment ? (
+              <>
+                <button
+                  className="ghost"
+                  disabled={exporting}
+                  onClick={async () => {
+                    setExporting(true)
+                    try {
+                      await onExportExperiment(experiment.id, 'pdf')
+                    } finally {
+                      setExporting(false)
+                    }
+                  }}
+                >
+                  Export PDF
+                </button>
+                <button
+                  className="ghost"
+                  disabled={exporting}
+                  onClick={async () => {
+                    setExporting(true)
+                    try {
+                      await onExportExperiment(experiment.id, 'markdown')
+                    } finally {
+                      setExporting(false)
+                    }
+                  }}
+                >
+                  Export MD
+                </button>
+              </>
+            ) : (
+              <button className="ghost" disabled title="Attach this note to an experiment to export a bundle.">
                 Export PDF
               </button>
-              <button
-                className="ghost"
-                disabled={exporting}
-                onClick={async () => {
-                  setExporting(true)
-                  try {
-                    await onExportExperiment(experiment.id, 'markdown')
-                  } finally {
-                    setExporting(false)
-                  }
-                }}
-              >
-                Export MD
-              </button>
-            </>
-          ) : (
-            <button className="ghost" disabled title="Attach this note to an experiment to export a bundle.">
-              Export PDF
+            )}
+            <button className="ghost" type="button" onClick={onOpenDetails}>
+              Details
             </button>
-          )}
-          <button className="ghost" type="button" onClick={onOpenDetails}>
-            Details
-          </button>
-          {!isEditing ? (
-            <button className="accent" onClick={() => setIsEditing(true)}>
-              Edit
-            </button>
-          ) : (
-            <div className="edit-actions">
-              <button className="ghost" onClick={() => setIsEditing(false)}>
-                Cancel
+            {!isEditing ? (
+              <button className="accent" onClick={() => setIsEditing(true)}>
+                Edit
               </button>
-              <button className="accent" onClick={handleSave}>
-                Save
-              </button>
-            </div>
-          )}
-        </div>
-        <div className="meta-row">
-          <span className="muted tiny">Created {dtFormat.format(new Date(entry.createdDatetime))}</span>
-          <span className="dot" />
-          <span className="muted tiny">Last edited {dtFormat.format(new Date(entry.lastEditedDatetime))}</span>
-        </div>
-        <div className="title-row">
-          <h1>{entry.title}</h1>
-          {experiment?.protocolRef && <span className="pill">{experiment.protocolRef}</span>}
+            ) : (
+              <div className="edit-actions">
+                <button className="ghost" onClick={() => setIsEditing(false)}>
+                  Cancel
+                </button>
+                <button className="accent" onClick={handleSave}>
+                  Save
+                </button>
+              </div>
+            )}
+          </div>
+          <div className="meta-row">
+            <span className="muted tiny">Created {dtFormat.format(new Date(entry.createdDatetime))}</span>
+            <span className="dot" />
+            <span className="muted tiny">Last edited {dtFormat.format(new Date(entry.lastEditedDatetime))}</span>
+          </div>
+          <div className="title-row">
+            <h1>{entry.title}</h1>
+            {experiment?.protocolRef && <span className="pill">{experiment.protocolRef}</span>}
+          </div>
         </div>
       </div>
 
       {!isEditing && (
         <div className="blocks">
-          {entry.content.map((block) => (
-            <div key={block.id} className="block-shell">
-              <BlockRenderer
-                block={block}
-                attachments={attachmentMap}
-                attachmentUrls={attachmentUrls}
-                onUpdateBlock={handleUpdateBlock}
-              />
-              {block.updatedAt && (
-                <div className="block-meta muted tiny">
-                  Updated {dtFormat.format(new Date(block.updatedAt))}
-                  {block.updatedBy ? ` · ${block.updatedBy}` : ''}
+          {viewSections.map((section) => (
+            <section key={section.key} className="content-section">
+              {section.blocks.map((block) => (
+                <div key={block.id} className="block-shell">
+                  <BlockRenderer
+                    block={block}
+                    attachments={attachmentMap}
+                    attachmentUrls={attachmentUrls}
+                    onUpdateBlock={handleUpdateBlock}
+                  />
+                  {block.updatedAt && (
+                    <div className="block-meta muted tiny">
+                      Updated {dtFormat.format(new Date(block.updatedAt))}
+                      {block.updatedBy ? ` · ${block.updatedBy}` : ''}
+                    </div>
+                  )}
                 </div>
-              )}
-            </div>
+              ))}
+            </section>
           ))}
         </div>
       )}
@@ -2239,7 +2298,7 @@ function MetaPanel({
                   </button>
                 )}
               </div>
-              {c.lastError && <div className="muted tiny" style={{ marginTop: 8, color: '#f7c266' }}>{c.lastError}</div>}
+              {c.lastError && <div className="muted tiny" style={{ marginTop: 8, color: 'var(--danger)' }}>{c.lastError}</div>}
             </div>
           ))}
           {changeQueue.length === 0 && <div className="muted tiny">No local changes queued.</div>}
@@ -2272,7 +2331,7 @@ function AttachmentRow({ attachment, onTogglePinned, missing, url }: { attachmen
         {attachment.type === 'image' && url && !missing && (
           <img src={url} alt={attachment.filename} style={{ width: 80, borderRadius: 8 }} />
         )}
-        {missing && <p className="muted tiny" style={{ color: '#f7c266' }}>Cached blob missing</p>}
+        {missing && <p className="muted tiny" style={{ color: 'var(--danger)' }}>Cached blob missing</p>}
       </div>
       {attachment.tag && <span className="pill soft">{attachment.tag}</span>}
       {attachment.sampleId && <span className="pill ghost-pill">{attachment.sampleId}</span>}
@@ -3576,6 +3635,8 @@ function NewExperimentModal({
 
 function SettingsModal({
   onClose,
+  theme,
+  onThemeChange,
   fsEnabled,
   fsNeedsPermission,
   fsSupported,
@@ -3585,6 +3646,8 @@ function SettingsModal({
   onValidate,
 }: {
   onClose: () => void
+  theme: 'light' | 'dark'
+  onThemeChange: (theme: 'light' | 'dark') => void
   fsEnabled: boolean
   fsNeedsPermission: boolean
   fsSupported: boolean
@@ -3666,10 +3729,29 @@ function SettingsModal({
           )}
 
           {validation && (
-            <div className="muted tiny" style={{ marginTop: 10, color: validation.ok ? '#7af59c' : '#f7c266' }}>
+            <div className="muted tiny" style={{ marginTop: 10, color: validation.ok ? 'var(--accent)' : 'var(--danger)' }}>
               {validation.ok ? 'Disk cache looks good.' : `Disk cache error: ${validation.message ?? 'Unknown error'}`}
             </div>
           )}
+        </div>
+
+        <div className="meta-card">
+          <div className="settings-row">
+            <div>
+              <div className="title-sm">Appearance</div>
+              <div className="muted tiny">Quiet neutral theme with a single accent.</div>
+            </div>
+          </div>
+
+          <div style={{ marginTop: 10 }}>
+            <label className="field">
+              <span className="muted tiny">Theme</span>
+              <select value={theme} onChange={(e) => onThemeChange(e.target.value === 'dark' ? 'dark' : 'light')}>
+                <option value="light">Light</option>
+                <option value="dark">Dark</option>
+              </select>
+            </label>
+          </div>
         </div>
 
         <div className="modal-actions">

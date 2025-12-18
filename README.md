@@ -1,6 +1,6 @@
 # Lab Note Taking App
 
-Offline-first lab notebook prototype built with React + TypeScript (Vite). Simple 2-pane UI: browse/filter entries on the left, write notes on the right. Add structure as needed (headers, checklists, Aim/Experiment/Results), attach files/images or store file destinations (paths), and export an experiment as Markdown or printable PDF.
+Offline-first lab notebook prototype built with React + TypeScript (Vite). Create template-based experiment notes, pin key regions, attach files, export experiments to Markdown or PDF, and track changes in a sync queue with retry.
 
 ## Screenshots
 
@@ -8,7 +8,7 @@ Offline-first lab notebook prototype built with React + TypeScript (Vite). Simpl
 | --- | --- | --- |
 | ![Dashboard](screenshots/01-dashboard.png) | ![New entry modal](screenshots/02-new-entry-modal.png) | ![Template entry](screenshots/03-template-entry.png) |
 
-| Edit mode | Settings | Details (sync failed) |
+| Edit mode | Settings | Sync queue (failed) |
 | --- | --- | --- |
 | ![Edit mode](screenshots/04-edit-mode.png) | ![Settings](screenshots/05-settings.png) | ![Sync failed](screenshots/06-sync-failed.png) |
 
@@ -18,10 +18,8 @@ Offline-first lab notebook prototype built with React + TypeScript (Vite). Simpl
 
 ## Features
 
-- **Simple layout**: browse entries + filter by project/experiment on the left; editor stays focused.
-- **Template notes**: “Experiment note” template starts with Aim / Experiment / Results sections.
-- **Insert bar**: add headers, checklists, Aim/Experiment/Results, images/files, and “file destinations” (paths).
-- **Details drawer**: pinned regions, attachments, and sync queue live under “Details” to keep the editor clean.
+- **Template notes**: create “Experiment note” templates (Summary / Protocol / Results) with pinned regions.
+- **Pinned regions**: quick jump links + attachment linking.
 - **Offline-first sync queue**: per-block change queue with `pending / synced / failed`, retry and clear controls.
 - **Attachments + cache**: drag/drop/paste attachments with IndexedDB storage, plus optional disk cache via the File System Access API.
 - **Export**: Markdown bundle (note + `manifest.json` + attachments paths) and printable PDF export.
