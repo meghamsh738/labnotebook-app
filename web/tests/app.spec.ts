@@ -37,14 +37,15 @@ test.describe('Lab note taking app', () => {
     await page.getByRole('button', { name: 'Create entry' }).click()
 
     await expect(page.getByRole('heading', { name: 'E2E template note' })).toBeVisible()
-    await expect(page.getByRole('button', { name: 'Save' })).toBeVisible()
+    await expect(page.getByTestId('save-note-btn')).toBeVisible()
 
-    await page.getByRole('button', { name: 'Save' }).click()
-    await expect(page.getByRole('button', { name: 'Edit note' })).toBeVisible()
+    await page.getByTestId('save-note-btn').click()
+    await expect(page.getByTestId('edit-note-btn')).toBeVisible()
 
-    const pinned = page.locator('.meta .pinned-list')
-    await expect(pinned.getByText('Summary', { exact: true })).toBeVisible()
-    await expect(pinned.getByText('Protocol', { exact: true })).toBeVisible()
+    await page.getByTestId('details-btn').click()
+    const pinned = page.getByTestId('pinned-regions-list')
+    await expect(pinned.getByText('Aim', { exact: true })).toBeVisible()
+    await expect(pinned.getByText('Experiment', { exact: true })).toBeVisible()
     await expect(pinned.getByText('Results', { exact: true })).toBeVisible()
   })
 
@@ -55,7 +56,7 @@ test.describe('Lab note taking app', () => {
     await expect(firstChecklist).toBeVisible()
     await firstChecklist.locator('input[type="checkbox"]').click()
 
-    const statusChip = page.locator('.breadcrumbs .status-chip')
+    const statusChip = page.getByTestId('sync-status-chip')
     await expect(statusChip).toContainText('Synced')
   })
 
@@ -65,10 +66,11 @@ test.describe('Lab note taking app', () => {
     const firstChecklist = page.locator('.check-row').first()
     await firstChecklist.locator('input[type="checkbox"]').click()
 
-    const statusChip = page.locator('.breadcrumbs .status-chip')
+    const statusChip = page.getByTestId('sync-status-chip')
     await expect(statusChip).toContainText(/failed/i)
 
-    await page.locator('.breadcrumbs').getByRole('button', { name: /retry failed/i }).click()
+    await page.getByTestId('details-btn').click()
+    await page.getByTestId('sync-now-btn').click()
     await expect(statusChip).toContainText('Synced')
   })
 
@@ -82,7 +84,7 @@ test.describe('Lab note taking app', () => {
     await boot(page, { noFail: '1', stubPicker: true })
     const [download] = await Promise.all([
       page.waitForEvent('download'),
-      page.getByRole('button', { name: 'Export Markdown' }).click(),
+      page.getByTestId('export-md-btn').click(),
     ])
     expect(download.suggestedFilename().endsWith('.md')).toBeTruthy()
     await expect.poll(() => dialogText).toContain('manifest')
@@ -92,7 +94,7 @@ test.describe('Lab note taking app', () => {
     await boot(page, { noFail: '1' })
     const [popup] = await Promise.all([
       page.waitForEvent('popup'),
-      page.getByRole('button', { name: 'Export PDF' }).click(),
+      page.getByTestId('export-pdf-btn').click(),
     ])
     await popup.waitForLoadState('domcontentloaded')
     await expect(popup.locator('text=Print / Save to PDF')).toBeVisible()

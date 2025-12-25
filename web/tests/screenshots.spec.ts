@@ -38,13 +38,13 @@ test('generate feature screenshots', async ({ page }) => {
   await page.getByRole('button', { name: '+ New Entry' }).click()
   await page.getByLabel('Title').fill('Template example')
   await page.getByRole('button', { name: 'Create entry' }).click()
-  await expect(page.getByRole('heading', { name: 'Template example' })).toBeVisible()
-  await page.getByRole('button', { name: 'Save' }).click()
+  await expect(page.getByTestId('save-note-btn')).toBeVisible()
+  await page.getByTestId('save-note-btn').click()
   await page.screenshot({ path: path.join(outDir, '03-template-entry.png'), fullPage: true })
 
   await page.locator('.entry-item').first().click()
-  await page.getByRole('button', { name: 'Edit' }).click()
-  await expect(page.getByRole('button', { name: 'Save' })).toBeVisible()
+  await page.getByTestId('edit-note-btn').click()
+  await expect(page.getByTestId('save-note-btn')).toBeVisible()
   await page.getByRole('link', { name: /view|open/i }).first().scrollIntoViewIfNeeded()
   await page.screenshot({ path: path.join(outDir, '04-edit-mode.png'), fullPage: true })
 
@@ -53,24 +53,26 @@ test('generate feature screenshots', async ({ page }) => {
   await page.screenshot({ path: path.join(outDir, '05-settings.png') })
   await page.getByRole('button', { name: 'Close' }).click()
 
-  await page.getByRole('button', { name: 'Cancel' }).click()
-  await expect(page.getByRole('button', { name: 'Edit' })).toBeVisible()
-  const statusChip = page.locator('.breadcrumbs .status-chip')
+  await page.getByTestId('cancel-edit-btn').click()
+  await expect(page.getByTestId('edit-note-btn')).toBeVisible()
+  const statusChip = page.getByTestId('sync-status-chip')
   await expect(statusChip).toContainText('Synced')
   await page.context().setOffline(true)
   await page.locator('.check-row input[type="checkbox"]').first().click()
   await expect(statusChip).toContainText(/failed/i)
-  await page.getByRole('button', { name: 'Details' }).click()
+
+  await page.getByTestId('details-btn').click()
+  await expect(page.getByText('Sync queue')).toBeVisible()
   await page.getByText('Sync queue').scrollIntoViewIfNeeded()
   await page.screenshot({ path: path.join(outDir, '06-sync-failed.png'), fullPage: true })
   await page.context().setOffline(false)
-  await page.getByRole('button', { name: 'Retry failed' }).click()
+  await page.getByTestId('sync-now-btn').click()
   await expect(statusChip).toContainText('Synced')
-  await page.getByRole('button', { name: 'Close' }).click()
+  await page.locator('.drawer-head').getByRole('button', { name: 'Close' }).click()
 
   const [popup] = await Promise.all([
     page.waitForEvent('popup'),
-    page.getByRole('button', { name: 'Export PDF' }).click(),
+    page.getByTestId('export-pdf-btn').click(),
   ])
   await expect(popup.locator('text=Print / Save to PDF')).toBeVisible()
   await popup.setViewportSize({ width: 1100, height: 780 })
