@@ -93,6 +93,7 @@ export interface TableBlock extends BlockBase {
   type: 'table'
   data: string[][]
   caption?: string
+  headerRow?: boolean
 }
 
 export interface ImageBlock extends BlockBase {
@@ -173,11 +174,15 @@ export interface Entry {
   authorId: string
   title: string
   dateBucket: string
+  isDaily?: boolean
   content: Block[]
   tags: string[]
+  projectTags?: string[]
+  experimentTags?: string[]
   searchTerms: string[]
   linkedFiles: string[]
   pinnedRegions: PinnedRegion[]
+  syncPath?: string
 }
 
 export interface SearchIndexItem {

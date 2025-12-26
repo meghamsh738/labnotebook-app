@@ -1,28 +1,86 @@
-@import url('https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=Space+Grotesk:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Space+Mono:wght@400;700&display=swap');
 
 :root {
-  --font-display: 'Chakra Petch', 'Space Grotesk', system-ui, sans-serif;
-  --font-body: 'Space Grotesk', 'Segoe UI', system-ui, -apple-system, sans-serif;
-  --font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
-  --tracking-display: 0.08em;
-  --tracking-label: 0.12em;
+  --font-sans: 'Space Grotesk', 'Segoe UI', system-ui, -apple-system, Arial, sans-serif;
+  --font-display: 'Space Grotesk', 'Segoe UI', system-ui, -apple-system, Arial, sans-serif;
+  --font-mono: 'Space Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
 
-  font-family: var(--font-body);
-  line-height: 1.5;
-  font-weight: 500;
-  letter-spacing: 0.01em;
-  color: #e8eef9;
-  background-color: #0b1021;
-  --bg: #0b1021;
-  --panel: #0f1829;
-  --border: rgba(255, 255, 255, 0.08);
-  --muted: #9fb2cc;
-  --accent: #6ee7b7;
-  --accent-2: #f7c266;
-  --shadow: 0 18px 60px rgba(0, 0, 0, 0.35);
+  font-family: var(--font-sans);
+  font-size: 16px;
+  line-height: 1.6;
+  font-weight: 400;
+  color-scheme: light;
+
+  --bg: #F6F2EA;
+  --surface: #FFFFFF;
+  --surface-2: #FFF7EC;
+
+  --text: #111113;
+  --text-2: #2F2F36;
+  --text-3: #575762;
+
+  --border: #15151A;
+  --border-2: #0F0F14;
+
+  --accent: #1F5BFF;
+  --accent-weak: rgba(31, 91, 255, 0.18);
+  --focus: rgba(31, 91, 255, 0.35);
+
+  --danger: #B42318;
+  --danger-weak: rgba(180, 35, 24, 0.12);
+
+  --radius-sm: 8px;
+  --radius-md: 12px;
+
+  --s-1: 4px;
+  --s-2: 8px;
+  --s-3: 12px;
+  --s-4: 16px;
+  --s-5: 24px;
+  --s-6: 32px;
+  --s-7: 48px;
+
+  --shadow-1: 3px 3px 0 rgba(17, 17, 20, 0.9);
+  --shadow-2: 10px 10px 0 rgba(17, 17, 20, 0.9);
+
+  --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --t-fast: 120ms;
+  --t: 160ms;
+  --t-slow: 220ms;
+
+  --fs-12: 12px;
+  --fs-14: 14px;
+  --fs-16: 16px;
+  --fs-20: 20px;
+  --fs-24: 24px;
+
+  --mono: var(--font-mono);
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+[data-theme="dark"] {
+  color-scheme: dark;
+
+  --bg: #0B0B0D;
+  --surface: #141418;
+  --surface-2: #1C1C22;
+
+  --text: #F4F4F7;
+  --text-2: #D1D1D9;
+  --text-3: #9D9DA8;
+
+  --border: #F4F4F7;
+  --border-2: #DADAE3;
+
+  --accent-weak: rgba(31, 91, 255, 0.22);
+  --focus: rgba(31, 91, 255, 0.45);
+
+  --danger-weak: rgba(255, 69, 58, 0.18);
+
+  --shadow-1: 3px 3px 0 rgba(0, 0, 0, 0.85);
+  --shadow-2: 10px 10px 0 rgba(0, 0, 0, 0.85);
 }
 
 * {
@@ -40,9 +98,15 @@ a:hover {
 body {
   margin: 0;
   background: var(--bg);
+  color: var(--text);
   min-height: 100vh;
 }
 
 button {
   font-family: inherit;
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: var(--text-3);
 }

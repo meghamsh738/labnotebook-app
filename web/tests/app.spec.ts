@@ -17,36 +17,40 @@ async function boot(
     }
   }, opts ?? { noFail: '1' })
   await page.goto('/')
+  const startModal = page.locator('.start-day-modal')
+  try {
+    await startModal.waitFor({ state: 'visible', timeout: 2000 })
+    await startModal.getByRole('button', { name: /later|skip/i }).first().click()
+  } catch {
+    // modal not shown yet
+  }
 }
 
 test.describe('Lab note taking app', () => {
   test('loads baseline UI', async ({ page }) => {
     await boot(page, { noFail: '1' })
     await expect(page.getByRole('heading', { name: /neuroimmunology lab/i })).toBeVisible()
-    await expect(page.getByRole('button', { name: '+ New Entry' })).toBeVisible()
+    await expect(page.getByRole('button', { name: /new entry/i })).toBeVisible()
     await expect(page.getByRole('button', { name: /quick capture/i })).toBeVisible()
     await expect(page.getByPlaceholder('Search notes, samples, files')).toBeVisible()
+    await expect(page.getByTestId('sidebar-toggle')).toBeVisible()
+    await expect(page.getByTestId('calendar')).toBeVisible()
   })
 
-  test('creates a new entry from template and pins regions', async ({ page }) => {
+  test('creates a new entry from the guided template', async ({ page }) => {
     await boot(page, { noFail: '1' })
-    await page.getByRole('button', { name: '+ New Entry' }).click()
+    await page.getByRole('button', { name: /new entry/i }).click()
     await expect(page.getByRole('dialog')).toBeVisible()
 
-    await page.getByLabel('Title').fill('E2E template note')
+    await page.getByLabel('Title').fill('E2E guided note')
     await page.getByRole('button', { name: 'Create entry' }).click()
 
-    await expect(page.getByRole('heading', { name: 'E2E template note' })).toBeVisible()
-    await expect(page.getByTestId('save-note-btn')).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'E2E guided note' })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Save' })).toBeVisible()
 
-    await page.getByTestId('save-note-btn').click()
-    await expect(page.getByTestId('edit-note-btn')).toBeVisible()
-
-    await page.getByTestId('details-btn').click()
-    const pinned = page.getByTestId('pinned-regions-list')
-    await expect(pinned.getByText('Aim', { exact: true })).toBeVisible()
-    await expect(pinned.getByText('Experiment', { exact: true })).toBeVisible()
-    await expect(pinned.getByText('Results', { exact: true })).toBeVisible()
+    await page.getByRole('button', { name: 'Save' }).click()
+    await expect(page.getByRole('heading', { name: 'Context' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Setup' })).toBeVisible()
   })
 
   test('view-mode checklist toggle syncs', async ({ page }) => {
@@ -56,8 +60,20 @@ test.describe('Lab note taking app', () => {
     await expect(firstChecklist).toBeVisible()
     await firstChecklist.locator('input[type="checkbox"]').click()
 
-    const statusChip = page.getByTestId('sync-status-chip')
+    const statusChip = page.locator('.breadcrumbs .status-chip')
     await expect(statusChip).toContainText('Synced')
+  })
+
+  test('quick capture opens in edit mode', async ({ page }) => {
+    await boot(page, { noFail: '1' })
+
+    await page.getByTestId('quick-capture').click()
+    await expect(page.getByRole('button', { name: 'Save' })).toBeVisible()
+
+    const editor = page.getByTestId('slate-editor')
+    await editor.locator('p').last().click()
+    await page.keyboard.type('Quick capture note')
+    await expect(editor).toContainText('Quick capture note')
   })
 
   test('sync failures can be retried', async ({ page }) => {
@@ -66,11 +82,11 @@ test.describe('Lab note taking app', () => {
     const firstChecklist = page.locator('.check-row').first()
     await firstChecklist.locator('input[type="checkbox"]').click()
 
-    const statusChip = page.getByTestId('sync-status-chip')
+    const statusChip = page.locator('.breadcrumbs .status-chip')
     await expect(statusChip).toContainText(/failed/i)
 
-    await page.getByTestId('details-btn').click()
-    await page.getByTestId('sync-now-btn').click()
+    await expect(page.getByTestId('sync-action')).toHaveText(/retry failed/i)
+    await page.getByTestId('sync-action').click()
     await expect(statusChip).toContainText('Synced')
   })
 
@@ -84,7 +100,7 @@ test.describe('Lab note taking app', () => {
     await boot(page, { noFail: '1', stubPicker: true })
     const [download] = await Promise.all([
       page.waitForEvent('download'),
-      page.getByTestId('export-md-btn').click(),
+      page.getByTestId('export-md').click(),
     ])
     expect(download.suggestedFilename().endsWith('.md')).toBeTruthy()
     await expect.poll(() => dialogText).toContain('manifest')
@@ -94,7 +110,7 @@ test.describe('Lab note taking app', () => {
     await boot(page, { noFail: '1' })
     const [popup] = await Promise.all([
       page.waitForEvent('popup'),
-      page.getByTestId('export-pdf-btn').click(),
+      page.getByTestId('export-pdf').click(),
     ])
     await popup.waitForLoadState('domcontentloaded')
     await expect(popup.locator('text=Print / Save to PDF')).toBeVisible()
@@ -106,5 +122,32 @@ test.describe('Lab note taking app', () => {
     const dialog = page.getByRole('dialog')
     await expect(dialog).toBeVisible()
     await expect(dialog.getByText('Disk cache', { exact: true })).toBeVisible()
+  })
+
+  test('sidebar can be collapsed and expanded', async ({ page }) => {
+    await boot(page, { noFail: '1' })
+    const toggle = page.getByTestId('sidebar-toggle')
+    await toggle.click()
+    await expect(page.locator('.sidebar')).toHaveClass(/collapsed/)
+    await toggle.click()
+    await expect(page.locator('.sidebar')).not.toHaveClass(/collapsed/)
+  })
+
+  test('calendar filters entries by date', async ({ page }) => {
+    await boot(page, { noFail: '1' })
+    const today = new Date()
+    const todayIso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(
+      today.getDate()
+    ).padStart(2, '0')}`
+    const yesterday = new Date(today)
+    yesterday.setDate(today.getDate() - 1)
+    const yesterdayIso = `${yesterday.getFullYear()}-${String(yesterday.getMonth() + 1).padStart(2, '0')}-${String(
+      yesterday.getDate()
+    ).padStart(2, '0')}`
+
+    await page.getByTestId(`calendar-day-${yesterdayIso}`).click()
+    await expect(page.getByText('No entries match these filters.')).toBeVisible()
+    await page.getByTestId(`calendar-day-${todayIso}`).click()
+    await expect(page.getByText('No entries match these filters.')).toBeHidden()
   })
 })
