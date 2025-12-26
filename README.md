@@ -1,8 +1,6 @@
 # Lab Note Taking App
 
-Offline-first lab notebook prototype built with React + TypeScript (Vite). Simple 2-pane UI: browse/filter entries on the left, write notes on the right. Add structure as needed (headers, checklists, Aim/Experiment/Results), attach files/images or store file destinations (paths), and export an experiment as Markdown or printable PDF.
-
-Typography refresh (neo-brutalist display + mono labels) updated Dec 25, 2025.
+Offline-first lab notebook prototype built with React + TypeScript (Vite). Guided daily templates, calendar-driven entries, experiment/project tags, editable tables, file destinations + a master sync folder, plus Markdown/PDF export with an offline-first sync queue.
 
 ## Screenshots
 
@@ -10,7 +8,7 @@ Typography refresh (neo-brutalist display + mono labels) updated Dec 25, 2025.
 | --- | --- | --- |
 | ![Dashboard](screenshots/01-dashboard.png) | ![New entry modal](screenshots/02-new-entry-modal.png) | ![Template entry](screenshots/03-template-entry.png) |
 
-| Edit mode | Settings | Details (sync failed) |
+| Edit mode | Settings | Sync queue (failed) |
 | --- | --- | --- |
 | ![Edit mode](screenshots/04-edit-mode.png) | ![Settings](screenshots/05-settings.png) | ![Sync failed](screenshots/06-sync-failed.png) |
 
@@ -20,10 +18,13 @@ Typography refresh (neo-brutalist display + mono labels) updated Dec 25, 2025.
 
 ## Features
 
-- **Simple layout**: browse entries + filter by project/experiment on the left; editor stays focused.
-- **Template notes**: “Experiment note” template starts with Aim / Experiment / Results sections.
-- **Insert bar**: add headers, checklists, Aim/Experiment/Results, images/files, and “file destinations” (paths).
-- **Details drawer**: pinned regions, attachments, and sync queue live under “Details” to keep the editor clean.
+- **Guided daily templates**: start each day with a guided lab notebook entry and block tools.
+- **Calendar navigation**: default to today; jump to older dates to view that day’s entry.
+- **Quick capture (one per day)**: quick capture reuses today’s entry instead of creating duplicates.
+- **Tags + filters**: experiment and project tags with presets, plus add-more support.
+- **Master sync folder**: global sync destination with file destination insertion blocks.
+- **Editable tables**: paste from Excel/CSV, toggle header rows, add/remove rows/columns.
+- **Neo-brutalist UI**: collapsible sidebar, sticky actions, multi-tab entry strip, icon set.
 - **Offline-first sync queue**: per-block change queue with `pending / synced / failed`, retry and clear controls.
 - **Attachments + cache**: drag/drop/paste attachments with IndexedDB storage, plus optional disk cache via the File System Access API.
 - **Export**: Markdown bundle (note + `manifest.json` + attachments paths) and printable PDF export.
@@ -543,6 +544,7 @@ Next build steps you could take:
 5) Add sync queue + conflict diffing per block (`updated_at`, `updated_by`).
 
 ### Prototype features just added
+- Start-day modal shows on every launch to create or jump to today’s entry.
 - Client-side search/filter (Ctrl/Cmd+K) across entry titles, tags, content, attachments, pinned region summaries.
 - Project and tag chips to narrow the entry list; empty states handled.
 - Second sample entry to show filtering.
@@ -555,3 +557,9 @@ Next build steps you could take:
 - Missing cached files show a warning; image attachments display cached previews.
 - Filesystem cache (if the browser supports File System Access) is attempted first; otherwise files fall back to IndexedDB blobs.
 - Mock sync indicator shows pending changes; a “Sync now” button clears the queue (placeholder for real sync).
+- Calendar defaults to today, shows older entries by date, and does not persist filters between sessions.
+- Quick capture reuses today’s entry when one already exists.
+- Master sync folder (global) replaces per-entry overrides; file destination blocks reference it.
+- Experiment + project tag sets with presets and add-more support.
+- Editable tables with header-row toggle and add/remove row/column controls.
+- Neo-brutalist styling pass with sticky header actions, icons, and full-width layout.
