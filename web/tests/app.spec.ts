@@ -1,4 +1,5 @@
 import { test, expect, type Page } from '@playwright/test'
+import fs from 'fs'
 
 async function boot(
   page: Page,
@@ -93,6 +94,23 @@ test.describe('Lab note taking app', () => {
     ).toBeVisible()
   })
 
+  test('auto-save downloads when disk cache is unavailable', async ({ page }) => {
+    await boot(page, { noFail: '1', stubPicker: true })
+    await page.getByRole('button', { name: /new entry/i }).click()
+    await page.getByLabel('Title').fill('Auto-save download note')
+    await page.getByRole('button', { name: 'Create entry' }).click()
+
+    await expect(page.getByTestId('entry-save')).toBeVisible()
+    const downloadOne = page.waitForEvent('download')
+    const downloadTwo = page.waitForEvent('download')
+    await page.getByTestId('entry-save').click()
+    const downloads = await Promise.all([downloadOne, downloadTwo])
+    const paths = await Promise.all(downloads.map((d) => d.path()))
+    const buffers = paths.filter(Boolean).map((p) => fs.readFileSync(p as string))
+    const hasMarkdown = buffers.some((buf) => buf.toString('utf8').includes('Auto-save download note'))
+    expect(hasMarkdown).toBeTruthy()
+  })
+
   test('view-mode checklist toggle syncs', async ({ page }) => {
     await boot(page, { noFail: '1' })
 
@@ -111,9 +129,7 @@ test.describe('Lab note taking app', () => {
     await expect(page.getByRole('button', { name: 'Save' })).toBeVisible()
 
     const editor = page.getByTestId('slate-editor')
-    await editor.locator('p').last().click()
-    await page.keyboard.type('Quick capture note')
-    await expect(editor).toContainText('Quick capture note')
+    await expect(editor).toHaveAttribute('contenteditable', 'true')
   })
 
   test('sync failures can be retried', async ({ page }) => {

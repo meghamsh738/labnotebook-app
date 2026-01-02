@@ -3,6 +3,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { createEditor, Editor, Element as SlateElement, Node, Path, Range, Text, Transforms } from 'slate'
 import type { Descendant } from 'slate'
 import { Slate, Editable, withReact, ReactEditor, useSlateStatic } from 'slate-react'
+import { PDFDocument, StandardFonts, rgb, type PDFFont } from 'pdf-lib'
 import type { RenderElementProps, RenderLeafProps } from 'slate-react'
 import lunr from 'lunr'
 import { cacheFile, getCachedFile } from './idb'
@@ -244,6 +245,10 @@ function safeFileName(name: string): string {
 
 const isLikelyUrl = (value: string) => /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(value)
 const isWindowsDriveRoot = (value: string) => /^[a-zA-Z]:[\\/]*$/.test(value)
+const shortEntryId = (entryId: string) => entryId.replace(/^entry-/, '').slice(0, 8) || entryId
+const entryBundleFolderName = (entry: Entry) => safeFileName(`${entry.dateBucket}-${shortEntryId(entry.id)}`)
+const entryBundleFileBase = (entry: Entry) => safeFileName(`${entry.dateBucket}-${entry.title}`) || 'entry'
+const attachmentExportName = (attachment: Attachment) => `${attachment.id}-${safeFileName(attachment.filename)}`
 
 const normalizeSyncRoot = (value: string) => {
   const trimmed = value.trim()
@@ -507,6 +512,214 @@ function blocksToHtml(blocks: Block[], attachmentsById: Record<string, Attachmen
       }
     })
     .join('\n')
+}
+
+function buildEntryMarkdown(
+  entry: Entry,
+  project: Project | undefined,
+  experiment: Experiment | undefined,
+  attachmentsById: Record<string, Attachment>,
+  attachmentExportPathById: Record<string, string>
+) {
+  const header = [
+    `# ${entry.title || 'Untitled note'}`,
+    '',
+    project ? `- Project: ${project.title}` : '',
+    experiment ? `- Experiment: ${experiment.title}` : '',
+    experiment?.protocolRef ? `- Protocol: ${experiment.protocolRef}` : '',
+    `- Created: ${dateOnly.format(new Date(entry.createdDatetime))}`,
+    `- Last edited: ${dateOnly.format(new Date(entry.lastEditedDatetime))}`,
+    '',
+  ]
+    .filter(Boolean)
+    .join('\n')
+
+  const body = blocksToMarkdown(entry.content, attachmentsById, attachmentExportPathById)
+  return `${header}\n${body}`.trim() + '\n'
+}
+
+function wrapPdfText(text: string, font: PDFFont, size: number, maxWidth: number) {
+  const words = text.split(/\s+/).filter(Boolean)
+  if (words.length === 0) return ['']
+  const lines: string[] = []
+  let line = ''
+  for (const word of words) {
+    const next = line ? `${line} ${word}` : word
+    const width = font.widthOfTextAtSize(next, size)
+    if (width > maxWidth && line) {
+      lines.push(line)
+      line = word
+    } else {
+      line = next
+    }
+  }
+  if (line) lines.push(line)
+  return lines
+}
+
+async function buildEntryPdf(
+  entry: Entry,
+  project: Project | undefined,
+  experiment: Experiment | undefined,
+  attachmentsById: Record<string, Attachment>
+) {
+  const pdf = await PDFDocument.create()
+  const pageSize: [number, number] = [595.28, 841.89]
+  let page = pdf.addPage(pageSize)
+  const font = await pdf.embedFont(StandardFonts.Helvetica)
+  const fontBold = await pdf.embedFont(StandardFonts.HelveticaBold)
+  const margin = 48
+  const maxWidth = page.getWidth() - margin * 2
+  let y = page.getHeight() - margin
+
+  const ensureSpace = (size: number) => {
+    if (y < margin + size) {
+      page = pdf.addPage(pageSize)
+      y = page.getHeight() - margin
+    }
+  }
+
+  const drawLines = (lines: string[], f: PDFFont, size: number, color = rgb(0.1, 0.1, 0.12)) => {
+    for (const line of lines) {
+      ensureSpace(size)
+      page.drawText(line, { x: margin, y, size, font: f, color })
+      y -= size + 4
+    }
+  }
+
+  const addParagraph = (text: string, f: PDFFont, size: number, gap = 8, color?: ReturnType<typeof rgb>) => {
+    if (!text.trim()) return
+    const lines = wrapPdfText(text, f, size, maxWidth)
+    drawLines(lines, f, size, color)
+    y -= gap
+  }
+
+  addParagraph(entry.title || 'Untitled note', fontBold, 18, 10)
+  const metaLine = [
+    project ? `Project: ${project.title}` : '',
+    experiment ? `Experiment: ${experiment.title}` : '',
+    experiment?.protocolRef ? `Protocol: ${experiment.protocolRef}` : '',
+    `Created ${dateOnly.format(new Date(entry.createdDatetime))}`,
+    `Last edited ${dateOnly.format(new Date(entry.lastEditedDatetime))}`,
+  ]
+    .filter(Boolean)
+    .join(' · ')
+  addParagraph(metaLine, font, 10, 12, rgb(0.45, 0.45, 0.5))
+
+  for (const block of entry.content) {
+    switch (block.type) {
+      case 'heading': {
+        const size = block.level === 3 ? 12 : 14
+        addParagraph(block.text, fontBold, size, 8)
+        break
+      }
+      case 'paragraph':
+        addParagraph(block.text, font, 11)
+        break
+      case 'quote':
+        addParagraph(`“${block.text}”`, font, 11, 10, rgb(0.3, 0.3, 0.35))
+        break
+      case 'checklist':
+        block.items
+          .filter((item) => item.text.trim() || !item.guide)
+          .forEach((item) => addParagraph(`[${item.done ? 'x' : ' '}] ${item.text}`, font, 11, 4))
+        y -= 6
+        break
+      case 'table':
+        block.data.forEach((row) => addParagraph(row.join(' | '), font, 10, 2))
+        y -= 6
+        break
+      case 'image': {
+        const attachment = attachmentsById[block.attachmentId]
+        addParagraph(`Image: ${block.caption ?? attachment?.filename ?? 'Image'}`, font, 11, 6)
+        break
+      }
+      case 'file': {
+        const attachment = attachmentsById[block.attachmentId]
+        addParagraph(`File: ${block.label ?? attachment?.filename ?? 'File'}`, font, 11, 6)
+        break
+      }
+      case 'divider':
+        y -= 10
+        break
+      default:
+        break
+    }
+  }
+
+  return await pdf.save()
+}
+
+function pdfBytesToBlob(bytes: Uint8Array) {
+  const copy = new Uint8Array(bytes)
+  return new Blob([copy], { type: 'application/pdf' })
+}
+
+async function getWritableCacheDir(): Promise<FileSystemDirectoryHandle | null> {
+  const handle = await restoreCacheHandle()
+  if (!handle) return null
+  const handleWithPerm = handle as FsDirectoryWithPerm
+  if (handleWithPerm.queryPermission) {
+    const perm = await handleWithPerm.queryPermission({ mode: 'readwrite' })
+    if (perm === 'granted') return handle
+    if (handleWithPerm.requestPermission) {
+      const req = await handleWithPerm.requestPermission({ mode: 'readwrite' })
+      if (req === 'granted') return handle
+    }
+    return null
+  }
+  return handle
+}
+
+async function readAttachmentBlob(
+  attachment: Attachment,
+  attachmentUrls: Record<string, string>
+): Promise<Blob | null> {
+  if (attachment.cachedPath?.startsWith('idb://')) {
+    const key = attachment.cachedPath.replace('idb://', '')
+    try {
+      return (await getCachedFile(key)) ?? null
+    } catch {
+      return null
+    }
+  }
+
+  if (attachment.cachedPath?.startsWith('fs://')) {
+    const name = attachment.cachedPath.replace('fs://', '')
+    const dir = await restoreCacheHandle()
+    const dirWithPerm = dir ? (dir as FsDirectoryWithPerm) : null
+    if (dirWithPerm?.queryPermission) {
+      const perm = await dirWithPerm.queryPermission({ mode: 'read' })
+      if (perm !== 'granted') return null
+    }
+    if (dir) {
+      try {
+        const handle = await dir.getFileHandle(name)
+        return await handle.getFile()
+      } catch {
+        return null
+      }
+    }
+  }
+
+  const url = attachmentUrls[attachment.id] ?? attachment.thumbnail
+  if (url) {
+    try {
+      const res = await fetch(url)
+      return await res.blob()
+    } catch {
+      return null
+    }
+  }
+
+  return null
+}
+
+async function writeBlobToDir(dir: FileSystemDirectoryHandle, filename: string, blob: Blob) {
+  const handle = await dir.getFileHandle(filename, { create: true })
+  const writable = await handle.createWritable()
+  await writable.write(blob)
+  await writable.close()
 }
 
 function withChecklists(editor: ReactEditor) {
@@ -1133,6 +1346,8 @@ function App() {
       if (!files.length) return []
 
       const syncRoot = normalizeSyncRoot(masterSyncPath)
+      const entry = entryDrafts[entryId]
+      const bundleFolder = entry ? entryBundleFolderName(entry) : 'entry'
       const saved: Attachment[] = []
 
       for (const file of files) {
@@ -1153,7 +1368,9 @@ function App() {
           setFsEnabled(true)
         }
 
-        const storagePath = syncRoot ? resolveRelativePath(syncRoot, file.name) : cachePath
+        const exportName = `${id}-${safeFileName(file.name)}`
+        const relativePath = `${bundleFolder}/attachments/${exportName}`
+        const storagePath = syncRoot ? resolveRelativePath(syncRoot, relativePath) : cachePath
 
         saved.push({
           id,
@@ -1186,7 +1403,7 @@ function App() {
 
       return saved
     },
-    [masterSyncPath]
+    [entryDrafts, masterSyncPath]
   )
 
   const addFileDestination = useCallback((entryId: string, val: { path: string; label?: string }): Attachment => {
@@ -1225,6 +1442,64 @@ function App() {
 
     return att
   }, [masterSyncPath])
+
+  const autoSaveEntryBundle = useCallback(
+    async (entryId: string, content: Block[]) => {
+      const current = entryDrafts[entryId]
+      if (!current) return
+
+      const entry: Entry = {
+        ...current,
+        content,
+        lastEditedDatetime: new Date().toISOString(),
+      }
+
+      const entryAttachments = attachmentsStore.filter((a) => a.entryId === entryId)
+      const attachmentsById = Object.fromEntries(entryAttachments.map((a) => [a.id, a]))
+      const project = entry.projectId ? projects.find((p) => p.id === entry.projectId) : undefined
+      const experiment = entry.experimentId ? experiments.find((e) => e.id === entry.experimentId) : undefined
+
+      const attachmentExportNameById: Record<string, string> = {}
+      const attachmentExportPathById: Record<string, string> = {}
+      entryAttachments.forEach((att) => {
+        const name = attachmentExportName(att)
+        attachmentExportNameById[att.id] = name
+        if (att.type === 'raw') {
+          attachmentExportPathById[att.id] = att.storagePath
+        } else {
+          attachmentExportPathById[att.id] = `attachments/${name}`
+        }
+      })
+
+      const markdown = buildEntryMarkdown(entry, project, experiment, attachmentsById, attachmentExportPathById)
+      const pdfBytes = await buildEntryPdf(entry, project, experiment, attachmentsById)
+
+      const cacheDir = await getWritableCacheDir()
+      if (!cacheDir) {
+        downloadBlob(
+          `${entryBundleFileBase(entry)}.md`,
+          new Blob([markdown], { type: 'text/markdown;charset=utf-8' })
+        )
+        return
+      }
+
+      const bundleFolder = entryBundleFolderName(entry)
+      const entryDir = await cacheDir.getDirectoryHandle(bundleFolder, { create: true })
+      const attachmentsDir = await entryDir.getDirectoryHandle('attachments', { create: true })
+
+      await writeBlobToDir(entryDir, 'entry.md', new Blob([markdown], { type: 'text/markdown;charset=utf-8' }))
+      await writeBlobToDir(entryDir, 'entry.pdf', pdfBytesToBlob(pdfBytes))
+
+      for (const att of entryAttachments) {
+        if (att.type === 'raw') continue
+        const blob = await readAttachmentBlob(att, attachmentUrls)
+        if (!blob) continue
+        const name = attachmentExportNameById[att.id]
+        await writeBlobToDir(attachmentsDir, name, blob)
+      }
+    },
+    [attachmentsStore, attachmentUrls, entryDrafts, projects, experiments]
+  )
 
   // Hydrate cached attachment thumbnails/URLs from IndexedDB and fs handles
 	  useEffect(() => {
@@ -1772,6 +2047,7 @@ function App() {
               ...prev,
             ])
           }
+          onAutoSaveEntry={autoSaveEntryBundle}
           changeQueue={changeQueue.filter((c) => c.entryId === selectedEntryId)}
           syncing={syncing}
           onSyncNow={(includeFailed) => syncNow({ entryId: selectedEntryId, includeFailed })}
@@ -2259,6 +2535,7 @@ interface EditorPaneProps {
   onAddAttachments: (entryId: string, files: File[]) => Promise<Attachment[]>
   onAddFileDestination: (entryId: string, val: { path: string; label?: string }) => Attachment
   onEnqueueChange: (entryId: string, blockIds: string[], timestamp: string) => void
+  onAutoSaveEntry: (entryId: string, content: Block[]) => Promise<void>
   changeQueue: ChangeQueueItem[]
   syncing: boolean
   onSyncNow: (includeFailed: boolean) => void
@@ -2289,6 +2566,7 @@ function EditorPane({
   onAddAttachments,
   onAddFileDestination,
   onEnqueueChange,
+  onAutoSaveEntry,
   changeQueue,
   syncing,
   onSyncNow,
@@ -2396,6 +2674,7 @@ function EditorPane({
     })
     onUpdateEntry(entry.id, updatedBlocks)
     onEnqueueChange(entry.id, updatedBlocks.map((b) => b.id), timestamp)
+    void onAutoSaveEntry(entry.id, updatedBlocks)
     setIsEditing(false)
   }
 
@@ -2538,7 +2817,7 @@ function EditorPane({
                     <span className="icon">✕</span>
                     Cancel
                   </button>
-                  <button className="accent icon-btn" onClick={handleSave}>
+                  <button className="accent icon-btn" onClick={handleSave} data-testid="entry-save">
                     <span className="icon">✓</span>
                     Save
                   </button>
