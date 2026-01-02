@@ -1165,6 +1165,28 @@ function App() {
     setCalendarMonth(monthStartFromIso(date))
   }, [])
 
+  const handleDeleteEntry = useCallback(
+    (entryId: string) => {
+      const entry = entryDrafts[entryId]
+      if (!entry) return
+      const ok = window.confirm(`Delete "${entry.title || 'Untitled note'}"? This cannot be undone.`)
+      if (!ok) return
+
+      const remainingIds = Object.keys(entryDrafts).filter((id) => id !== entryId)
+
+      setEntryDrafts((prev) => {
+        const next = { ...prev }
+        delete next[entryId]
+        return next
+      })
+      setAttachmentsStore((prev) => prev.filter((att) => att.entryId !== entryId))
+      setChangeQueue((prev) => prev.filter((c) => c.entryId !== entryId))
+      setOpenEntryIds((prev) => prev.filter((id) => id !== entryId))
+      setSelectedEntryId((prev) => (prev === entryId ? (remainingIds[0] ?? '') : prev))
+    },
+    [entryDrafts]
+  )
+
   const handleCreateEntry = useCallback(
     (opts: {
       title?: string
@@ -1502,46 +1524,46 @@ function App() {
   )
 
   // Hydrate cached attachment thumbnails/URLs from IndexedDB and fs handles
-	  useEffect(() => {
-	    let cancelled = false
-	    const load = async () => {
+  useEffect(() => {
+    let cancelled = false
+    const load = async () => {
       const urlMap: Record<string, string> = {}
-	      const fsDir = await restoreCacheHandle()
-	      const fsDirWithPerm = fsDir ? (fsDir as FsDirectoryWithPerm) : null
-	      const fsCanRead =
-	        !fsDirWithPerm?.queryPermission ?
-	          !!fsDir :
-	          (await fsDirWithPerm.queryPermission({ mode: 'read' })) === 'granted'
+      const fsDir = await restoreCacheHandle()
+      const fsDirWithPerm = fsDir ? (fsDir as FsDirectoryWithPerm) : null
+      const fsCanRead =
+        !fsDirWithPerm?.queryPermission
+          ? !!fsDir
+          : (await fsDirWithPerm.queryPermission({ mode: 'read' })) === 'granted'
 
-	      for (const att of attachmentsStore) {
-	        if (att.cachedPath?.startsWith('idb://')) {
-	          const key = att.cachedPath.replace('idb://', '')
-	          try {
+      for (const att of attachmentsStore) {
+        if (att.cachedPath?.startsWith('idb://')) {
+          const key = att.cachedPath.replace('idb://', '')
+          try {
             const blob = await getCachedFile(key)
             if (blob) {
               urlMap[att.id] = URL.createObjectURL(blob)
             }
           } catch (err) {
-	            console.warn('Unable to load cached file', att.id, err)
-	          }
-	        } else if (att.cachedPath?.startsWith('fs://')) {
-	          const name = att.cachedPath.replace('fs://', '')
-	          if (fsDir && fsCanRead) {
-	            try {
-	              const handle = await fsDir.getFileHandle(name)
-	              const blob = await handle.getFile()
-	              urlMap[att.id] = URL.createObjectURL(blob)
-	            } catch (err) {
-	              console.warn('Unable to read filesystem cached file', att.id, err)
-	              if (att.thumbnail) urlMap[att.id] = att.thumbnail
-	            }
-	          } else {
-	            if (att.thumbnail) urlMap[att.id] = att.thumbnail
-	          }
-	        } else if (att.thumbnail) {
-	          urlMap[att.id] = att.thumbnail
-	        }
-	      }
+            console.warn('Unable to load cached file', att.id, err)
+          }
+        } else if (att.cachedPath?.startsWith('fs://')) {
+          const name = att.cachedPath.replace('fs://', '')
+          if (fsDir && fsCanRead) {
+            try {
+              const handle = await fsDir.getFileHandle(name)
+              const blob = await handle.getFile()
+              urlMap[att.id] = URL.createObjectURL(blob)
+            } catch (err) {
+              console.warn('Unable to read filesystem cached file', att.id, err)
+              if (att.thumbnail) urlMap[att.id] = att.thumbnail
+            }
+          } else if (att.thumbnail) {
+            urlMap[att.id] = att.thumbnail
+          }
+        } else if (att.thumbnail) {
+          urlMap[att.id] = att.thumbnail
+        }
+      }
       if (!cancelled) {
         setAttachmentUrls(urlMap)
       }
@@ -2034,6 +2056,7 @@ function App() {
           }
           onAddAttachments={addAttachments}
           onAddFileDestination={addFileDestination}
+          onDeleteEntry={handleDeleteEntry}
           onEnqueueChange={(entryId, blockIds, ts) =>
             setChangeQueue((prev) => [
               {
@@ -2217,9 +2240,26 @@ function Sidebar({
   }, [experiments, selectedProject])
   const searchRef = useRef<HTMLInputElement | null>(null)
   const [showAdvanced, setShowAdvanced] = useState(false)
+  const [tagQuery, setTagQuery] = useState('')
   const calendarLabel = useMemo(() => {
     return new Intl.DateTimeFormat('en-US', { month: 'long', year: 'numeric' }).format(calendarMonth)
   }, [calendarMonth])
+
+  const normalizedTagQuery = tagQuery.trim().toLowerCase()
+  const filteredProjectTags = useMemo(
+    () =>
+      normalizedTagQuery
+        ? projectTagOptions.filter((tag) => tag.toLowerCase().includes(normalizedTagQuery))
+        : projectTagOptions,
+    [normalizedTagQuery, projectTagOptions]
+  )
+  const filteredExperimentTags = useMemo(
+    () =>
+      normalizedTagQuery
+        ? experimentTagOptions.filter((tag) => tag.toLowerCase().includes(normalizedTagQuery))
+        : experimentTagOptions,
+    [normalizedTagQuery, experimentTagOptions]
+  )
 
   const calendarDays = useMemo(() => {
     const year = calendarMonth.getFullYear()
@@ -2457,35 +2497,46 @@ function Sidebar({
 
             {showAdvanced && (
               <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 12 }}>
-            <div>
-              <div className="section-title">Project tags</div>
-              <div className="chip-row">
-                {projectTagOptions.map((tag) => (
-                  <button
-                    key={tag}
-                    className={`pill soft ${selectedProjectTags.includes(tag) ? 'active-pill' : ''}`}
-                    onClick={() => onToggleProjectTag(tag)}
-                  >
-                    {tag}
-                  </button>
-                ))}
-              </div>
-            </div>
+                <label className="field">
+                  <span className="muted tiny">Search tags</span>
+                  <input
+                    value={tagQuery}
+                    onChange={(e) => setTagQuery(e.target.value)}
+                    placeholder="Filter tags…"
+                    data-testid="tag-search"
+                  />
+                </label>
+                <div>
+                  <div className="section-title">Project tags</div>
+                  <div className="chip-row" data-testid="project-tag-list">
+                    {filteredProjectTags.map((tag) => (
+                      <button
+                        key={tag}
+                        className={`pill soft ${selectedProjectTags.includes(tag) ? 'active-pill' : ''}`}
+                        onClick={() => onToggleProjectTag(tag)}
+                      >
+                        {tag}
+                      </button>
+                    ))}
+                    {filteredProjectTags.length === 0 && <span className="muted tiny">No tags found.</span>}
+                  </div>
+                </div>
 
-            <div>
-              <div className="section-title">Experiment tags</div>
-              <div className="chip-row">
-                {experimentTagOptions.map((tag) => (
-                  <button
-                    key={tag}
-                    className={`pill soft ${selectedExperimentTags.includes(tag) ? 'active-pill' : ''}`}
-                    onClick={() => onToggleExperimentTag(tag)}
-                  >
-                    {tag}
-                  </button>
-                ))}
-              </div>
-            </div>
+                <div>
+                  <div className="section-title">Experiment tags</div>
+                  <div className="chip-row" data-testid="experiment-tag-list">
+                    {filteredExperimentTags.map((tag) => (
+                      <button
+                        key={tag}
+                        className={`pill soft ${selectedExperimentTags.includes(tag) ? 'active-pill' : ''}`}
+                        onClick={() => onToggleExperimentTag(tag)}
+                      >
+                        {tag}
+                      </button>
+                    ))}
+                    {filteredExperimentTags.length === 0 && <span className="muted tiny">No tags found.</span>}
+                  </div>
+                </div>
 
                 <div>
                   <div className="section-title">Attachments</div>
@@ -2534,6 +2585,7 @@ interface EditorPaneProps {
   onUpdateEntryMeta: (entryId: string, updates: Partial<Entry>) => void
   onAddAttachments: (entryId: string, files: File[]) => Promise<Attachment[]>
   onAddFileDestination: (entryId: string, val: { path: string; label?: string }) => Attachment
+  onDeleteEntry: (entryId: string) => void
   onEnqueueChange: (entryId: string, blockIds: string[], timestamp: string) => void
   onAutoSaveEntry: (entryId: string, content: Block[]) => Promise<void>
   changeQueue: ChangeQueueItem[]
@@ -2565,6 +2617,7 @@ function EditorPane({
   onUpdateEntryMeta,
   onAddAttachments,
   onAddFileDestination,
+  onDeleteEntry,
   onEnqueueChange,
   onAutoSaveEntry,
   changeQueue,
@@ -2826,9 +2879,7 @@ function EditorPane({
             </div>
           </div>
           <div className="meta-row">
-            <span className="muted tiny">Created {dtFormat.format(new Date(entry.createdDatetime))}</span>
-            <span className="dot" />
-            <span className="muted tiny">Last edited {dtFormat.format(new Date(entry.lastEditedDatetime))}</span>
+            <span className="muted tiny">Edited {dateOnly.format(new Date(entry.lastEditedDatetime))}</span>
           </div>
           <div className="title-row">
             <h1>{entry.title}</h1>
@@ -2904,12 +2955,6 @@ function EditorPane({
                     attachmentUrls={attachmentUrls}
                     onUpdateBlock={handleUpdateBlock}
                   />
-                  {block.updatedAt && (
-                    <div className="block-meta muted tiny">
-                      Updated {dtFormat.format(new Date(block.updatedAt))}
-                      {block.updatedBy ? ` · ${block.updatedBy}` : ''}
-                    </div>
-                  )}
                 </div>
               ))}
             </section>
@@ -3142,6 +3187,19 @@ function EditorPane({
                 {failedCount > 0 ? 'Retry failed' : 'Sync now'}
               </button>
             )}
+          </div>
+
+          <div className="panel-card danger-card">
+            <div className="section-title">Delete entry</div>
+            <div className="muted tiny">Removes this entry and its attachments from the notebook.</div>
+            <button
+              className="ghost danger"
+              type="button"
+              data-testid="delete-entry"
+              onClick={() => onDeleteEntry(entry.id)}
+            >
+              Delete entry
+            </button>
           </div>
         </div>
       )}

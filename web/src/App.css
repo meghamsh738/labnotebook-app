@@ -257,6 +257,17 @@
   gap: 6px;
 }
 
+.ghost.danger {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.ghost.danger:hover:not(:disabled) {
+  background: var(--danger-weak);
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
 .ghost:hover:not(:disabled) {
   background: var(--surface-2);
   border-color: var(--border-2);
@@ -1167,6 +1178,15 @@
   background: var(--surface);
   padding: var(--s-4);
   box-shadow: var(--shadow-1);
+}
+
+.panel-card.danger-card {
+  border-color: rgba(180, 35, 24, 0.35);
+  background: linear-gradient(180deg, rgba(180, 35, 24, 0.06), var(--surface) 60%);
+}
+
+.panel-card.danger-card .section-title {
+  color: var(--danger);
 }
 
 .tag-picker {

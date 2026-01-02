@@ -101,14 +101,13 @@ test.describe('Lab note taking app', () => {
     await page.getByRole('button', { name: 'Create entry' }).click()
 
     await expect(page.getByTestId('entry-save')).toBeVisible()
-    const downloadOne = page.waitForEvent('download')
-    const downloadTwo = page.waitForEvent('download')
-    await page.getByTestId('entry-save').click()
-    const downloads = await Promise.all([downloadOne, downloadTwo])
-    const paths = await Promise.all(downloads.map((d) => d.path()))
-    const buffers = paths.filter(Boolean).map((p) => fs.readFileSync(p as string))
-    const hasMarkdown = buffers.some((buf) => buf.toString('utf8').includes('Auto-save download note'))
-    expect(hasMarkdown).toBeTruthy()
+    const [download] = await Promise.all([
+      page.waitForEvent('download'),
+      page.getByTestId('entry-save').click(),
+    ])
+    const path = await download.path()
+    const buffer = fs.readFileSync(path as string)
+    expect(buffer.toString('utf8')).toContain('Auto-save download note')
   })
 
   test('view-mode checklist toggle syncs', async ({ page }) => {
@@ -205,5 +204,34 @@ test.describe('Lab note taking app', () => {
     await expect(page.getByText('No entries match these filters.')).toBeVisible()
     await page.getByTestId(`calendar-day-${todayIso}`).click()
     await expect(page.getByText('No entries match these filters.')).toBeHidden()
+  })
+
+  test('tag search filters project and experiment tags', async ({ page }) => {
+    await boot(page, { noFail: '1' })
+    await page.getByRole('button', { name: 'More' }).click()
+
+    await page.getByTestId('tag-search').fill('gen')
+
+    const projectList = page.getByTestId('project-tag-list')
+    await expect(projectList.getByText('No tags found.')).toBeVisible()
+
+    const experimentList = page.getByTestId('experiment-tag-list')
+    await expect(experimentList.getByRole('button', { name: 'Genotyping' })).toBeVisible()
+    await expect(experimentList.getByRole('button', { name: 'FACS' })).toHaveCount(0)
+  })
+
+  test('entries can be deleted', async ({ page }) => {
+    await boot(page, { noFail: '1' })
+    await page.getByRole('button', { name: /new entry/i }).click()
+    await page.getByLabel('Title').fill('Delete me')
+    await page.getByRole('button', { name: 'Create entry' }).click()
+
+    await page.getByRole('tab', { name: /details/i }).click()
+
+    page.once('dialog', (dialog) => dialog.accept())
+    await page.getByTestId('delete-entry').click()
+
+    await expect(page.getByRole('heading', { name: 'Delete me' })).toHaveCount(0)
+    await expect(page.getByRole('button', { name: /Delete me/ })).toHaveCount(0)
   })
 })

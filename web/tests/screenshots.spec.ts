@@ -15,6 +15,22 @@ test('generate feature screenshots', async ({ page }) => {
 
   await page.addInitScript(() => {
     window.localStorage.clear()
+    const fixed = new Date('2026-01-02T10:00:00.000Z')
+    const OriginalDate = Date
+    // @ts-expect-error override global Date for stable screenshots
+    window.Date = class extends OriginalDate {
+      constructor(...args) {
+        if (args.length === 0) {
+          super(fixed.getTime())
+        } else {
+          // @ts-expect-error spread args into Date constructor
+          super(...args)
+        }
+      }
+      static now() {
+        return fixed.getTime()
+      }
+    }
     const now = new Date()
     const dayKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
     window.localStorage.setItem(`labnote.dayPrompt.${dayKey}`, 'done')
@@ -30,6 +46,14 @@ test('generate feature screenshots', async ({ page }) => {
 
   await page.setViewportSize({ width: 1440, height: 900 })
   await page.goto('/')
+  await page.addStyleTag({
+    content: `
+      *, *::before, *::after {
+        transition: none !important;
+        animation: none !important;
+      }
+    `,
+  })
   const startModal = page.locator('.start-day-modal')
   try {
     await startModal.waitFor({ state: 'visible', timeout: 2000 })
