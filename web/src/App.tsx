@@ -148,7 +148,8 @@ function buildTemplate(templateId: EntryTemplateId, entryId: string, nowIso: str
     {
       id: contextBodyId,
       type: 'paragraph',
-      text: 'What question are you answering today? Include model, conditions, and expected outcome.',
+      text: '',
+      guide: 'What question are you answering today? Include model, conditions, and expected outcome.',
       updatedAt: nowIso,
       updatedBy: 'me',
     },
@@ -157,9 +158,9 @@ function buildTemplate(templateId: EntryTemplateId, entryId: string, nowIso: str
       id: setupChecklistId,
       type: 'checklist',
       items: [
-        { id: newId('ci-'), text: 'Sample IDs and groups confirmed', done: false },
-        { id: newId('ci-'), text: 'Controls + blanks prepared', done: false },
-        { id: newId('ci-'), text: 'Reagents + lot IDs logged', done: false },
+        { id: newId('ci-'), text: '', guide: 'Sample IDs and groups confirmed', done: false },
+        { id: newId('ci-'), text: '', guide: 'Controls + blanks prepared', done: false },
+        { id: newId('ci-'), text: '', guide: 'Reagents + lot IDs logged', done: false },
       ],
       updatedAt: nowIso,
       updatedBy: 'me',
@@ -168,7 +169,8 @@ function buildTemplate(templateId: EntryTemplateId, entryId: string, nowIso: str
     {
       id: procedureBodyId,
       type: 'paragraph',
-      text: 'Step-by-step protocol. Note timing windows and any deviations from SOP.',
+      text: '',
+      guide: 'Step-by-step protocol. Note timing windows and any deviations from SOP.',
       updatedAt: nowIso,
       updatedBy: 'me',
     },
@@ -176,7 +178,8 @@ function buildTemplate(templateId: EntryTemplateId, entryId: string, nowIso: str
     {
       id: observationsBodyId,
       type: 'paragraph',
-      text: 'Record time-stamped observations, anomalies, and instrument readouts.',
+      text: '',
+      guide: 'Record time-stamped observations, anomalies, and instrument readouts.',
       updatedAt: nowIso,
       updatedBy: 'me',
     },
@@ -184,7 +187,8 @@ function buildTemplate(templateId: EntryTemplateId, entryId: string, nowIso: str
     {
       id: nextStepsBodyId,
       type: 'paragraph',
-      text: 'What happens next? Add follow-ups, analysis tasks, or handoff notes.',
+      text: '',
+      guide: 'What happens next? Add follow-ups, analysis tasks, or handoff notes.',
       updatedAt: nowIso,
       updatedBy: 'me',
     },
@@ -236,6 +240,37 @@ function safeFileName(name: string): string {
   const cleaned = trimmed.replace(/[\\/:*?"<>|]+/g, '_').replace(/\s+/g, ' ').trim()
   const normalized = cleaned.replace(/[^a-zA-Z0-9 ._()-]+/g, '_').replace(/[ ]+/g, '_')
   return normalized.replace(/^_+|_+$/g, '') || 'export'
+}
+
+const isLikelyUrl = (value: string) => /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(value)
+const isWindowsDriveRoot = (value: string) => /^[a-zA-Z]:[\\/]*$/.test(value)
+
+const normalizeSyncRoot = (value: string) => {
+  const trimmed = value.trim()
+  if (!trimmed) return ''
+  if (isWindowsDriveRoot(trimmed)) {
+    return `${trimmed[0]}:\\`
+  }
+  return trimmed.replace(/[\\/]+$/, '')
+}
+
+const isAbsolutePath = (value: string) =>
+  isLikelyUrl(value) ||
+  /^[a-zA-Z]:[\\/]/.test(value) ||
+  value.startsWith('\\\\') ||
+  value.startsWith('/') ||
+  value.startsWith('~/')
+
+const resolveRelativePath = (root: string, value: string) => {
+  const cleaned = value.trim()
+  if (!cleaned) return cleaned
+  if (!root) return cleaned
+  if (isAbsolutePath(cleaned)) return cleaned
+
+  const separator = isLikelyUrl(root) ? '/' : root.startsWith('\\\\') || root.includes('\\') || /^[a-zA-Z]:/.test(root) ? '\\' : '/'
+  const rootBase = isWindowsDriveRoot(root) ? root.replace(/[\\/]*$/, '') : root.replace(/[\\/]+$/, '')
+  const leaf = cleaned.replace(/^[\\/]+/, '')
+  return `${rootBase}${separator}${leaf}`
 }
 
 function downloadBlob(filename: string, blob: Blob) {
@@ -361,7 +396,12 @@ function blocksToMarkdown(blocks: Block[], attachmentsById: Record<string, Attac
         parts.push('---')
         break
       case 'checklist':
-        parts.push(block.items.map((i) => `- [${i.done ? 'x' : ' '}] ${escapeMd(i.text)}`).join('\n'))
+        parts.push(
+          block.items
+            .filter((i) => i.text.trim() || !i.guide)
+            .map((i) => `- [${i.done ? 'x' : ' '}] ${escapeMd(i.text)}`)
+            .join('\n')
+        )
         break
       case 'table':
         parts.push(mdTable(block.data, block.headerRow !== false))
@@ -439,7 +479,10 @@ function blocksToHtml(blocks: Block[], attachmentsById: Record<string, Attachmen
         case 'divider':
           return `<hr />`
         case 'checklist':
-          return `<ul class="checklist">${block.items.map((i) => `<li><span class="cb">${i.done ? '☑' : '☐'}</span> ${esc(i.text)}</li>`).join('')}</ul>`
+          return `<ul class="checklist">${block.items
+            .filter((i) => i.text.trim() || !i.guide)
+            .map((i) => `<li><span class="cb">${i.done ? '☑' : '☐'}</span> ${esc(i.text)}</li>`)
+            .join('')}</ul>`
         case 'table':
           return `<div class="table-wrap">${renderTable(block.data, block.headerRow !== false)}${block.caption ? `<div class="caption">${esc(block.caption)}</div>` : ''}</div>`
         case 'image': {
@@ -1089,6 +1132,7 @@ function App() {
     async (entryId: string, files: File[]) => {
       if (!files.length) return []
 
+      const syncRoot = normalizeSyncRoot(masterSyncPath)
       const saved: Attachment[] = []
 
       for (const file of files) {
@@ -1109,13 +1153,15 @@ function App() {
           setFsEnabled(true)
         }
 
+        const storagePath = syncRoot ? resolveRelativePath(syncRoot, file.name) : cachePath
+
         saved.push({
           id,
           entryId,
           type,
           filename: file.name,
           filesize: `${Math.max(1, Math.round(file.size / 1024))} KB`,
-          storagePath: cachePath,
+          storagePath,
           cachedPath: cachePath,
           pinnedOffline: type === 'image',
           thumbnail: type === 'image' ? URL.createObjectURL(file) : undefined,
@@ -1140,7 +1186,7 @@ function App() {
 
       return saved
     },
-    []
+    [masterSyncPath]
   )
 
   const addFileDestination = useCallback((entryId: string, val: { path: string; label?: string }): Attachment => {
@@ -1149,6 +1195,8 @@ function App() {
       throw new Error('Path is required.')
     }
 
+    const syncRoot = normalizeSyncRoot(masterSyncPath)
+    const storagePath = resolveRelativePath(syncRoot, rawPath)
     const filename = rawPath.split(/[\\/]/).filter(Boolean).pop() ?? val.label ?? 'file'
     const id = `att-${crypto.randomUUID?.() ?? Math.random().toString(36).slice(2)}`
     const att: Attachment = {
@@ -1157,7 +1205,7 @@ function App() {
       type: 'raw',
       filename: filename.trim() || 'file',
       filesize: '—',
-      storagePath: rawPath,
+      storagePath,
     }
 
     setAttachmentsStore((prev) => [att, ...prev])
@@ -1176,7 +1224,7 @@ function App() {
     })
 
     return att
-  }, [])
+  }, [masterSyncPath])
 
   // Hydrate cached attachment thumbnails/URLs from IndexedDB and fs handles
 	  useEffect(() => {
@@ -2558,6 +2606,7 @@ function EditorPane({
                 onAddAttachments={onAddAttachments}
                 onAddFileDestination={onAddFileDestination}
                 onShowTags={() => setActiveTab('details')}
+                syncRoot={normalizeSyncRoot(masterSyncPath)}
               />
             </div>
           )}
@@ -2716,9 +2765,10 @@ function EditorPane({
           <div className="panel-card">
             <div className="section-title">Master sync folder</div>
             <label className="field">
-              <span className="muted tiny">Default for all entries (can be local or cloud)</span>
+              <span className="muted tiny">Root for file destinations + attachment references (local or cloud)</span>
               <div className="field-row">
                 <input
+                  data-testid="master-sync-input-files"
                   value={masterSyncPath}
                   onChange={(e) => onUpdateMasterSyncPath(e.target.value)}
                   placeholder="e.g. D:\\lab-notes\\sync or https://drive.company.com/lab"
@@ -2730,7 +2780,7 @@ function EditorPane({
                 )}
               </div>
             </label>
-            <div className="muted tiny">All entries sync to this folder.</div>
+            <div className="muted tiny">New file destinations resolve under this root.</div>
           </div>
 
           <div className="panel-card">
@@ -2848,6 +2898,13 @@ const renderElement = (props: RenderElementProps) => {
   const align = isTextAlignValue(element.align) ? element.align : undefined
   const style: React.CSSProperties | undefined = align ? { textAlign: align } : undefined
   const locked = element.locked === true
+  const guideText = typeof element.guide === 'string' ? element.guide : ''
+  const showGuide = guideText && Node.string(element) === ''
+  const guideEl = showGuide ? (
+    <span className="slate-placeholder" contentEditable={false}>
+      {guideText}
+    </span>
+  ) : null
   switch (element.type) {
     case 'heading-two':
       return locked ? (
@@ -2872,8 +2929,16 @@ const renderElement = (props: RenderElementProps) => {
     case 'quote':
       return (
         <blockquote className="quote" {...attributes} style={style}>
+          {guideEl}
           {children}
         </blockquote>
+      )
+    case 'paragraph':
+      return (
+        <p className="block-paragraph" {...attributes} style={style}>
+          {guideEl}
+          {children}
+        </p>
       )
     case 'checklist':
       return <ChecklistElement {...props} />
@@ -3063,9 +3128,11 @@ function insertTableBlock(editor: ReactEditor, data: string[][]) {
 function FileDestinationModal({
   onClose,
   onSubmit,
+  syncRoot,
 }: {
   onClose: () => void
   onSubmit: (val: { path: string; label?: string }) => void
+  syncRoot?: string
 }) {
   const [label, setLabel] = useState('')
   const [path, setPath] = useState('')
@@ -3105,6 +3172,7 @@ function FileDestinationModal({
             <span className="muted tiny">Path</span>
             <input
               ref={pathRef}
+              data-testid="file-destination-path"
               value={path}
               onChange={(e) => {
                 setError(null)
@@ -3123,6 +3191,11 @@ function FileDestinationModal({
               }}
             />
             {error && <div className="field-error tiny">{error}</div>}
+            {syncRoot && (
+              <div className="muted tiny" style={{ marginTop: 6 }}>
+                Relative paths save under: {syncRoot}
+              </div>
+            )}
           </label>
         </div>
 
@@ -3154,12 +3227,14 @@ function EditorInsertBar({
   onAddAttachments,
   onAddFileDestination,
   onShowTags,
+  syncRoot,
 }: {
   editor: ReactEditor
   entryId: string
   onAddAttachments: (entryId: string, files: File[]) => Promise<Attachment[]>
   onAddFileDestination: (entryId: string, val: { path: string; label?: string }) => Attachment
   onShowTags?: () => void
+  syncRoot: string
 }) {
   const imgRef = useRef<HTMLInputElement | null>(null)
   const fileRef = useRef<HTMLInputElement | null>(null)
@@ -3272,6 +3347,7 @@ function EditorInsertBar({
             insertAttachmentMetaBlocks(editor, [block])
             setDestOpen(false)
           }}
+          syncRoot={syncRoot}
         />
       )}
     </>
@@ -3317,6 +3393,8 @@ function ChecklistElement({ element, attributes, children }: RenderElementProps)
 function CheckItemElement({ element, attributes, children }: RenderElementProps) {
   const editor = useSlateStatic()
   const checked = element.done === true
+  const guideText = typeof element.guide === 'string' ? element.guide : ''
+  const showGuide = guideText && Node.string(element) === ''
 
   return (
     <div className="check-item" data-done={checked ? 'true' : 'false'} {...attributes}>
@@ -3331,7 +3409,14 @@ function CheckItemElement({ element, attributes, children }: RenderElementProps)
         onMouseDown={(e) => e.preventDefault()}
         contentEditable={false}
       />
-      <span>{children}</span>
+      <span className="check-item-text">
+        {showGuide && (
+          <span className="slate-placeholder" contentEditable={false}>
+            {guideText}
+          </span>
+        )}
+        {children}
+      </span>
     </div>
   )
 }
@@ -3553,6 +3638,7 @@ const blocksToSlate = (blocks: Block[]): Descendant[] => {
           type: 'paragraph',
           blockId: block.id,
           align: block.align,
+          guide: block.guide,
           children: slateTextChildrenFromRuns(block.runs, block.text),
         }
       case 'quote':
@@ -3560,6 +3646,7 @@ const blocksToSlate = (blocks: Block[]): Descendant[] => {
           type: 'quote',
           blockId: block.id,
           align: block.align,
+          guide: block.guide,
           children: slateTextChildrenFromRuns(block.runs, block.text),
         }
       case 'checklist':
@@ -3570,6 +3657,7 @@ const blocksToSlate = (blocks: Block[]): Descendant[] => {
             type: 'check-item',
             itemId: item.id,
             done: item.done,
+            guide: item.guide,
             children: slateTextChildrenFromRuns(item.runs, item.text),
           })),
         }
@@ -3628,6 +3716,7 @@ const slateToBlocks = (nodes: Descendant[]): Block[] => {
           align,
           text: Node.string(node),
           runs: runsFromSlateChildren(node.children as unknown as Descendant[]),
+          guide: typeof node.guide === 'string' ? node.guide : undefined,
         }
       case 'checklist':
         return {
@@ -3641,6 +3730,7 @@ const slateToBlocks = (nodes: Descendant[]): Block[] => {
               text: Node.string(child),
               done: child.done === true,
               runs: runsFromSlateChildren(child.children as unknown as Descendant[]),
+              guide: typeof child.guide === 'string' ? child.guide : undefined,
             })),
         }
       case 'divider':
@@ -3669,6 +3759,7 @@ const slateToBlocks = (nodes: Descendant[]): Block[] => {
           align,
           text: Node.string(node),
           runs: runsFromSlateChildren(node.children as unknown as Descendant[]),
+          guide: typeof node.guide === 'string' ? node.guide : undefined,
         }
     }
   })
@@ -3683,10 +3774,11 @@ function BlockRenderer({ block, attachments, attachmentUrls, onUpdateBlock }: Bl
       return <h2 className="block-heading h2" style={style}>{renderTextRuns(block.runs, block.text)}</h2>
     case 'paragraph':
       return <p className="block-paragraph" style={style}>{renderTextRuns(block.runs, block.text)}</p>
-    case 'checklist':
+    case 'checklist': {
+      const visibleItems = block.items.filter((item) => item.text.trim() || !item.guide)
       return (
         <div className="checklist">
-          {block.items.map((item) => (
+          {visibleItems.map((item) => (
             <ChecklistRow
               key={item.id}
               item={item}
@@ -3703,6 +3795,7 @@ function BlockRenderer({ block, attachments, attachmentUrls, onUpdateBlock }: Bl
           ))}
         </div>
       )
+    }
     case 'table': {
       const headerRow = block.headerRow !== false
       return (
@@ -4588,7 +4681,7 @@ function SettingsModal({
           <div className="settings-row">
             <div>
               <div className="title-sm">Master sync folder</div>
-              <div className="muted tiny">Default location for all entries (local folder or cloud URL).</div>
+              <div className="muted tiny">Root for file destinations + attachment references (local folder or cloud URL).</div>
             </div>
           </div>
 
@@ -4597,6 +4690,7 @@ function SettingsModal({
               <span className="muted tiny">Folder or URL</span>
               <div className="field-row">
                 <input
+                  data-testid="master-sync-input-settings"
                   value={masterSyncPath}
                   onChange={(e) => onMasterSyncPathChange(e.target.value)}
                   placeholder="e.g. D:\\lab-notes\\sync or https://drive.company.com/lab"

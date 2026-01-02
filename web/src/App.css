@@ -794,6 +794,18 @@
   margin: 0;
   line-height: 1.65;
   color: var(--text);
+  position: relative;
+}
+
+.slate-placeholder {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  color: var(--text-3);
+  pointer-events: none;
+  white-space: pre-wrap;
+  opacity: 0.7;
 }
 
 .checklist {
@@ -836,6 +848,10 @@
   align-items: center;
   gap: var(--s-3);
   padding: var(--s-2) 0;
+}
+
+.check-item-text {
+  position: relative;
 }
 
 .table-wrap {
@@ -950,6 +966,7 @@
   background: var(--accent-weak);
   color: var(--text);
   border-radius: var(--radius-md);
+  position: relative;
 }
 
 .readonly-block {

@@ -53,6 +53,46 @@ test.describe('Lab note taking app', () => {
     await expect(page.getByRole('heading', { name: 'Setup' })).toBeVisible()
   })
 
+  test('guided template prompts clear on input', async ({ page }) => {
+    await boot(page, { noFail: '1' })
+    await page.getByRole('button', { name: /new entry/i }).click()
+    await page.getByLabel('Title').fill('Guided placeholder note')
+    await page.getByRole('button', { name: 'Create entry' }).click()
+
+    const guideText =
+      'What question are you answering today? Include model, conditions, and expected outcome.'
+    const guideLocator = page.getByText(guideText)
+    await expect(guideLocator).toBeVisible()
+
+    const editor = page.getByTestId('slate-editor')
+    await editor.locator('p').first().click()
+    await page.keyboard.type('Testing placeholder clearing')
+
+    await expect(guideLocator).toHaveCount(0)
+  })
+
+  test('master sync root prefixes file destinations', async ({ page }) => {
+    await boot(page, { noFail: '1' })
+    await page.getByRole('button', { name: /new entry/i }).click()
+    await page.getByLabel('Title').fill('Sync root note')
+    await page.getByRole('button', { name: 'Create entry' }).click()
+
+    await page.getByRole('tab', { name: /Files/ }).click()
+    await page
+      .getByTestId('master-sync-input-files')
+      .fill('C:\\OneDrive - Trinity College Dublin\\Lab notebook')
+
+    await page.getByRole('tab', { name: /Note/ }).click()
+    await page.getByRole('button', { name: '+ File destination' }).click()
+    await page.getByTestId('file-destination-path').fill('run1.csv')
+    await page.getByRole('button', { name: 'Add' }).click()
+
+    await page.getByRole('tab', { name: /Files/ }).click()
+    await expect(
+      page.getByText('C:\\OneDrive - Trinity College Dublin\\Lab notebook\\run1.csv')
+    ).toBeVisible()
+  })
+
   test('view-mode checklist toggle syncs', async ({ page }) => {
     await boot(page, { noFail: '1' })
 
