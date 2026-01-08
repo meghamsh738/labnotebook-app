@@ -1,5 +1,4 @@
 import { test, expect, type Page } from '@playwright/test'
-import fs from 'fs'
 
 async function boot(
   page: Page,
@@ -17,131 +16,94 @@ async function boot(
       ;(window as unknown as { showDirectoryPicker?: unknown }).showDirectoryPicker = undefined
     }
   }, opts ?? { noFail: '1' })
+  await page.emulateMedia({ reducedMotion: 'reduce' })
   await page.goto('/')
-  const startModal = page.locator('.start-day-modal')
-  try {
-    await startModal.waitFor({ state: 'visible', timeout: 2000 })
-    await startModal.getByRole('button', { name: /later|skip/i }).first().click()
-  } catch {
-    // modal not shown yet
+}
+
+async function selectFirstEntry(page: Page) {
+  const seeded = page.locator('[data-testid="entry-tree-item-entry-1"]')
+  if (await seeded.count()) {
+    await seeded.first().click()
+    return
   }
+  await page.locator('[data-testid^="entry-tree-item-"]').first().click()
 }
 
 test.describe('Lab note taking app', () => {
   test('loads baseline UI', async ({ page }) => {
     await boot(page, { noFail: '1' })
     await expect(page.getByRole('heading', { name: /neuroimmunology lab/i })).toBeVisible()
-    await expect(page.getByRole('button', { name: /new entry/i })).toBeVisible()
-    await expect(page.getByRole('button', { name: /quick capture/i })).toBeVisible()
+    await expect(page.getByTestId('sidebar-new-entry')).toBeVisible()
+    await expect(page.getByTestId('sidebar-quick-capture')).toBeVisible()
     await expect(page.getByPlaceholder('Search notes, samples, files')).toBeVisible()
-    await expect(page.getByTestId('sidebar-toggle')).toBeVisible()
-    await expect(page.getByTestId('calendar')).toBeVisible()
+    await expect(page.getByTestId('today-entry-card')).toBeVisible()
   })
 
-  test('creates a new entry from the guided template', async ({ page }) => {
+  test('creates a new entry from template and pins regions', async ({ page }) => {
     await boot(page, { noFail: '1' })
-    await page.getByRole('button', { name: /new entry/i }).click()
+    await page.getByTestId('sidebar-new-entry').click()
     await expect(page.getByRole('dialog')).toBeVisible()
 
-    await page.getByLabel('Title').fill('E2E guided note')
+    await page.getByLabel('Title').fill('E2E template note')
     await page.getByRole('button', { name: 'Create entry' }).click()
 
-    await expect(page.getByRole('heading', { name: 'E2E guided note' })).toBeVisible()
-    await expect(page.getByRole('button', { name: 'Save' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'E2E template note' })).toBeVisible()
+    await expect(page.getByTestId('save-note-btn')).toBeVisible()
 
-    await page.getByRole('button', { name: 'Save' }).click()
-    await expect(page.getByRole('heading', { name: 'Context' })).toBeVisible()
-    await expect(page.getByRole('heading', { name: 'Setup' })).toBeVisible()
+    await page.getByTestId('save-note-btn').click()
+    await expect(page.getByTestId('edit-note-btn')).toBeVisible()
+
+    await page.getByTestId('editor-tab-details').click()
+    const pinned = page.getByTestId('pinned-regions-list')
+    await expect(pinned.getByText('Aim', { exact: true })).toBeVisible()
+    await expect(pinned.getByText('Experiment', { exact: true })).toBeVisible()
+    await expect(pinned.getByText('Results', { exact: true })).toBeVisible()
   })
 
-  test('guided template prompts clear on input', async ({ page }) => {
+  test('workspace tabs support split view', async ({ page }) => {
     await boot(page, { noFail: '1' })
-    await page.getByRole('button', { name: /new entry/i }).click()
-    await page.getByLabel('Title').fill('Guided placeholder note')
-    await page.getByRole('button', { name: 'Create entry' }).click()
+    await selectFirstEntry(page)
 
-    const guideText =
-      'What question are you answering today? Include model, conditions, and expected outcome.'
-    const guideLocator = page.getByText(guideText)
-    await expect(guideLocator).toBeVisible()
+    const entryItems = page.locator('[data-testid^="entry-tree-item-"]')
+    const entryCount = await entryItems.count()
+    expect(entryCount).toBeGreaterThan(1)
+    await entryItems.nth(1).click()
 
-    const editor = page.getByTestId('slate-editor')
-    await editor.locator('p').first().click()
-    await page.keyboard.type('Testing placeholder clearing')
+    const tabs = page.getByTestId('workspace-tabs')
+    await expect(tabs).toBeVisible()
+    await expect(tabs.locator('[data-testid^="workspace-tab-"]')).toHaveCount(2)
 
-    await expect(guideLocator).toHaveCount(0)
-  })
-
-  test('master sync root prefixes file destinations', async ({ page }) => {
-    await boot(page, { noFail: '1' })
-    await page.getByRole('button', { name: /new entry/i }).click()
-    await page.getByLabel('Title').fill('Sync root note')
-    await page.getByRole('button', { name: 'Create entry' }).click()
-
-    await page.getByRole('tab', { name: /Files/ }).click()
-    await page
-      .getByTestId('master-sync-input-files')
-      .fill('C:\\OneDrive - Trinity College Dublin\\Lab notebook')
-
-    await page.getByRole('tab', { name: /Note/ }).click()
-    await page.getByRole('button', { name: '+ File destination' }).click()
-    await page.getByTestId('file-destination-path').fill('run1.csv')
-    await page.getByRole('button', { name: 'Add' }).click()
-
-    await page.getByRole('tab', { name: /Files/ }).click()
-    await expect(
-      page.getByText('C:\\OneDrive - Trinity College Dublin\\Lab notebook\\run1.csv')
-    ).toBeVisible()
-  })
-
-  test('auto-save downloads when disk cache is unavailable', async ({ page }) => {
-    await boot(page, { noFail: '1', stubPicker: true })
-    await page.getByRole('button', { name: /new entry/i }).click()
-    await page.getByLabel('Title').fill('Auto-save download note')
-    await page.getByRole('button', { name: 'Create entry' }).click()
-
-    await expect(page.getByTestId('entry-save')).toBeVisible()
-    const [download] = await Promise.all([
-      page.waitForEvent('download'),
-      page.getByTestId('entry-save').click(),
-    ])
-    const path = await download.path()
-    const buffer = fs.readFileSync(path as string)
-    expect(buffer.toString('utf8')).toContain('Auto-save download note')
+    await page.getByTestId('split-toggle').click()
+    const splitSelect = page.getByTestId('split-secondary-select')
+    await expect(splitSelect).toBeVisible()
+    await expect(splitSelect).not.toHaveValue('')
+    await expect(page.getByTestId('split-secondary-panel')).toBeVisible()
   })
 
   test('view-mode checklist toggle syncs', async ({ page }) => {
     await boot(page, { noFail: '1' })
+    await selectFirstEntry(page)
 
-    const firstChecklist = page.locator('.check-row').first()
+    const firstChecklist = page.getByRole('checkbox').first()
     await expect(firstChecklist).toBeVisible()
-    await firstChecklist.locator('input[type="checkbox"]').click()
+    await firstChecklist.click()
 
-    const statusChip = page.locator('.breadcrumbs .status-chip')
+    const statusChip = page.getByTestId('sync-status-chip')
     await expect(statusChip).toContainText('Synced')
-  })
-
-  test('quick capture opens in edit mode', async ({ page }) => {
-    await boot(page, { noFail: '1' })
-
-    await page.getByTestId('quick-capture').click()
-    await expect(page.getByRole('button', { name: 'Save' })).toBeVisible()
-
-    const editor = page.getByTestId('slate-editor')
-    await expect(editor).toHaveAttribute('contenteditable', 'true')
   })
 
   test('sync failures can be retried', async ({ page }) => {
     await boot(page, { noFail: '0', failNext: true })
+    await selectFirstEntry(page)
 
-    const firstChecklist = page.locator('.check-row').first()
-    await firstChecklist.locator('input[type="checkbox"]').click()
+    const firstChecklist = page.getByRole('checkbox').first()
+    await firstChecklist.click()
 
-    const statusChip = page.locator('.breadcrumbs .status-chip')
+    const statusChip = page.getByTestId('sync-status-chip')
     await expect(statusChip).toContainText(/failed/i)
 
-    await expect(page.getByTestId('sync-action')).toHaveText(/retry failed/i)
-    await page.getByTestId('sync-action').click()
+    await page.getByTestId('editor-tab-details').click()
+    await page.getByTestId('sync-now-btn').click()
     await expect(statusChip).toContainText('Synced')
   })
 
@@ -153,9 +115,10 @@ test.describe('Lab note taking app', () => {
     })
 
     await boot(page, { noFail: '1', stubPicker: true })
+    await selectFirstEntry(page)
     const [download] = await Promise.all([
       page.waitForEvent('download'),
-      page.getByTestId('export-md').click(),
+      page.getByTestId('export-md-btn').click(),
     ])
     expect(download.suggestedFilename().endsWith('.md')).toBeTruthy()
     await expect.poll(() => dialogText).toContain('manifest')
@@ -163,9 +126,10 @@ test.describe('Lab note taking app', () => {
 
   test('export pdf opens printable page', async ({ page }) => {
     await boot(page, { noFail: '1' })
+    await selectFirstEntry(page)
     const [popup] = await Promise.all([
       page.waitForEvent('popup'),
-      page.getByTestId('export-pdf').click(),
+      page.getByTestId('export-pdf-btn').click(),
     ])
     await popup.waitForLoadState('domcontentloaded')
     await expect(popup.locator('text=Print / Save to PDF')).toBeVisible()
@@ -177,61 +141,5 @@ test.describe('Lab note taking app', () => {
     const dialog = page.getByRole('dialog')
     await expect(dialog).toBeVisible()
     await expect(dialog.getByText('Disk cache', { exact: true })).toBeVisible()
-  })
-
-  test('sidebar can be collapsed and expanded', async ({ page }) => {
-    await boot(page, { noFail: '1' })
-    const toggle = page.getByTestId('sidebar-toggle')
-    await toggle.click()
-    await expect(page.locator('.sidebar')).toHaveClass(/collapsed/)
-    await toggle.click()
-    await expect(page.locator('.sidebar')).not.toHaveClass(/collapsed/)
-  })
-
-  test('calendar filters entries by date', async ({ page }) => {
-    await boot(page, { noFail: '1' })
-    const today = new Date()
-    const todayIso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(
-      today.getDate()
-    ).padStart(2, '0')}`
-    const yesterday = new Date(today)
-    yesterday.setDate(today.getDate() - 1)
-    const yesterdayIso = `${yesterday.getFullYear()}-${String(yesterday.getMonth() + 1).padStart(2, '0')}-${String(
-      yesterday.getDate()
-    ).padStart(2, '0')}`
-
-    await page.getByTestId(`calendar-day-${yesterdayIso}`).click()
-    await expect(page.getByText('No entries match these filters.')).toBeVisible()
-    await page.getByTestId(`calendar-day-${todayIso}`).click()
-    await expect(page.getByText('No entries match these filters.')).toBeHidden()
-  })
-
-  test('tag search filters project and experiment tags', async ({ page }) => {
-    await boot(page, { noFail: '1' })
-    await page.getByRole('button', { name: 'More' }).click()
-
-    await page.getByTestId('tag-search').fill('gen')
-
-    const projectList = page.getByTestId('project-tag-list')
-    await expect(projectList.getByText('No tags found.')).toBeVisible()
-
-    const experimentList = page.getByTestId('experiment-tag-list')
-    await expect(experimentList.getByRole('button', { name: 'Genotyping' })).toBeVisible()
-    await expect(experimentList.getByRole('button', { name: 'FACS' })).toHaveCount(0)
-  })
-
-  test('entries can be deleted', async ({ page }) => {
-    await boot(page, { noFail: '1' })
-    await page.getByRole('button', { name: /new entry/i }).click()
-    await page.getByLabel('Title').fill('Delete me')
-    await page.getByRole('button', { name: 'Create entry' }).click()
-
-    await page.getByRole('tab', { name: /details/i }).click()
-
-    page.once('dialog', (dialog) => dialog.accept())
-    await page.getByTestId('delete-entry').click()
-
-    await expect(page.getByRole('heading', { name: 'Delete me' })).toHaveCount(0)
-    await expect(page.getByRole('button', { name: /Delete me/ })).toHaveCount(0)
   })
 })

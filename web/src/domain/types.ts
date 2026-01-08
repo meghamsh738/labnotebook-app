@@ -87,14 +87,12 @@ export interface ParagraphBlock extends BlockBase {
   type: 'paragraph'
   text: string
   runs?: TextRun[]
-  guide?: string
 }
 
 export interface TableBlock extends BlockBase {
   type: 'table'
   data: string[][]
   caption?: string
-  headerRow?: boolean
 }
 
 export interface ImageBlock extends BlockBase {
@@ -115,7 +113,6 @@ export interface ChecklistItem {
   done: boolean
   timerMinutes?: number
   runs?: TextRun[]
-  guide?: string
 }
 
 export interface ChecklistBlock extends BlockBase {
@@ -127,7 +124,6 @@ export interface QuoteBlock extends BlockBase {
   type: 'quote'
   text: string
   runs?: TextRun[]
-  guide?: string
 }
 
 export interface DividerBlock extends BlockBase {
@@ -177,15 +173,11 @@ export interface Entry {
   authorId: string
   title: string
   dateBucket: string
-  isDaily?: boolean
   content: Block[]
   tags: string[]
-  projectTags?: string[]
-  experimentTags?: string[]
   searchTerms: string[]
   linkedFiles: string[]
   pinnedRegions: PinnedRegion[]
-  syncPath?: string
 }
 
 export interface SearchIndexItem {

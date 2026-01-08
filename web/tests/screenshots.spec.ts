@@ -15,25 +15,6 @@ test('generate feature screenshots', async ({ page }) => {
 
   await page.addInitScript(() => {
     window.localStorage.clear()
-    const fixed = new Date('2026-01-02T10:00:00.000Z')
-    const OriginalDate = Date
-    // @ts-expect-error override global Date for stable screenshots
-    window.Date = class extends OriginalDate {
-      constructor(...args) {
-        if (args.length === 0) {
-          super(fixed.getTime())
-        } else {
-          // @ts-expect-error spread args into Date constructor
-          super(...args)
-        }
-      }
-      static now() {
-        return fixed.getTime()
-      }
-    }
-    const now = new Date()
-    const dayKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
-    window.localStorage.setItem(`labnote.dayPrompt.${dayKey}`, 'done')
     window.localStorage.setItem('labnote.mockSync.noFail', '1')
     ;(window as unknown as { showDirectoryPicker?: unknown }).showDirectoryPicker = undefined
     ;(window as unknown as { __labnoteMockSync?: { noFail?: boolean; failNext?: boolean } }).__labnoteMockSync = {
@@ -45,64 +26,64 @@ test('generate feature screenshots', async ({ page }) => {
   page.on('dialog', (d) => d.dismiss())
 
   await page.setViewportSize({ width: 1440, height: 900 })
+  await page.emulateMedia({ reducedMotion: 'reduce' })
   await page.goto('/')
-  await page.addStyleTag({
-    content: `
-      *, *::before, *::after {
-        transition: none !important;
-        animation: none !important;
-      }
-    `,
-  })
-  const startModal = page.locator('.start-day-modal')
-  try {
-    await startModal.waitFor({ state: 'visible', timeout: 2000 })
-    await startModal.getByRole('button', { name: /later|skip/i }).first().click()
-  } catch {
-    // modal not shown yet
+  const seeded = page.locator('[data-testid="entry-tree-item-entry-1"]')
+  if (await seeded.count()) {
+    await seeded.first().click()
+  } else {
+    await page.locator('[data-testid^="entry-tree-item-"]').first().click()
   }
-  await expect(page.getByRole('heading', { name: /guided template/i })).toBeVisible()
+  await expect(page.getByRole('heading', { name: /day 3/i })).toBeVisible()
   await page.screenshot({ path: path.join(outDir, '01-dashboard.png'), fullPage: true })
 
-  await page.getByRole('button', { name: /new entry/i }).click()
+  await page.getByTestId('sidebar-new-entry').click()
   await expect(page.getByRole('dialog')).toBeVisible()
   await page.screenshot({ path: path.join(outDir, '02-new-entry-modal.png') })
   await page.getByRole('button', { name: 'Cancel' }).click()
 
-  await page.getByRole('button', { name: /new entry/i }).click()
+  await page.getByTestId('sidebar-new-entry').click()
   await page.getByLabel('Title').fill('Template example')
   await page.getByRole('button', { name: 'Create entry' }).click()
-  await expect(page.getByRole('heading', { name: 'Template example' })).toBeVisible()
-  await page.getByRole('button', { name: 'Save' }).click()
+  await expect(page.getByTestId('save-note-btn')).toBeVisible()
+  await page.getByTestId('save-note-btn').click()
   await page.screenshot({ path: path.join(outDir, '03-template-entry.png'), fullPage: true })
 
-  await page.locator('.entry-item').first().click()
-  await page.getByRole('button', { name: 'Edit' }).click()
-  await expect(page.getByRole('button', { name: 'Save' })).toBeVisible()
+  if (await seeded.count()) {
+    await seeded.first().click()
+  } else {
+    await page.locator('[data-testid^="entry-tree-item-"]').first().click()
+  }
+  await page.getByTestId('edit-note-btn').click()
+  await expect(page.getByTestId('save-note-btn')).toBeVisible()
+  await page.getByRole('link', { name: /view|open/i }).first().scrollIntoViewIfNeeded()
   await page.screenshot({ path: path.join(outDir, '04-edit-mode.png'), fullPage: true })
 
   await page.getByRole('button', { name: 'Settings' }).click()
-  const settingsDialog = page.getByRole('dialog')
-  await expect(settingsDialog).toBeVisible()
+  await expect(page.getByRole('dialog')).toBeVisible()
   await page.screenshot({ path: path.join(outDir, '05-settings.png') })
-  await settingsDialog.getByRole('button', { name: 'Close' }).click()
+  await page.getByRole('button', { name: 'Close' }).click()
 
-  await page.getByRole('button', { name: 'Cancel' }).click()
-  await expect(page.getByRole('button', { name: 'Edit' })).toBeVisible()
-  const statusChip = page.locator('.breadcrumbs .status-chip')
+  await page.getByTestId('cancel-edit-btn').click()
+  await expect(page.getByTestId('edit-note-btn')).toBeVisible()
+  const statusChip = page.getByTestId('sync-status-chip')
   await expect(statusChip).toContainText('Synced')
   await page.context().setOffline(true)
-  await page.locator('.check-row input[type="checkbox"]').first().click()
+  await page.getByRole('checkbox').first().click()
   await expect(statusChip).toContainText(/failed/i)
-  await expect(page.getByTestId('sync-action')).toHaveText(/retry failed/i)
+
+  await page.getByTestId('editor-tab-details').click()
+  await expect(page.getByText('Sync queue')).toBeVisible()
+  await page.getByText('Sync queue').scrollIntoViewIfNeeded()
   await page.screenshot({ path: path.join(outDir, '06-sync-failed.png'), fullPage: true })
   await page.context().setOffline(false)
-  await page.getByTestId('sync-action').click()
+  await page.getByTestId('sync-now-btn').click()
   await expect(statusChip).toContainText('Synced')
+  await page.getByTestId('editor-tab-note').click()
 
   const [popup] = await Promise.all([
     page.waitForEvent('popup'),
-    page.getByTestId('export-pdf').click(),
+    page.getByTestId('export-pdf-btn').click(),
   ])
   await expect(popup.locator('text=Print / Save to PDF')).toBeVisible()
   await popup.setViewportSize({ width: 1100, height: 780 })
