@@ -19,6 +19,7 @@ import type {
   Experiment,
   Project,
   ChecklistItem,
+  ListItem,
   PinnedRegion,
   TextRun,
 } from './domain/types'
@@ -59,6 +60,136 @@ type ChangeQueueItem = {
   attempts: number
   lastTriedAt?: string
   lastError?: string
+}
+
+type LabnoteServerState = {
+  version: number
+  projects: Project[]
+  experiments: Experiment[]
+  entries: Record<string, Entry>
+  attachments: Attachment[]
+}
+
+const SERVER_STATE_URL = '/api/state'
+const SERVER_INFO_URL = '/api/info'
+
+type LabnoteServerInfo = {
+  ok?: boolean
+  dataDir?: string
+  uploadsDir?: string
+  uploadsUrl?: string
+  stateFile?: string
+  stateUpdatedAt?: string
+  serverTime?: string
+  hostname?: string
+}
+
+function getEntryTimestamp(entry?: Entry): number {
+  if (!entry) return 0
+  const raw = entry.lastEditedDatetime || entry.createdDatetime
+  const ts = Date.parse(raw)
+  return Number.isNaN(ts) ? 0 : ts
+}
+
+function mergeById<T extends { id: string }>(serverItems: T[], localItems: T[]): T[] {
+  const byId = new Map<string, T>()
+  for (const item of serverItems) byId.set(item.id, item)
+  for (const item of localItems) byId.set(item.id, item)
+  return Array.from(byId.values())
+}
+
+function mergeEntries(serverEntries: Record<string, Entry>, localEntries: Record<string, Entry>): Record<string, Entry> {
+  const merged: Record<string, Entry> = { ...serverEntries }
+  for (const [id, localEntry] of Object.entries(localEntries)) {
+    const serverEntry = serverEntries[id]
+    if (!serverEntry || getEntryTimestamp(localEntry) >= getEntryTimestamp(serverEntry)) {
+      merged[id] = localEntry
+    }
+  }
+  return Object.fromEntries(
+    Object.entries(merged).map(([id, entry]) => [id, applyLockedTemplateHeadings(entry)])
+  )
+}
+
+function toEntryRecord(value: unknown): Record<string, Entry> {
+  if (!value) return {}
+  if (Array.isArray(value)) {
+    const entries = value.filter((item): item is Entry => !!item && typeof item === 'object' && 'id' in item)
+    return Object.fromEntries(entries.map((entry) => [entry.id, entry]))
+  }
+  if (typeof value === 'object') return value as Record<string, Entry>
+  return {}
+}
+
+function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result ?? ''))
+    reader.onerror = () => reject(reader.error)
+    reader.readAsDataURL(file)
+  })
+}
+
+async function fetchServerState(): Promise<LabnoteServerState | null> {
+  try {
+    const res = await fetch(SERVER_STATE_URL, { headers: { Accept: 'application/json' } })
+    if (!res.ok) return null
+    const data = (await res.json()) as Partial<LabnoteServerState>
+    return {
+      version: typeof data.version === 'number' ? data.version : 1,
+      projects: Array.isArray(data.projects) ? data.projects : [],
+      experiments: Array.isArray(data.experiments) ? data.experiments : [],
+      entries: toEntryRecord(data.entries),
+      attachments: Array.isArray(data.attachments) ? data.attachments : [],
+    }
+  } catch {
+    return null
+  }
+}
+
+async function fetchServerInfo(): Promise<LabnoteServerInfo | null> {
+  try {
+    const res = await fetch(SERVER_INFO_URL, { headers: { Accept: 'application/json' } })
+    if (!res.ok) return null
+    const data = (await res.json()) as LabnoteServerInfo
+    if (!data || typeof data !== 'object') return null
+    return data
+  } catch {
+    return null
+  }
+}
+
+async function patchServerState(partial: Partial<LabnoteServerState>) {
+  try {
+    const res = await fetch(SERVER_STATE_URL, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(partial),
+    })
+    return res.ok
+  } catch {
+    // Ignore network failures; local storage remains the fallback.
+    return false
+  }
+}
+
+async function uploadImageToServer(file: File): Promise<{ url: string } | null> {
+  if (!file.type.startsWith('image/')) return null
+  try {
+    const dataUrl = await readFileAsDataUrl(file)
+    if (!dataUrl.startsWith('data:')) return null
+    const res = await fetch('/api/upload', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filename: file.name, type: file.type, dataUrl }),
+    })
+    if (!res.ok) return null
+    const data = (await res.json()) as { url?: string }
+    if (!data?.url) return null
+    return { url: data.url }
+  } catch {
+    return null
+  }
 }
 
 const LOCKED_TEMPLATE_SECTION_LABELS = new Set(['Summary', 'Protocol', 'Objective', 'Aim', 'Procedure', 'Experiment', 'Results'])
@@ -186,6 +317,11 @@ function blockToSearchText(block: Block): string {
       return block.data.flat().join(' ')
     case 'checklist':
       return block.items.map((i) => i.text).join(' ')
+    case 'list': {
+      const collect = (items: ListItem[]): string[] =>
+        items.flatMap((item) => [item.text, ...(item.children ? collect(item.children) : [])])
+      return collect(block.items).join(' ')
+    }
     case 'image':
       return block.caption ?? ''
     case 'file':
@@ -266,6 +402,19 @@ function blocksToMarkdown(blocks: Block[], attachmentsById: Record<string, Attac
     return [headerLine, sepLine, ...bodyLines].join('\n')
   }
 
+  const listLines = (items: ListItem[], ordered: boolean, depth = 0): string[] => {
+    const indent = '  '.repeat(depth)
+    const lines: string[] = []
+    items.forEach((item, idx) => {
+      const prefix = ordered ? `${idx + 1}.` : '-'
+      lines.push(`${indent}${prefix} ${escapeMd(item.text)}`)
+      if (item.children?.length) {
+        lines.push(...listLines(item.children, ordered, depth + 1))
+      }
+    })
+    return lines
+  }
+
   for (const block of blocks) {
     switch (block.type) {
       case 'heading': {
@@ -286,6 +435,10 @@ function blocksToMarkdown(blocks: Block[], attachmentsById: Record<string, Attac
       case 'checklist':
         parts.push(block.items.map((i) => `- [${i.done ? 'x' : ' '}] ${escapeMd(i.text)}`).join('\n'))
         break
+      case 'list': {
+        parts.push(listLines(block.items, block.ordered === true).join('\n'))
+        break
+      }
       case 'table':
         parts.push(mdTable(block.data))
         if (block.caption) parts.push(`*${escapeMd(block.caption)}*`)
@@ -330,20 +483,77 @@ function blocksToHtml(blocks: Block[], attachmentsById: Record<string, Attachmen
       .replace(/"/g, '&quot;')
       .replace(/'/g, '&#39;')
 
-  const renderTable = (data: string[][]) => {
+  const styleAttr = (block: Block) => {
+    const styles: string[] = []
+    if (block.align) styles.push(`text-align:${block.align}`)
+    if (typeof block.indent === 'number' && block.indent > 0) {
+      styles.push(`margin-left:${block.indent * INDENT_PX}px`)
+    }
+    return styles.length ? ` style="${styles.join(';')}"` : ''
+  }
+
+  const runsToHtml = (runs: TextRun[] | undefined, fallbackText: string) => {
+    if (!runs || runs.length === 0) return esc(fallbackText)
+    return runs
+      .map((run) => {
+        let node = esc(run.text)
+        if (run.underline) node = `<u>${node}</u>`
+        if (run.italic) node = `<em>${node}</em>`
+        if (run.bold) node = `<strong>${node}</strong>`
+        if (run.superscript) {
+          node = `<sup>${node}</sup>`
+        } else if (run.subscript) {
+          node = `<sub>${node}</sub>`
+        }
+        const styles: string[] = []
+        if (run.font) styles.push(`font-family:${FONT_STYLE_EXPORT_MAP[run.font]}`)
+        if (run.fontSize) styles.push(`font-size:${run.fontSize}px`)
+        if (run.color) styles.push(`color:${run.color}`)
+        if (run.highlight) {
+          styles.push(`background-color:${run.highlight}`)
+          styles.push('padding:0 2px')
+          styles.push('border-radius:2px')
+          styles.push('box-decoration-break:clone')
+        }
+        if (styles.length) {
+          return `<span style="${styles.join(';')}">${node}</span>`
+        }
+        return node
+      })
+      .join('')
+  }
+
+  const renderTable = (data: string[][], headerEnabled: boolean) => {
     if (!data.length) return ''
-    const header = data[0]
-    const body = data.slice(1)
-    return `
-      <table>
+    const header = headerEnabled ? data[0] : []
+    const body = headerEnabled ? data.slice(1) : data
+    const headHtml = headerEnabled
+      ? `
         <thead>
           <tr>${header.map((c) => `<th>${esc(c)}</th>`).join('')}</tr>
         </thead>
+      `
+      : ''
+    return `
+      <table>
+        ${headHtml}
         <tbody>
           ${body.map((row) => `<tr>${row.map((c) => `<td>${esc(c)}</td>`).join('')}</tr>`).join('')}
         </tbody>
       </table>
     `
+  }
+
+  const renderListItems = (items: ListItem[], ordered: boolean): string => {
+    const tag = ordered ? 'ol' : 'ul'
+    return `<${tag}>${items
+      .map((item) => {
+        const children = item.children?.length
+          ? renderListItems(item.children, ordered)
+          : ''
+        return `<li>${runsToHtml(item.runs, item.text)}${children}</li>`
+      })
+      .join('')}</${tag}>`
   }
 
   return blocks
@@ -352,18 +562,30 @@ function blocksToHtml(blocks: Block[], attachmentsById: Record<string, Attachmen
         case 'heading': {
           const level = block.level ?? 2
           const tag = level <= 1 ? 'h1' : level === 3 ? 'h3' : 'h2'
-          return `<${tag}>${esc(block.text)}</${tag}>`
+          return `<${tag}${styleAttr(block)}>${runsToHtml(block.runs, block.text)}</${tag}>`
         }
         case 'paragraph':
-          return `<p>${esc(block.text)}</p>`
+          return `<p${styleAttr(block)}>${runsToHtml(block.runs, block.text)}</p>`
         case 'quote':
-          return `<blockquote>${esc(block.text)}</blockquote>`
+          return `<blockquote${styleAttr(block)}>${runsToHtml(block.runs, block.text)}</blockquote>`
         case 'divider':
           return `<hr />`
         case 'checklist':
-          return `<ul class="checklist">${block.items.map((i) => `<li><span class="cb">${i.done ? '☑' : '☐'}</span> ${esc(i.text)}</li>`).join('')}</ul>`
-        case 'table':
-          return `<div class="table-wrap">${renderTable(block.data)}${block.caption ? `<div class="caption">${esc(block.caption)}</div>` : ''}</div>`
+          return `<ul class="checklist"${styleAttr(block)}>${block.items
+            .map((i) => `<li><span class="cb">${i.done ? '☑' : '☐'}</span> ${runsToHtml(i.runs, i.text)}</li>`)
+            .join('')}</ul>`
+        case 'list': {
+          const listHtml = renderListItems(block.items, block.ordered === true)
+          return block.indent
+            ? `<div${styleAttr(block)}>${listHtml}</div>`
+            : listHtml
+        }
+        case 'table': {
+          const tableClasses = ['table-wrap']
+          if (block.striped) tableClasses.push('table-striped')
+          if (block.compact) tableClasses.push('table-compact')
+          return `<div class="${tableClasses.join(' ')}"${styleAttr(block)}>${renderTable(block.data, block.header !== false)}${block.caption ? `<div class="caption">${esc(block.caption)}</div>` : ''}</div>`
+        }
         case 'image': {
           const att = attachmentsById[block.attachmentId]
           const src = attachmentUrls[block.attachmentId] ?? att?.thumbnail
@@ -395,6 +617,26 @@ function withChecklists(editor: ReactEditor) {
     const [node, path] = entry
 
     if (SlateElement.isElement(node)) {
+      if (node.type === 'list-item') {
+        const patch: Record<string, unknown> = {}
+        if (typeof node.itemId !== 'string') patch.itemId = newId('li-')
+        if (Object.keys(patch).length) {
+          Transforms.setNodes(editor, patch, { at: path })
+          return
+        }
+      }
+
+      if (node.type === 'bulleted-list' || node.type === 'numbered-list') {
+        if (node.children.length === 0) {
+          Transforms.insertNodes(
+            editor,
+            { type: 'list-item', itemId: newId('li-'), children: [{ text: '' }] },
+            { at: path.concat(0) }
+          )
+          return
+        }
+      }
+
       if (node.type === 'check-item') {
         const patch: Record<string, unknown> = {}
         if (typeof node.itemId !== 'string') patch.itemId = newId('ci-')
@@ -511,6 +753,19 @@ function App() {
   const [fsEnabled, setFsEnabled] = useState(false)
   const [fsNeedsPermission, setFsNeedsPermission] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [serverAvailable, setServerAvailable] = useState(false)
+  const [serverHydrated, setServerHydrated] = useState(false)
+  const [serverInfo, setServerInfo] = useState<LabnoteServerInfo | null>(null)
+  const [lastServerSync, setLastServerSync] = useState<string | null>(null)
+  const [uploadShared, setUploadShared] = useState(() => {
+    if (typeof window === 'undefined') return true
+    return window.localStorage.getItem('labnote.uploadShared') !== '0'
+  })
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    window.localStorage.setItem('labnote.uploadShared', uploadShared ? '1' : '0')
+  }, [uploadShared])
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -794,6 +1049,7 @@ function App() {
     }, 900)
     return () => window.clearTimeout(id)
   }, [changeQueue, syncNow, syncing])
+
   const [attachmentsStore, setAttachmentsStore] = useState<Attachment[]>(() => {
     if (typeof window === 'undefined') return sampleData.attachments
     try {
@@ -804,6 +1060,47 @@ function App() {
     }
     return sampleData.attachments
   })
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    let cancelled = false
+
+    const load = async () => {
+      const state = await fetchServerState()
+      if (cancelled) return
+
+      if (state) {
+        setServerAvailable(true)
+        setProjects((local) => mergeById(state.projects, local))
+        setExperiments((local) => mergeById(state.experiments, local))
+        setEntryDrafts((local) => mergeEntries(state.entries, local))
+        setAttachmentsStore((local) => mergeById(state.attachments, local))
+      } else {
+        setServerAvailable(false)
+      }
+
+      setServerHydrated(true)
+    }
+
+    void load()
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  const refreshServerInfo = useCallback(async () => {
+    if (!serverAvailable) {
+      setServerInfo(null)
+      return
+    }
+    const info = await fetchServerInfo()
+    setServerInfo(info)
+  }, [serverAvailable])
+
+  useEffect(() => {
+    if (!serverHydrated) return
+    void refreshServerInfo()
+  }, [refreshServerInfo, serverHydrated])
 
   // Persist drafts to localStorage for quick offline reloads
   useEffect(() => {
@@ -830,6 +1127,26 @@ function App() {
     return () => window.clearTimeout(id)
   }, [attachmentsStore])
 
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    if (!serverHydrated || !serverAvailable) return
+    const id = window.setTimeout(() => {
+      void (async () => {
+        const ok = await patchServerState({
+          projects,
+          experiments,
+          entries: entryDrafts,
+          attachments: attachmentsStore,
+        })
+        if (ok) {
+          setLastServerSync(new Date().toISOString())
+          void refreshServerInfo()
+        }
+      })()
+    }, 400)
+    return () => window.clearTimeout(id)
+  }, [attachmentsStore, entryDrafts, experiments, projects, refreshServerInfo, serverAvailable, serverHydrated])
+
   const attachmentsForEntry = useCallback(
     (entryId: string) => attachmentsStore.filter((a) => a.entryId === entryId),
     [attachmentsStore]
@@ -840,6 +1157,7 @@ function App() {
       if (!files.length) return []
 
       const saved: Attachment[] = []
+      const shouldUpload = uploadShared && serverAvailable
 
       for (const file of files) {
         const id = `att-${crypto.randomUUID?.() ?? Math.random().toString(36).slice(2)}`
@@ -859,16 +1177,27 @@ function App() {
           setFsEnabled(true)
         }
 
+        let storagePath = cachePath
+        let thumbnail = type === 'image' ? URL.createObjectURL(file) : undefined
+
+        if (shouldUpload && type === 'image') {
+          const uploaded = await uploadImageToServer(file)
+          if (uploaded?.url) {
+            storagePath = uploaded.url
+            thumbnail = uploaded.url
+          }
+        }
+
         saved.push({
           id,
           entryId,
           type,
           filename: file.name,
           filesize: `${Math.max(1, Math.round(file.size / 1024))} KB`,
-          storagePath: cachePath,
+          storagePath,
           cachedPath: cachePath,
           pinnedOffline: type === 'image',
-          thumbnail: type === 'image' ? URL.createObjectURL(file) : undefined,
+          thumbnail,
         })
       }
 
@@ -890,7 +1219,7 @@ function App() {
 
       return saved
     },
-    []
+    [serverAvailable, uploadShared]
   )
 
   const addFileDestination = useCallback((entryId: string, val: { path: string; label?: string }): Attachment => {
@@ -935,46 +1264,74 @@ function App() {
 	      const urlMap: Record<string, string> = {}
 	      const missing = new Set<string>()
 	      const fsDir = await restoreCacheHandle()
-	      const fsDirWithPerm = fsDir ? (fsDir as FsDirectoryWithPerm) : null
-	      const fsCanRead =
-	        !fsDirWithPerm?.queryPermission ?
-	          !!fsDir :
-	          (await fsDirWithPerm.queryPermission({ mode: 'read' })) === 'granted'
+      const fsDirWithPerm = fsDir ? (fsDir as FsDirectoryWithPerm) : null
+      const fsCanRead =
+        !fsDirWithPerm?.queryPermission ?
+          !!fsDir :
+          (await fsDirWithPerm.queryPermission({ mode: 'read' })) === 'granted'
 
-	      for (const att of attachmentsStore) {
-	        if (att.cachedPath?.startsWith('idb://')) {
-	          const key = att.cachedPath.replace('idb://', '')
-	          try {
+      for (const att of attachmentsStore) {
+        const remoteFallback =
+          att.storagePath?.startsWith('http') || att.storagePath?.startsWith('/labnote-uploads/')
+            ? att.storagePath
+            : undefined
+        if (att.cachedPath?.startsWith('idb://')) {
+          const key = att.cachedPath.replace('idb://', '')
+          try {
             const blob = await getCachedFile(key)
             if (blob) {
               urlMap[att.id] = URL.createObjectURL(blob)
             } else {
-              missing.add(att.id)
+              if (remoteFallback) {
+                urlMap[att.id] = remoteFallback
+              } else if (att.thumbnail) {
+                urlMap[att.id] = att.thumbnail
+              } else {
+                missing.add(att.id)
+              }
             }
           } catch (err) {
-	            console.warn('Unable to load cached file', att.id, err)
-	            missing.add(att.id)
-	          }
-	        } else if (att.cachedPath?.startsWith('fs://')) {
-	          const name = att.cachedPath.replace('fs://', '')
-	          if (fsDir && fsCanRead) {
-	            try {
-	              const handle = await fsDir.getFileHandle(name)
-	              const blob = await handle.getFile()
-	              urlMap[att.id] = URL.createObjectURL(blob)
-	            } catch (err) {
-	              console.warn('Unable to read filesystem cached file', att.id, err)
-	              missing.add(att.id)
-	              if (att.thumbnail) urlMap[att.id] = att.thumbnail
-	            }
-	          } else {
-	            missing.add(att.id)
-	            if (att.thumbnail) urlMap[att.id] = att.thumbnail
-	          }
-	        } else if (att.thumbnail) {
-	          urlMap[att.id] = att.thumbnail
-	        }
-	      }
+            console.warn('Unable to load cached file', att.id, err)
+            if (remoteFallback) {
+              urlMap[att.id] = remoteFallback
+            } else if (att.thumbnail) {
+              urlMap[att.id] = att.thumbnail
+            } else {
+              missing.add(att.id)
+            }
+          }
+        } else if (att.cachedPath?.startsWith('fs://')) {
+          const name = att.cachedPath.replace('fs://', '')
+          if (fsDir && fsCanRead) {
+            try {
+              const handle = await fsDir.getFileHandle(name)
+              const blob = await handle.getFile()
+              urlMap[att.id] = URL.createObjectURL(blob)
+            } catch (err) {
+              console.warn('Unable to read filesystem cached file', att.id, err)
+              if (remoteFallback) {
+                urlMap[att.id] = remoteFallback
+              } else if (att.thumbnail) {
+                urlMap[att.id] = att.thumbnail
+              } else {
+                missing.add(att.id)
+              }
+            }
+          } else {
+            if (remoteFallback) {
+              urlMap[att.id] = remoteFallback
+            } else if (att.thumbnail) {
+              urlMap[att.id] = att.thumbnail
+            } else {
+              missing.add(att.id)
+            }
+          }
+        } else if (remoteFallback) {
+          urlMap[att.id] = remoteFallback
+        } else if (att.thumbnail) {
+          urlMap[att.id] = att.thumbnail
+        }
+      }
       if (!cancelled) {
         setAttachmentUrls(urlMap)
         setMissingAttachments(missing)
@@ -1033,9 +1390,12 @@ function App() {
       figure { margin: 12px 0; }
       figure img { max-width: 100%; border-radius: 10px; border: 1px solid #e2e8f0; }
       figcaption { font-size: 12px; color: #475569; margin-top: 6px; }
-      table { border-collapse: collapse; width: 100%; }
-      th, td { border: 1px solid #e2e8f0; padding: 8px 10px; font-size: 12px; text-align: left; }
-      th { background: #f8fafc; }
+      .table-wrap { border: 1px solid #e2e8f0; border-radius: 12px; overflow: hidden; }
+      .table-wrap table { border-collapse: collapse; width: 100%; }
+      .table-wrap th, .table-wrap td { border: 1px solid #e2e8f0; padding: 8px 10px; font-size: 12px; text-align: left; }
+      .table-wrap th { background: #f8fafc; }
+      .table-wrap.table-striped tbody tr:nth-child(even) td { background: #f1f5f9; }
+      .table-wrap.table-compact th, .table-wrap.table-compact td { padding: 6px 8px; font-size: 11px; }
       .caption { font-size: 12px; color: #475569; margin-top: 6px; }
       .toolbar { margin-top: 8px; }
       .toolbar button { border-radius: 10px; border: 1px solid #cbd5e1; background: #ffffff; padding: 8px 12px; cursor: pointer; }
@@ -1360,6 +1720,7 @@ function App() {
       : selectedExperimentObj?.projectId ?? fallbackProjectId
 
   useEffect(() => {
+    if (!serverHydrated) return
     if (todayEntry) return
     const now = new Date()
     const nowIso = now.toISOString()
@@ -1382,7 +1743,7 @@ function App() {
       pinnedRegions,
     }
     setEntryDrafts((prev) => ({ ...prev, [entryId]: entry }))
-  }, [todayEntry, todayBucket, defaultProjectIdForNewEntry, fallbackProjectId])
+  }, [defaultProjectIdForNewEntry, fallbackProjectId, serverHydrated, todayBucket, todayEntry])
 
   const openEntry = useCallback(
     (entryId: string, opts?: { autoEdit?: boolean; tab?: EditorTab }) => {
@@ -1570,6 +1931,12 @@ function App() {
           onToggleSplitView={(next) => setSplitViewEnabled(next)}
           onSelectSecondaryEntry={(id) => setSecondaryEntryId(id)}
           getAttachmentsForEntry={attachmentsForEntry}
+          uploadShared={uploadShared}
+          onToggleUploadShared={() => setUploadShared((prev) => !prev)}
+          serverAvailable={serverAvailable}
+          serverHydrated={serverHydrated}
+          serverInfo={serverInfo}
+          lastServerSync={lastServerSync}
         />
       </div>
       {newEntryOpen && (
@@ -2087,6 +2454,12 @@ interface EditorPaneProps {
   onToggleSplitView: (next: boolean) => void
   onSelectSecondaryEntry: (entryId: string) => void
   getAttachmentsForEntry: (entryId: string) => Attachment[]
+  uploadShared: boolean
+  onToggleUploadShared: () => void
+  serverAvailable: boolean
+  serverHydrated: boolean
+  serverInfo: LabnoteServerInfo | null
+  lastServerSync: string | null
 }
 
 function EditorPane({
@@ -2129,6 +2502,12 @@ function EditorPane({
   onToggleSplitView,
   onSelectSecondaryEntry,
   getAttachmentsForEntry,
+  uploadShared,
+  onToggleUploadShared,
+  serverAvailable,
+  serverHydrated,
+  serverInfo,
+  lastServerSync,
 }: EditorPaneProps) {
   const [exporting, setExporting] = useState(false)
   const [isEditing, setIsEditing] = useState(false)
@@ -2161,6 +2540,7 @@ function EditorPane({
   const failedCount = changeQueue.filter((c) => c.status === 'failed').length
   const hasWork = pendingCount > 0 || failedCount > 0
   const attachInputRef = useRef<HTMLInputElement | null>(null)
+  const captureInputRef = useRef<HTMLInputElement | null>(null)
   const orderedOpenEntries = useMemo(() => {
     const pinned = openEntries.filter((item) => pinnedEntryIds.includes(item.id))
     const others = openEntries.filter((item) => !pinnedEntryIds.includes(item.id))
@@ -2405,10 +2785,23 @@ function EditorPane({
                 </div>
               </button>
               <button className="action-card" type="button" onClick={onQuickCapture} data-testid="today-quick-capture">
-                <Camera className="icon" aria-hidden="true" />
+                <NotebookPen className="icon" aria-hidden="true" />
                 <div>
                   <div className="title-sm">Quick capture</div>
                   <div className="muted tiny">Fast scratchpad with autosave.</div>
+                </div>
+              </button>
+              <button
+                className="action-card"
+                type="button"
+                onClick={() => captureInputRef.current?.click()}
+                disabled={!todayEntry}
+                data-testid="today-capture-photo"
+              >
+                <Camera className="icon" aria-hidden="true" />
+                <div>
+                  <div className="title-sm">Capture photo</div>
+                  <div className="muted tiny">Use your camera and attach it instantly.</div>
                 </div>
               </button>
               <button
@@ -2464,11 +2857,43 @@ function EditorPane({
                 </div>
               </button>
             </div>
+            {serverHydrated && (
+              <div className="upload-toggle">
+                <button
+                  className={`pill soft ${uploadShared && serverAvailable ? 'active-pill' : ''}`}
+                  type="button"
+                  onClick={onToggleUploadShared}
+                  disabled={!serverAvailable}
+                  data-testid="upload-shared-toggle-landing"
+                >
+                  Shared upload
+                </button>
+                <div className="muted tiny">
+                  {serverAvailable
+                    ? 'Uploads images to the shared notebook for mobile + desktop.'
+                    : 'Shared upload unavailable (offline or server not reachable).'}
+                </div>
+              </div>
+            )}
             <input
               ref={attachInputRef}
               type="file"
               multiple
               style={{ display: 'none' }}
+              data-testid="today-attach-input"
+              onChange={(event) => {
+                const files = Array.from(event.target.files ?? [])
+                handleAttachFiles(files)
+                event.currentTarget.value = ''
+              }}
+            />
+            <input
+              ref={captureInputRef}
+              type="file"
+              accept="image/*"
+              capture="environment"
+              style={{ display: 'none' }}
+              data-testid="today-capture-input"
               onChange={(event) => {
                 const files = Array.from(event.target.files ?? [])
                 handleAttachFiles(files)
@@ -2560,6 +2985,10 @@ function EditorPane({
                     entryId={entry.id}
                     onAddAttachments={onAddAttachments}
                     onAddFileDestination={onAddFileDestination}
+                    uploadShared={uploadShared}
+                    onToggleUploadShared={onToggleUploadShared}
+                    serverAvailable={serverAvailable}
+                    serverHydrated={serverHydrated}
                   />
                   <Editable
                     renderElement={renderElement}
@@ -2567,6 +2996,21 @@ function EditorPane({
                     className="slate-editor"
                     placeholder="Type your lab note..."
                     onKeyDown={(event) => {
+                      if (event.key === 'Tab') {
+                        event.preventDefault()
+                        const activeList = getActiveListType(editor)
+                        if (activeList) {
+                          if (event.shiftKey) {
+                            outdentListItem(editor)
+                          } else {
+                            indentListItem(editor, activeList)
+                          }
+                        } else {
+                          const currentIndent = getActiveIndent(editor)
+                          setIndent(editor, currentIndent + (event.shiftKey ? -INDENT_STEP : INDENT_STEP))
+                        }
+                        return
+                      }
                       if ((event.ctrlKey || event.metaKey) && !event.altKey) {
                         const key = event.key.toLowerCase()
                         if (key === 'b') {
@@ -2713,6 +3157,11 @@ function EditorPane({
             onSyncNow={onSyncNow}
             onRetryChange={onRetryChange}
             onClearSynced={onClearSynced}
+            serverAvailable={serverAvailable}
+            serverHydrated={serverHydrated}
+            serverInfo={serverInfo}
+            lastServerSync={lastServerSync}
+            uploadShared={uploadShared}
           />
         </div>
       )}
@@ -2892,6 +3341,11 @@ interface MetaPanelProps {
   onSyncNow: () => void
   onRetryChange: (changeId: string) => void
   onClearSynced: () => void
+  serverAvailable: boolean
+  serverHydrated: boolean
+  serverInfo: LabnoteServerInfo | null
+  lastServerSync: string | null
+  uploadShared: boolean
 }
 
 function EntryLinkPanel({
@@ -3004,8 +3458,20 @@ function MetaPanelContent({
   onSyncNow,
   onRetryChange,
   onClearSynced,
+  serverAvailable,
+  serverHydrated,
+  serverInfo,
+  lastServerSync,
+  uploadShared,
 }: MetaPanelProps) {
   const pinned = entry?.pinnedRegions ?? []
+  const serverOrigin = typeof window === 'undefined' ? '' : window.location.origin
+  const formatMaybeDate = (value?: string | null) => {
+    if (!value) return '—'
+    const parsed = new Date(value)
+    return Number.isNaN(parsed.getTime()) ? value : dtFormat.format(parsed)
+  }
+  const serverStatus = !serverHydrated ? 'Checking…' : serverAvailable ? 'Reachable' : 'Offline'
 
   return (
     <>
@@ -3158,6 +3624,45 @@ function MetaPanelContent({
       </section>
 
       <section>
+        <div className="section-title">Mobile sync check</div>
+        <div className="meta-card sync-check" data-testid="mobile-sync-check">
+          <div className="sync-row">
+            <span className="muted tiny">Server status</span>
+            <span className={`status-chip ${serverAvailable ? 'success' : 'warning'}`}>{serverStatus}</span>
+          </div>
+          <div className="sync-row">
+            <span className="muted tiny">Server URL</span>
+            <span className="title-sm">{serverOrigin || '—'}</span>
+          </div>
+          <div className="sync-row">
+            <span className="muted tiny">Shared upload</span>
+            <span className={`pill soft ${uploadShared && serverAvailable ? 'active-pill' : ''}`}>
+              {uploadShared ? 'On' : 'Off'}
+            </span>
+          </div>
+          <div className="sync-row">
+            <span className="muted tiny">Last sync (this client)</span>
+            <span className="muted tiny">{formatMaybeDate(lastServerSync)}</span>
+          </div>
+          <div className="sync-row">
+            <span className="muted tiny">Server state updated</span>
+            <span className="muted tiny">{formatMaybeDate(serverInfo?.stateUpdatedAt)}</span>
+          </div>
+          <div className="sync-row">
+            <span className="muted tiny">Uploads endpoint</span>
+            <span className="muted tiny">{serverInfo?.uploadsUrl ?? '/labnote-uploads/'}</span>
+          </div>
+          <div className="sync-row">
+            <span className="muted tiny">Data folder</span>
+            <span className="muted tiny">{serverInfo?.dataDir ?? '—'}</span>
+          </div>
+        </div>
+        <div className="muted tiny">
+          Open this URL on mobile to connect to the same server instance.
+        </div>
+      </section>
+
+      <section>
         <div className="section-title">Backlinks</div>
         <div className="muted tiny">Will list entries mentioning this experiment or sample IDs.</div>
       </section>
@@ -3203,8 +3708,7 @@ interface BlockRendererProps {
 
 const renderElement = (props: RenderElementProps) => {
   const { element, attributes, children } = props
-  const align = isTextAlignValue(element.align) ? element.align : undefined
-  const style: React.CSSProperties | undefined = align ? { textAlign: align } : undefined
+  const style = getBlockStyle((element as { align?: unknown }).align, (element as { indent?: unknown }).indent)
   const locked = element.locked === true
   switch (element.type) {
     case 'heading-two':
@@ -3232,6 +3736,24 @@ const renderElement = (props: RenderElementProps) => {
         <blockquote className="quote" {...attributes} style={style}>
           {children}
         </blockquote>
+      )
+    case 'bulleted-list':
+      return (
+        <ul className="list-block list-bulleted" {...attributes} style={style}>
+          {children}
+        </ul>
+      )
+    case 'numbered-list':
+      return (
+        <ol className="list-block list-numbered" {...attributes} style={style}>
+          {children}
+        </ol>
+      )
+    case 'list-item':
+      return (
+        <li className="list-item" {...attributes}>
+          {children}
+        </li>
       )
     case 'checklist':
       return <ChecklistElement {...props} />
@@ -3267,14 +3789,81 @@ const renderLeaf = ({ attributes, children, leaf }: RenderLeafProps) => {
   if ((leaf as unknown as { underline?: boolean }).underline) content = <u>{content}</u>
   if ((leaf as unknown as { italic?: boolean }).italic) content = <em>{content}</em>
   if ((leaf as unknown as { bold?: boolean }).bold) content = <strong>{content}</strong>
-  return <span {...attributes}>{content}</span>
+  const superscript = (leaf as unknown as { superscript?: boolean }).superscript === true
+  const subscript = (leaf as unknown as { subscript?: boolean }).subscript === true
+  const font = isFontStyle((leaf as unknown as { font?: unknown }).font)
+    ? ((leaf as unknown as { font?: FontStyle }).font as FontStyle)
+    : undefined
+  const fontSize = isFontSize((leaf as unknown as { fontSize?: unknown }).fontSize)
+    ? ((leaf as unknown as { fontSize?: FontSize }).fontSize as FontSize)
+    : undefined
+  const color = normalizeColor((leaf as unknown as { color?: unknown }).color)
+  const highlight = normalizeColor((leaf as unknown as { highlight?: unknown }).highlight)
+  const style: React.CSSProperties = {}
+  if (font) style.fontFamily = FONT_STYLE_MAP[font]
+  if (fontSize) style.fontSize = `${fontSize}px`
+  if (color) style.color = color
+  if (highlight) {
+    style.backgroundColor = highlight
+    style.padding = '0 2px'
+    style.borderRadius = '2px'
+    style.boxDecorationBreak = 'clone'
+  }
+  const hasStyle = Object.keys(style).length > 0
+  if (superscript) {
+    content = <sup>{content}</sup>
+  } else if (subscript) {
+    content = <sub>{content}</sub>
+  }
+  return (
+    <span {...attributes} style={hasStyle ? style : undefined}>
+      {content}
+    </span>
+  )
 }
 
 type MarkFormat = 'bold' | 'italic' | 'underline'
+type ScriptFormat = 'superscript' | 'subscript'
+type FontStyle = 'body' | 'display' | 'mono'
+type FontSize = 12 | 14 | 16 | 18 | 20 | 24 | 28
 type TextAlign = 'left' | 'center' | 'right' | 'justify'
+
+const FONT_STYLE_MAP: Record<FontStyle, string> = {
+  body: 'var(--font-body)',
+  display: 'var(--font-display)',
+  mono: 'var(--font-mono)',
+}
+
+const FONT_STYLE_EXPORT_MAP: Record<FontStyle, string> = {
+  body: "'Space Grotesk', 'Segoe UI', system-ui, -apple-system, sans-serif",
+  display: "'Chakra Petch', 'Space Grotesk', system-ui, sans-serif",
+  mono: "'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace",
+}
+
+const FONT_SIZE_OPTIONS: FontSize[] = [12, 14, 16, 18, 20, 24, 28]
+const DEFAULT_FONT_SIZE: FontSize = 16
+const FONT_COLOR_SWATCHES = ['#0f172a', '#1d4ed8', '#0f766e', '#b45309', '#b91c1c', '#7c3aed']
+const DEFAULT_HIGHLIGHT = '#fef08a'
+const HIGHLIGHT_SWATCHES = ['#fef08a', '#bbf7d0', '#bfdbfe', '#fecaca', '#fed7aa', '#e9d5ff']
 
 function isTextAlignValue(value: unknown): value is TextAlign {
   return value === 'left' || value === 'center' || value === 'right' || value === 'justify'
+}
+
+function isFontStyle(value: unknown): value is FontStyle {
+  return value === 'body' || value === 'display' || value === 'mono'
+}
+
+function isFontSize(value: unknown): value is FontSize {
+  return typeof value === 'number' && FONT_SIZE_OPTIONS.includes(value as FontSize)
+}
+
+function normalizeColor(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined
+  const trimmed = value.trim()
+  if (!trimmed) return undefined
+  if (/^#[0-9a-fA-F]{3}$/.test(trimmed) || /^#[0-9a-fA-F]{6}$/.test(trimmed)) return trimmed
+  return undefined
 }
 
 function isMarkActive(editor: ReactEditor, format: MarkFormat): boolean {
@@ -3290,11 +3879,255 @@ function toggleMark(editor: ReactEditor, format: MarkFormat) {
   }
 }
 
+function isScriptActive(editor: ReactEditor, format: ScriptFormat): boolean {
+  const marks = Editor.marks(editor) as Record<string, unknown> | null
+  return marks?.[format] === true
+}
+
+function toggleScript(editor: ReactEditor, format: ScriptFormat) {
+  const other: ScriptFormat = format === 'superscript' ? 'subscript' : 'superscript'
+  if (isScriptActive(editor, format)) {
+    Editor.removeMark(editor, format)
+  } else {
+    Editor.removeMark(editor, other)
+    Editor.addMark(editor, format, true)
+  }
+}
+
+function getActiveFont(editor: ReactEditor): FontStyle {
+  const marks = Editor.marks(editor) as Record<string, unknown> | null
+  const current = marks?.font
+  return isFontStyle(current) ? current : 'body'
+}
+
+function setFontMark(editor: ReactEditor, font: FontStyle) {
+  if (font === 'body') {
+    Editor.removeMark(editor, 'font')
+  } else {
+    Editor.addMark(editor, 'font', font)
+  }
+}
+
+function getActiveFontSize(editor: ReactEditor): FontSize {
+  const marks = Editor.marks(editor) as Record<string, unknown> | null
+  const current = marks?.fontSize
+  return isFontSize(current) ? current : DEFAULT_FONT_SIZE
+}
+
+function setFontSizeMark(editor: ReactEditor, size: FontSize) {
+  if (size === DEFAULT_FONT_SIZE) {
+    Editor.removeMark(editor, 'fontSize')
+  } else {
+    Editor.addMark(editor, 'fontSize', size)
+  }
+}
+
+function getActiveColor(editor: ReactEditor): string {
+  const marks = Editor.marks(editor) as Record<string, unknown> | null
+  return normalizeColor(marks?.color) ?? '#0f172a'
+}
+
+function setColorMark(editor: ReactEditor, color: string) {
+  const normalized = normalizeColor(color)
+  if (!normalized || normalized === '#0f172a') {
+    Editor.removeMark(editor, 'color')
+  } else {
+    Editor.addMark(editor, 'color', normalized)
+  }
+}
+
+function clearColorMark(editor: ReactEditor) {
+  Editor.removeMark(editor, 'color')
+}
+
+function getActiveHighlight(editor: ReactEditor): string {
+  const marks = Editor.marks(editor) as Record<string, unknown> | null
+  return normalizeColor(marks?.highlight) ?? DEFAULT_HIGHLIGHT
+}
+
+function setHighlightMark(editor: ReactEditor, color: string) {
+  const normalized = normalizeColor(color)
+  if (!normalized) {
+    Editor.removeMark(editor, 'highlight')
+  } else {
+    Editor.addMark(editor, 'highlight', normalized)
+  }
+}
+
+function toggleHighlight(editor: ReactEditor, color: string) {
+  const normalized = normalizeColor(color)
+  if (!normalized) {
+    Editor.removeMark(editor, 'highlight')
+    return
+  }
+  const marks = Editor.marks(editor) as Record<string, unknown> | null
+  const current = normalizeColor(marks?.highlight)
+  if (current === normalized) {
+    Editor.removeMark(editor, 'highlight')
+  } else {
+    Editor.addMark(editor, 'highlight', normalized)
+  }
+}
+
+function clearHighlightMark(editor: ReactEditor) {
+  Editor.removeMark(editor, 'highlight')
+}
+
 function getActiveBlockEntry(editor: ReactEditor): [SlateElement, Path] | null {
   const entry = Editor.above(editor, {
     match: (n) => SlateElement.isElement(n) && typeof (n as { blockId?: unknown }).blockId === 'string',
   })
   return entry ? (entry as [SlateElement, Path]) : null
+}
+
+const ALIGNABLE_TYPES = new Set([
+  'paragraph',
+  'heading-two',
+  'heading-three',
+  'quote',
+  'checklist',
+  'bulleted-list',
+  'numbered-list',
+])
+const INDENTABLE_TYPES = new Set(['paragraph', 'heading-two', 'heading-three', 'quote', 'checklist'])
+const LIST_TYPES = new Set(['bulleted-list', 'numbered-list'])
+const INDENT_STEP = 1
+const MAX_INDENT = 6
+const INDENT_PX = 24
+
+function getBlockStyle(align?: unknown, indent?: unknown): React.CSSProperties | undefined {
+  const style: React.CSSProperties = {}
+  if (isTextAlignValue(align)) style.textAlign = align
+  if (typeof indent === 'number' && indent > 0) {
+    style.marginLeft = `${indent * INDENT_PX}px`
+  }
+  return Object.keys(style).length ? style : undefined
+}
+
+function getActiveAlign(editor: ReactEditor): TextAlign {
+  const entry = getActiveBlockEntry(editor)
+  const align = entry ? (entry[0] as { align?: unknown }).align : undefined
+  return isTextAlignValue(align) ? align : 'left'
+}
+
+function setAlign(editor: ReactEditor, align: TextAlign) {
+  const value = align === 'left' ? undefined : align
+  Transforms.setNodes(
+    editor,
+    { align: value },
+    {
+      match: (n) => SlateElement.isElement(n) && ALIGNABLE_TYPES.has(String((n as { type?: unknown }).type)),
+      split: true,
+    }
+  )
+}
+
+function getActiveIndent(editor: ReactEditor): number {
+  const entry = getActiveBlockEntry(editor)
+  const indent = entry ? (entry[0] as { indent?: unknown }).indent : undefined
+  return typeof indent === 'number' && indent > 0 ? indent : 0
+}
+
+function setIndent(editor: ReactEditor, nextIndent: number) {
+  const clamped = Math.max(0, Math.min(MAX_INDENT, nextIndent))
+  Transforms.setNodes(
+    editor,
+    { indent: clamped === 0 ? undefined : clamped },
+    {
+      match: (n) => SlateElement.isElement(n) && INDENTABLE_TYPES.has(String((n as { type?: unknown }).type)),
+      split: true,
+    }
+  )
+}
+
+function indentListItem(editor: ReactEditor, listType: 'bulleted-list' | 'numbered-list') {
+  const itemEntry = Editor.above(editor, {
+    match: (n) => SlateElement.isElement(n) && n.type === 'list-item',
+  }) as [SlateElement, Path] | undefined
+  if (!itemEntry) return
+  const [, itemPath] = itemEntry
+  if (itemPath[itemPath.length - 1] === 0) return
+  const listEntry = Editor.parent(editor, itemPath) as [SlateElement, Path] | undefined
+  if (!listEntry) return
+  const [listNode] = listEntry
+  if (!SlateElement.isElement(listNode) || !LIST_TYPES.has(String(listNode.type))) return
+
+  const prevItemPath = Path.previous(itemPath)
+  const prevItemEntry = Editor.node(editor, prevItemPath) as [SlateElement, Path]
+  const [prevItem] = prevItemEntry
+  if (!SlateElement.isElement(prevItem) || prevItem.type !== 'list-item') return
+
+  let nestedListPath = prevItemPath.concat(prevItem.children.length)
+  const lastChild = prevItem.children[prevItem.children.length - 1]
+  if (SlateElement.isElement(lastChild) && LIST_TYPES.has(String(lastChild.type))) {
+    nestedListPath = prevItemPath.concat(prevItem.children.length - 1)
+  } else {
+    const newList: Descendant = { type: listType, children: [] }
+    Transforms.insertNodes(editor, newList, { at: nestedListPath })
+  }
+
+  const nestedListEntry = Editor.node(editor, nestedListPath) as [SlateElement, Path]
+  const nestedListNode = nestedListEntry[0]
+  if (!SlateElement.isElement(nestedListNode)) return
+  const targetPath = nestedListPath.concat(nestedListNode.children.length)
+  Transforms.moveNodes(editor, { at: itemPath, to: targetPath })
+}
+
+function outdentListItem(editor: ReactEditor) {
+  const itemEntry = Editor.above(editor, {
+    match: (n) => SlateElement.isElement(n) && n.type === 'list-item',
+  }) as [SlateElement, Path] | undefined
+  if (!itemEntry) return
+  const [, itemPath] = itemEntry
+  const parentListEntry = Editor.parent(editor, itemPath) as [SlateElement, Path] | undefined
+  if (!parentListEntry) return
+  const [, listPath] = parentListEntry
+  const parentItemEntry = Editor.parent(editor, listPath) as [SlateElement, Path] | undefined
+  if (!parentItemEntry) return
+  const [parentItem, parentItemPath] = parentItemEntry
+  if (!SlateElement.isElement(parentItem) || parentItem.type !== 'list-item') return
+  const outerListEntry = Editor.parent(editor, parentItemPath) as [SlateElement, Path] | undefined
+  if (!outerListEntry) return
+
+  const targetPath = Path.next(parentItemPath)
+  Transforms.moveNodes(editor, { at: itemPath, to: targetPath })
+
+  const parentListNode = parentListEntry[0]
+  if (SlateElement.isElement(parentListNode) && parentListNode.children.length === 1) {
+    Transforms.removeNodes(editor, { at: listPath })
+  }
+}
+
+function getActiveListType(editor: ReactEditor): 'bulleted-list' | 'numbered-list' | null {
+  const entry = Editor.above(editor, {
+    match: (n) => SlateElement.isElement(n) && LIST_TYPES.has(String((n as { type?: unknown }).type)),
+  })
+  if (!entry) return null
+  const element = entry[0]
+  if (!SlateElement.isElement(element)) return null
+  return element.type === 'numbered-list' ? 'numbered-list' : 'bulleted-list'
+}
+
+function toggleList(editor: ReactEditor, listType: 'bulleted-list' | 'numbered-list') {
+  const isActive = getActiveListType(editor) === listType
+  Transforms.unwrapNodes(editor, {
+    match: (n) => SlateElement.isElement(n) && LIST_TYPES.has(String((n as { type?: unknown }).type)),
+    split: true,
+  })
+  const isTextBlockType = (value: unknown) =>
+    value === 'paragraph' || value === 'heading-two' || value === 'heading-three' || value === 'quote'
+  Transforms.setNodes(
+    editor,
+    { type: isActive ? 'paragraph' : 'list-item' },
+    { match: (n) => SlateElement.isElement(n) && isTextBlockType(n.type), split: true }
+  )
+
+  if (!isActive) {
+    const list: Descendant = { type: listType, blockId: newId('b-'), children: [] }
+    Transforms.wrapNodes(editor, list, {
+      match: (n) => SlateElement.isElement(n) && n.type === 'list-item',
+    })
+  }
 }
 
 function insertHeadingBlock(editor: ReactEditor, level: 2 | 3 = 2) {
@@ -3448,7 +4281,7 @@ function FileDestinationModal({
                 setError(null)
                 setPath(e.target.value)
               }}
-              placeholder="e.g. \\\\labserver\\project\\2025-12-17\\run1.csv"
+              placeholder="e.g. \\\\fileserver\\labshare\\2025-12-17\\run1.csv"
               onKeyDown={(e) => {
                 if (e.key !== 'Enter') return
                 e.preventDefault()
@@ -3490,15 +4323,32 @@ function EditorInsertBar({
   entryId,
   onAddAttachments,
   onAddFileDestination,
+  uploadShared,
+  onToggleUploadShared,
+  serverAvailable,
+  serverHydrated,
 }: {
   entryId: string
   onAddAttachments: (entryId: string, files: File[]) => Promise<Attachment[]>
   onAddFileDestination: (entryId: string, val: { path: string; label?: string }) => Attachment
+  uploadShared: boolean
+  onToggleUploadShared: () => void
+  serverAvailable: boolean
+  serverHydrated: boolean
 }) {
   const editor = useSlate()
   const imgRef = useRef<HTMLInputElement | null>(null)
+  const cameraRef = useRef<HTMLInputElement | null>(null)
   const fileRef = useRef<HTMLInputElement | null>(null)
   const [destOpen, setDestOpen] = useState(false)
+  const activeFont = getActiveFont(editor)
+  const activeFontSize = getActiveFontSize(editor)
+  const activeColor = getActiveColor(editor)
+  const activeHighlight = getActiveHighlight(editor)
+  const activeAlign = getActiveAlign(editor)
+  const activeList = getActiveListType(editor)
+  const isSuperscript = isScriptActive(editor, 'superscript')
+  const isSubscript = isScriptActive(editor, 'subscript')
 
   const insertFromAttachments = useCallback(
     (attachments: Attachment[]) => {
@@ -3526,6 +4376,254 @@ function EditorInsertBar({
   return (
     <>
       <div className="editor-toolbar" contentEditable={false}>
+        <div className="toolbar-group">
+          <label className="toolbar-label">
+            Font
+            <select
+              value={activeFont}
+              onChange={(event) => setFontMark(editor, event.target.value as FontStyle)}
+              data-testid="editor-font-select"
+            >
+              <option value="body">Body</option>
+              <option value="display">Display</option>
+              <option value="mono">Mono</option>
+            </select>
+          </label>
+          <label className="toolbar-label">
+            Size
+            <select
+              value={activeFontSize}
+              onChange={(event) => setFontSizeMark(editor, Number(event.target.value) as FontSize)}
+              data-testid="editor-font-size"
+            >
+              {FONT_SIZE_OPTIONS.map((size) => (
+                <option key={size} value={size}>
+                  {size}px
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="toolbar-label">
+            Color
+            <input
+              type="color"
+              value={activeColor}
+              onChange={(event) => setColorMark(editor, event.target.value)}
+              data-testid="editor-font-color"
+            />
+          </label>
+          <button
+            className="pill soft"
+            type="button"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => clearColorMark(editor)}
+            data-testid="editor-color-clear"
+          >
+            Clear
+          </button>
+          <div className="color-swatches">
+            {FONT_COLOR_SWATCHES.map((swatch) => (
+              <button
+                key={swatch}
+                type="button"
+                className="color-swatch"
+                style={{ backgroundColor: swatch }}
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => setColorMark(editor, swatch)}
+                aria-label={`Set color ${swatch}`}
+              />
+            ))}
+          </div>
+          <label className="toolbar-label">
+            Highlight
+            <input
+              type="color"
+              value={activeHighlight}
+              onChange={(event) => setHighlightMark(editor, event.target.value)}
+              data-testid="editor-highlight-color"
+            />
+          </label>
+          <button
+            className="pill soft"
+            type="button"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => clearHighlightMark(editor)}
+            data-testid="editor-highlight-clear"
+          >
+            Clear HL
+          </button>
+          <div className="color-swatches">
+            {HIGHLIGHT_SWATCHES.map((swatch, idx) => (
+              <button
+                key={swatch}
+                type="button"
+                className="color-swatch"
+                style={{ backgroundColor: swatch }}
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => toggleHighlight(editor, swatch)}
+                aria-label={`Set highlight ${swatch}`}
+                data-testid={`editor-highlight-swatch-${idx}`}
+              />
+            ))}
+          </div>
+          <button
+            className={`pill soft ${isMarkActive(editor, 'bold') ? 'active-pill' : ''}`}
+            type="button"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => toggleMark(editor, 'bold')}
+            aria-label="Bold"
+            data-testid="editor-bold"
+          >
+            B
+          </button>
+          <button
+            className={`pill soft ${isMarkActive(editor, 'italic') ? 'active-pill' : ''}`}
+            type="button"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => toggleMark(editor, 'italic')}
+            aria-label="Italic"
+            data-testid="editor-italic"
+          >
+            I
+          </button>
+          <button
+            className={`pill soft ${isMarkActive(editor, 'underline') ? 'active-pill' : ''}`}
+            type="button"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => toggleMark(editor, 'underline')}
+            aria-label="Underline"
+            data-testid="editor-underline"
+          >
+            U
+          </button>
+          <button
+            className={`pill soft ${isSuperscript ? 'active-pill' : ''}`}
+            type="button"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => toggleScript(editor, 'superscript')}
+            aria-label="Superscript"
+            data-testid="editor-superscript"
+          >
+            Sup
+          </button>
+          <button
+            className={`pill soft ${isSubscript ? 'active-pill' : ''}`}
+            type="button"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => toggleScript(editor, 'subscript')}
+            aria-label="Subscript"
+            data-testid="editor-subscript"
+          >
+            Sub
+          </button>
+        </div>
+
+        <div className="toolbar-sep" />
+
+        <div className="toolbar-group">
+          <button
+            className={`pill soft ${activeAlign === 'left' ? 'active-pill' : ''}`}
+            type="button"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => setAlign(editor, 'left')}
+            aria-label="Align left"
+            data-testid="editor-align-left"
+          >
+            Left
+          </button>
+          <button
+            className={`pill soft ${activeAlign === 'center' ? 'active-pill' : ''}`}
+            type="button"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => setAlign(editor, 'center')}
+            aria-label="Align center"
+            data-testid="editor-align-center"
+          >
+            Center
+          </button>
+          <button
+            className={`pill soft ${activeAlign === 'right' ? 'active-pill' : ''}`}
+            type="button"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => setAlign(editor, 'right')}
+            aria-label="Align right"
+            data-testid="editor-align-right"
+          >
+            Right
+          </button>
+          <button
+            className={`pill soft ${activeAlign === 'justify' ? 'active-pill' : ''}`}
+            type="button"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => setAlign(editor, 'justify')}
+            aria-label="Justify"
+            data-testid="editor-align-justify"
+          >
+            Justify
+          </button>
+          <button
+            className="pill soft"
+            type="button"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => {
+              const activeList = getActiveListType(editor)
+              if (activeList) {
+                indentListItem(editor, activeList)
+              } else {
+                setIndent(editor, getActiveIndent(editor) + INDENT_STEP)
+              }
+            }}
+            aria-label="Indent"
+            data-testid="editor-indent"
+          >
+            Indent
+          </button>
+          <button
+            className="pill soft"
+            type="button"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => {
+              const activeList = getActiveListType(editor)
+              if (activeList) {
+                outdentListItem(editor)
+              } else {
+                setIndent(editor, getActiveIndent(editor) - INDENT_STEP)
+              }
+            }}
+            aria-label="Outdent"
+            data-testid="editor-outdent"
+          >
+            Outdent
+          </button>
+        </div>
+
+        <div className="toolbar-sep" />
+
+        <div className="toolbar-group">
+          <button
+            className={`pill soft ${activeList === 'bulleted-list' ? 'active-pill' : ''}`}
+            type="button"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => toggleList(editor, 'bulleted-list')}
+            aria-label="Bulleted list"
+            data-testid="editor-list-bulleted"
+          >
+            • List
+          </button>
+          <button
+            className={`pill soft ${activeList === 'numbered-list' ? 'active-pill' : ''}`}
+            type="button"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => toggleList(editor, 'numbered-list')}
+            aria-label="Numbered list"
+            data-testid="editor-list-numbered"
+          >
+            1. List
+          </button>
+        </div>
+
+        <div className="toolbar-sep" />
+
         <div className="toolbar-group">
           <button className="pill soft" type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => insertHeadingBlock(editor, 2)}>
             + Header
@@ -3555,6 +4653,9 @@ function EditorInsertBar({
           <button className="pill soft" type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => imgRef.current?.click()}>
             + Image
           </button>
+          <button className="pill soft" type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => cameraRef.current?.click()}>
+            + Camera
+          </button>
           <button className="pill soft" type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => fileRef.current?.click()}>
             + File
           </button>
@@ -3565,6 +4666,24 @@ function EditorInsertBar({
             + Divider
           </button>
         </div>
+
+        {serverHydrated && (
+          <>
+            <div className="toolbar-sep" />
+            <div className="toolbar-group">
+              <button
+                className={`pill soft ${uploadShared && serverAvailable ? 'active-pill' : ''}`}
+                type="button"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={onToggleUploadShared}
+                disabled={!serverAvailable}
+                data-testid="upload-shared-toggle"
+              >
+                Shared upload
+              </button>
+            </div>
+          </>
+        )}
       </div>
 
       <input
@@ -3573,6 +4692,19 @@ function EditorInsertBar({
         accept="image/*"
         multiple
         style={{ display: 'none' }}
+        data-testid="editor-image-input"
+        onChange={(e) => {
+          void pickAndInsert(e.target.files)
+          e.currentTarget.value = ''
+        }}
+      />
+      <input
+        ref={cameraRef}
+        type="file"
+        accept="image/*"
+        capture="environment"
+        style={{ display: 'none' }}
+        data-testid="editor-camera-input"
         onChange={(e) => {
           void pickAndInsert(e.target.files)
           e.currentTarget.value = ''
@@ -3583,6 +4715,7 @@ function EditorInsertBar({
         type="file"
         multiple
         style={{ display: 'none' }}
+        data-testid="editor-file-input"
         onChange={(e) => {
           void pickAndInsert(e.target.files)
           e.currentTarget.value = ''
@@ -3608,9 +4741,10 @@ function EditorInsertBar({
 function ChecklistElement({ element, attributes, children }: RenderElementProps) {
   const editor = useSlateStatic()
   const canAdd = element.locked !== true
+  const style = getBlockStyle((element as { align?: unknown }).align, (element as { indent?: unknown }).indent)
 
   return (
-    <div className="checklist" {...attributes}>
+    <div className="checklist" {...attributes} style={style}>
       {children}
       <div className="checklist-actions" contentEditable={false}>
         <button
@@ -3729,7 +4863,13 @@ function mergeRuns(runs: TextRun[]): TextRun[] {
       prev &&
       (prev.bold ?? false) === (run.bold ?? false) &&
       (prev.italic ?? false) === (run.italic ?? false) &&
-      (prev.underline ?? false) === (run.underline ?? false)
+      (prev.underline ?? false) === (run.underline ?? false) &&
+      (prev.superscript ?? false) === (run.superscript ?? false) &&
+      (prev.subscript ?? false) === (run.subscript ?? false) &&
+      (prev.font ?? 'body') === (run.font ?? 'body') &&
+      (prev.fontSize ?? DEFAULT_FONT_SIZE) === (run.fontSize ?? DEFAULT_FONT_SIZE) &&
+      (prev.color ?? '') === (run.color ?? '') &&
+      (prev.highlight ?? '') === (run.highlight ?? '')
 
     if (prev && sameMarks) {
       prev.text += run.text
@@ -3749,6 +4889,16 @@ function runsFromSlateChildren(children: Descendant[]): TextRun[] | undefined {
         bold: (child as unknown as { bold?: boolean }).bold === true ? true : undefined,
         italic: (child as unknown as { italic?: boolean }).italic === true ? true : undefined,
         underline: (child as unknown as { underline?: boolean }).underline === true ? true : undefined,
+        superscript: (child as unknown as { superscript?: boolean }).superscript === true ? true : undefined,
+        subscript: (child as unknown as { subscript?: boolean }).subscript === true ? true : undefined,
+        font: isFontStyle((child as unknown as { font?: unknown }).font)
+          ? ((child as unknown as { font?: FontStyle }).font as FontStyle)
+          : undefined,
+        fontSize: isFontSize((child as unknown as { fontSize?: unknown }).fontSize)
+          ? ((child as unknown as { fontSize?: FontSize }).fontSize as FontSize)
+          : undefined,
+        color: normalizeColor((child as unknown as { color?: unknown }).color),
+        highlight: normalizeColor((child as unknown as { highlight?: unknown }).highlight),
       })
       continue
     }
@@ -3758,7 +4908,18 @@ function runsFromSlateChildren(children: Descendant[]): TextRun[] | undefined {
   }
 
   const merged = mergeRuns(raw)
-  const hasFormatting = merged.some((r) => r.bold || r.italic || r.underline) || merged.length > 1
+  const hasFormatting =
+    merged.some((r) =>
+      r.bold ||
+      r.italic ||
+      r.underline ||
+      r.superscript ||
+      r.subscript ||
+      r.font ||
+      r.fontSize ||
+      r.color ||
+      r.highlight
+    ) || merged.length > 1
   return hasFormatting ? merged : undefined
 }
 
@@ -3769,6 +4930,12 @@ function slateTextChildrenFromRuns(runs: TextRun[] | undefined, fallbackText: st
       bold: r.bold === true ? true : undefined,
       italic: r.italic === true ? true : undefined,
       underline: r.underline === true ? true : undefined,
+      superscript: r.superscript === true ? true : undefined,
+      subscript: r.subscript === true ? true : undefined,
+      font: r.font,
+      fontSize: r.fontSize,
+      color: r.color,
+      highlight: r.highlight,
     }))
   }
   return [{ text: fallbackText }]
@@ -3781,9 +4948,42 @@ function renderTextRuns(runs: TextRun[] | undefined, fallbackText: string) {
     if (run.underline) node = <u>{node}</u>
     if (run.italic) node = <em>{node}</em>
     if (run.bold) node = <strong>{node}</strong>
-    return <span key={idx}>{node}</span>
+    if (run.superscript) {
+      node = <sup>{node}</sup>
+    } else if (run.subscript) {
+      node = <sub>{node}</sub>
+    }
+    const style: React.CSSProperties = {}
+    if (run.font) style.fontFamily = FONT_STYLE_MAP[run.font]
+    if (run.fontSize) style.fontSize = `${run.fontSize}px`
+    if (run.color) style.color = run.color
+    if (run.highlight) {
+      style.backgroundColor = run.highlight
+      style.padding = '0 2px'
+      style.borderRadius = '2px'
+      style.boxDecorationBreak = 'clone'
+    }
+    const hasStyle = Object.keys(style).length > 0
+    return (
+      <span key={idx} style={hasStyle ? style : undefined}>
+        {node}
+      </span>
+    )
   })
 }
+
+const listItemsToSlate = (items: ListItem[], listType: 'bulleted-list' | 'numbered-list'): Descendant[] =>
+  items.map((item) => {
+    const children: Descendant[] = slateTextChildrenFromRuns(item.runs, item.text)
+    if (item.children?.length) {
+      children.push({ type: listType, children: listItemsToSlate(item.children, listType) })
+    }
+    return {
+      type: 'list-item',
+      itemId: item.id,
+      children,
+    }
+  })
 
 const blocksToSlate = (blocks: Block[]): Descendant[] => {
   return blocks.map((block) => {
@@ -3794,6 +4994,7 @@ const blocksToSlate = (blocks: Block[]): Descendant[] => {
           blockId: block.id,
           locked: block.locked === true,
           align: block.align,
+          indent: block.indent,
           children: slateTextChildrenFromRuns(block.runs, block.text),
         }
       case 'paragraph':
@@ -3801,6 +5002,7 @@ const blocksToSlate = (blocks: Block[]): Descendant[] => {
           type: 'paragraph',
           blockId: block.id,
           align: block.align,
+          indent: block.indent,
           children: slateTextChildrenFromRuns(block.runs, block.text),
         }
       case 'quote':
@@ -3808,18 +5010,29 @@ const blocksToSlate = (blocks: Block[]): Descendant[] => {
           type: 'quote',
           blockId: block.id,
           align: block.align,
+          indent: block.indent,
           children: slateTextChildrenFromRuns(block.runs, block.text),
         }
       case 'checklist':
         return {
           type: 'checklist',
           blockId: block.id,
+          align: block.align,
+          indent: block.indent,
           children: block.items.map((item) => ({
             type: 'check-item',
             itemId: item.id,
             done: item.done,
             children: slateTextChildrenFromRuns(item.runs, item.text),
           })),
+        }
+      case 'list':
+        return {
+          type: block.ordered ? 'numbered-list' : 'bulleted-list',
+          blockId: block.id,
+          align: block.align,
+          indent: block.indent,
+          children: listItemsToSlate(block.items, block.ordered ? 'numbered-list' : 'bulleted-list'),
         }
       case 'divider':
         return { type: 'divider', blockId: block.id, meta: block, children: [{ text: '' }] }
@@ -3836,6 +5049,28 @@ const blocksToSlate = (blocks: Block[]): Descendant[] => {
         }
     }
   })
+}
+
+const listItemsFromSlate = (listNode: SlateElement): ListItem[] => {
+  return (listNode.children as Descendant[])
+    .filter((child): child is SlateElement => SlateElement.isElement(child))
+    .filter((child) => child.type === 'list-item')
+    .map((child) => {
+      const textChildren = (child.children as Descendant[]).filter(
+        (c) => !(SlateElement.isElement(c) && LIST_TYPES.has(String(c.type)))
+      )
+      const nestedList = (child.children as Descendant[]).find(
+        (c) => SlateElement.isElement(c) && LIST_TYPES.has(String(c.type))
+      ) as SlateElement | undefined
+      const runs = runsFromSlateChildren(textChildren as Descendant[])
+      const text = textChildren.map((c) => (Text.isText(c) ? c.text : Node.string(c))).join('')
+      return {
+        id: typeof child.itemId === 'string' ? child.itemId : newId('li-'),
+        text,
+        runs,
+        children: nestedList ? listItemsFromSlate(nestedList) : undefined,
+      }
+    })
 }
 
 const slateToBlocks = (nodes: Descendant[]): Block[] => {
@@ -3855,6 +5090,7 @@ const slateToBlocks = (nodes: Descendant[]): Block[] => {
           level: 2,
           locked: node.locked === true,
           align,
+          indent: typeof node.indent === 'number' ? node.indent : undefined,
           text: Node.string(node),
           runs: runsFromSlateChildren(node.children as unknown as Descendant[]),
         }
@@ -3865,6 +5101,7 @@ const slateToBlocks = (nodes: Descendant[]): Block[] => {
           level: 3,
           locked: node.locked === true,
           align,
+          indent: typeof node.indent === 'number' ? node.indent : undefined,
           text: Node.string(node),
           runs: runsFromSlateChildren(node.children as unknown as Descendant[]),
         }
@@ -3873,6 +5110,7 @@ const slateToBlocks = (nodes: Descendant[]): Block[] => {
           id: ensureId(blockId),
           type: 'quote',
           align,
+          indent: typeof node.indent === 'number' ? node.indent : undefined,
           text: Node.string(node),
           runs: runsFromSlateChildren(node.children as unknown as Descendant[]),
         }
@@ -3881,6 +5119,7 @@ const slateToBlocks = (nodes: Descendant[]): Block[] => {
           id: ensureId(blockId),
           type: 'checklist',
           align,
+          indent: typeof node.indent === 'number' ? node.indent : undefined,
           items: (node.children as unknown as Descendant[])
             .filter((child): child is SlateElement => SlateElement.isElement(child))
             .map((child) => ({
@@ -3889,6 +5128,16 @@ const slateToBlocks = (nodes: Descendant[]): Block[] => {
               done: child.done === true,
               runs: runsFromSlateChildren(child.children as unknown as Descendant[]),
             })),
+        }
+      case 'bulleted-list':
+      case 'numbered-list':
+        return {
+          id: ensureId(blockId),
+          type: 'list',
+          ordered: node.type === 'numbered-list',
+          align,
+          indent: typeof node.indent === 'number' ? node.indent : undefined,
+          items: listItemsFromSlate(node),
         }
       case 'divider':
       case 'attachment':
@@ -3904,6 +5153,7 @@ const slateToBlocks = (nodes: Descendant[]): Block[] => {
           id: ensureId(blockId),
           type: 'paragraph',
           align,
+          indent: typeof (node as { indent?: unknown }).indent === 'number' ? (node as { indent?: number }).indent : undefined,
           text: Node.string(node),
           runs: runsFromSlateChildren(node.children as unknown as Descendant[]),
         }
@@ -3912,7 +5162,7 @@ const slateToBlocks = (nodes: Descendant[]): Block[] => {
 }
 
 function BlockRenderer({ block, attachments, attachmentUrls, onUpdateBlock }: BlockRendererProps) {
-  const style = block.align ? ({ textAlign: block.align } as const) : undefined
+  const style = getBlockStyle(block.align, block.indent)
   switch (block.type) {
     case 'heading':
       if (block.level === 1) return <h1 className="block-heading h1" style={style}>{renderTextRuns(block.runs, block.text)}</h1>
@@ -3941,15 +5191,88 @@ function BlockRenderer({ block, attachments, attachmentUrls, onUpdateBlock }: Bl
           ))}
         </div>
       )
-    case 'table':
+    case 'list': {
+      const Tag = block.ordered ? 'ol' : 'ul'
+      const renderItems = (items: ListItem[]) =>
+        items.map((item) => (
+          <li key={item.id} className="list-item">
+            {renderTextRuns(item.runs, item.text)}
+            {item.children?.length ? (
+              <Tag className="list-block nested">
+                {renderItems(item.children)}
+              </Tag>
+            ) : null}
+          </li>
+        ))
       return (
-        <div className="table-wrap">
+        <Tag className="list-block" style={style}>
+          {renderItems(block.items)}
+        </Tag>
+      )
+    }
+    case 'table': {
+      const hasHeader = block.header !== false
+      const striped = block.striped === true
+      const compact = block.compact === true
+      return (
+        <div className={`table-wrap${striped ? ' table-striped' : ''}${compact ? ' table-compact' : ''}`} style={style}>
+          {onUpdateBlock && (
+            <div className="table-controls" contentEditable={false}>
+              <button
+                type="button"
+                className={`pill soft ${hasHeader ? 'active-pill' : ''}`}
+                onClick={() => onUpdateBlock({ ...block, header: hasHeader ? false : true })}
+                data-testid="table-header-toggle"
+              >
+                Header row
+              </button>
+              <button
+                type="button"
+                className={`pill soft ${striped ? 'active-pill' : ''}`}
+                onClick={() => onUpdateBlock({ ...block, striped: !striped })}
+                data-testid="table-striped-toggle"
+              >
+                Striped
+              </button>
+              <button
+                type="button"
+                className={`pill soft ${compact ? 'active-pill' : ''}`}
+                onClick={() => onUpdateBlock({ ...block, compact: !compact })}
+                data-testid="table-compact-toggle"
+              >
+                Compact
+              </button>
+              <div className="table-align">
+                <button
+                  type="button"
+                  className={`pill soft ${block.align === 'left' || !block.align ? 'active-pill' : ''}`}
+                  onClick={() => onUpdateBlock({ ...block, align: undefined })}
+                >
+                  Left
+                </button>
+                <button
+                  type="button"
+                  className={`pill soft ${block.align === 'center' ? 'active-pill' : ''}`}
+                  onClick={() => onUpdateBlock({ ...block, align: 'center' })}
+                >
+                  Center
+                </button>
+                <button
+                  type="button"
+                  className={`pill soft ${block.align === 'right' ? 'active-pill' : ''}`}
+                  onClick={() => onUpdateBlock({ ...block, align: 'right' })}
+                >
+                  Right
+                </button>
+              </div>
+            </div>
+          )}
           <table>
             <tbody>
               {block.data.map((row, idx) => (
                 <tr key={idx}>
                   {row.map((cell, cIdx) => (
-                    <td key={cIdx} className={idx === 0 ? 'th' : ''}>
+                    <td key={cIdx} className={hasHeader && idx === 0 ? 'th' : ''}>
                       {cell}
                     </td>
                   ))}
@@ -3960,6 +5283,7 @@ function BlockRenderer({ block, attachments, attachmentUrls, onUpdateBlock }: Bl
           {block.caption && <div className="muted tiny">{block.caption}</div>}
         </div>
       )
+    }
     case 'image': {
       const attachment = attachments[block.attachmentId]
       const src = attachmentUrls[block.attachmentId] ?? attachment?.thumbnail
@@ -4448,7 +5772,7 @@ function NewExperimentModal({
             <input
               value={defaultRawDataPath}
               onChange={(e) => setDefaultRawDataPath(e.target.value)}
-              placeholder="e.g. \\\\labserver\\project\\2025-12-17\\"
+              placeholder="e.g. \\\\fileserver\\labshare\\2025-12-17\\"
             />
             {error && <div className="field-error tiny">{error}</div>}
           </label>

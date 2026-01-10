@@ -11,6 +11,7 @@ node_modules
 dist
 dist-ssr
 *.local
+.labnote-test-data
 
 # Editor directories and files
 .vscode/*

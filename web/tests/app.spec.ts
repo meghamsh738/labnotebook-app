@@ -4,6 +4,7 @@ async function boot(
   page: Page,
   opts?: { noFail?: '0' | '1'; failNext?: boolean; stubPicker?: boolean }
 ) {
+  await page.request.post('/api/reset')
   await page.addInitScript((o) => {
     window.localStorage.clear()
     ;(window as unknown as { __labnoteMockSync?: { noFail?: boolean; failNext?: boolean } }).__labnoteMockSync = {
@@ -58,6 +59,83 @@ test.describe('Lab note taking app', () => {
     await expect(pinned.getByText('Aim', { exact: true })).toBeVisible()
     await expect(pinned.getByText('Experiment', { exact: true })).toBeVisible()
     await expect(pinned.getByText('Results', { exact: true })).toBeVisible()
+  })
+
+  test('shows capture photo option on landing', async ({ page }) => {
+    await boot(page, { noFail: '1' })
+    await expect(page.getByTestId('today-capture-photo')).toBeVisible()
+    await expect(page.getByTestId('today-capture-input')).toHaveAttribute('accept', 'image/*')
+    await expect(page.getByTestId('today-capture-input')).toHaveAttribute('capture', 'environment')
+  })
+
+  test('shared upload defaults on when server is available', async ({ page }) => {
+    await boot(page, { noFail: '1' })
+    const toggle = page.getByTestId('upload-shared-toggle-landing')
+    await expect(toggle).toBeVisible()
+    await expect(toggle).toBeEnabled()
+    await expect(toggle).toHaveClass(/active-pill/)
+  })
+
+  test('editor toolbar exposes rich text controls', async ({ page }) => {
+    await boot(page, { noFail: '1' })
+    await selectFirstEntry(page)
+    await page.getByTestId('edit-note-btn').click()
+    await expect(page.getByTestId('editor-font-select')).toBeVisible()
+    await expect(page.getByTestId('editor-font-size')).toBeVisible()
+    await expect(page.getByTestId('editor-font-color')).toBeVisible()
+    await expect(page.getByTestId('editor-highlight-color')).toBeVisible()
+    await expect(page.getByTestId('editor-highlight-clear')).toBeVisible()
+    await expect(page.getByTestId('editor-superscript')).toBeVisible()
+    await expect(page.getByTestId('editor-subscript')).toBeVisible()
+    await expect(page.getByTestId('editor-list-bulleted')).toBeVisible()
+    await expect(page.getByTestId('editor-align-center')).toBeVisible()
+    await expect(page.getByTestId('editor-indent')).toBeVisible()
+    await expect(page.getByTestId('editor-outdent')).toBeVisible()
+    await expect(page.getByTestId('editor-bold')).toBeVisible()
+  })
+
+  test('table formatting toggles update table styles', async ({ page }) => {
+    await boot(page, { noFail: '1' })
+    await page.getByTestId('entry-tree-item-entry-1').click()
+
+    const table = page.locator('.table-wrap').first()
+    await expect(page.getByTestId('table-header-toggle')).toBeVisible()
+    await expect(table.locator('td.th')).toHaveCount(3)
+
+    await page.getByTestId('table-header-toggle').click()
+    await expect(table.locator('td.th')).toHaveCount(0)
+
+    await page.getByTestId('table-striped-toggle').click()
+    await expect(table).toHaveClass(/table-striped/)
+
+    await page.getByTestId('table-compact-toggle').click()
+    await expect(table).toHaveClass(/table-compact/)
+  })
+
+  test('mobile sync check panel shows server info', async ({ page }) => {
+    await boot(page, { noFail: '1' })
+    await selectFirstEntry(page)
+    await page.getByTestId('editor-tab-details').click()
+    const panel = page.getByTestId('mobile-sync-check')
+    await expect(panel).toBeVisible()
+    await expect(panel).toContainText('Server URL')
+    await expect(panel).toContainText('Shared upload')
+  })
+
+  test('persists entries after local storage reset', async ({ page }) => {
+    await boot(page, { noFail: '1' })
+    await page.getByTestId('sidebar-new-entry').click()
+    await page.getByLabel('Title').fill('Server persistence note')
+    await page.getByRole('button', { name: 'Create entry' }).click()
+    await page.getByTestId('save-note-btn').click()
+    await expect(page.getByRole('heading', { name: 'Server persistence note' })).toBeVisible()
+
+    await page.waitForTimeout(600)
+    await page.evaluate(() => window.localStorage.clear())
+    await page.reload()
+
+    await page.getByText('Server persistence note', { exact: true }).click()
+    await expect(page.getByRole('heading', { name: 'Server persistence note' })).toBeVisible()
   })
 
   test('workspace tabs support split view', async ({ page }) => {

@@ -11,6 +11,8 @@ pnpm-debug.log*
 **/dist/
 **/dist-ssr/
 *.local
+.labnote-data/
+.labnote-dist/
 
 # Playwright artifacts
 web/test-results/

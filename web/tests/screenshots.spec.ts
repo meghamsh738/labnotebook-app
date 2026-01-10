@@ -13,6 +13,7 @@ test('generate feature screenshots', async ({ page }) => {
 
   fs.mkdirSync(outDir, { recursive: true })
 
+  await page.request.post('/api/reset')
   await page.addInitScript(() => {
     window.localStorage.clear()
     window.localStorage.setItem('labnote.mockSync.noFail', '1')
@@ -60,9 +61,10 @@ test('generate feature screenshots', async ({ page }) => {
   await page.screenshot({ path: path.join(outDir, '04-edit-mode.png'), fullPage: true })
 
   await page.getByRole('button', { name: 'Settings' }).click()
-  await expect(page.getByRole('dialog')).toBeVisible()
+  const settingsDialog = page.getByRole('dialog')
+  await expect(settingsDialog).toBeVisible()
   await page.screenshot({ path: path.join(outDir, '05-settings.png') })
-  await page.getByRole('button', { name: 'Close' }).click()
+  await settingsDialog.getByRole('button', { name: 'Close', exact: true }).click()
 
   await page.getByTestId('cancel-edit-btn').click()
   await expect(page.getByTestId('edit-note-btn')).toBeVisible()
@@ -89,4 +91,25 @@ test('generate feature screenshots', async ({ page }) => {
   await popup.setViewportSize({ width: 1100, height: 780 })
   await popup.screenshot({ path: path.join(outDir, '07-export-pdf.png'), fullPage: true })
   await popup.close()
+})
+
+test('mobile landing', async ({ page }) => {
+  await page.request.post('/api/reset')
+  await page.addInitScript(() => {
+    window.localStorage.clear()
+    window.localStorage.setItem('labnote.mockSync.noFail', '1')
+    ;(window as unknown as { showDirectoryPicker?: unknown }).showDirectoryPicker = undefined
+    ;(window as unknown as { __labnoteMockSync?: { noFail?: boolean; failNext?: boolean } }).__labnoteMockSync = {
+      noFail: true,
+      failNext: false,
+    }
+  })
+
+  page.on('dialog', (d) => d.dismiss())
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.emulateMedia({ reducedMotion: 'reduce' })
+  await page.goto('/')
+  await expect(page.getByTestId('today-entry-card')).toBeVisible()
+  await expect(page.getByTestId('today-capture-photo')).toBeVisible()
+  await page.screenshot({ path: path.join(outDir, '08-mobile-landing.png'), fullPage: true })
 })

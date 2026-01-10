@@ -57,6 +57,7 @@ export type BlockType =
   | 'image'
   | 'file'
   | 'checklist'
+  | 'list'
   | 'quote'
   | 'divider'
 
@@ -65,6 +66,12 @@ export interface TextRun {
   bold?: boolean
   italic?: boolean
   underline?: boolean
+  superscript?: boolean
+  subscript?: boolean
+  font?: 'body' | 'display' | 'mono'
+  fontSize?: number
+  color?: string
+  highlight?: string
 }
 
 export interface BlockBase {
@@ -74,6 +81,7 @@ export interface BlockBase {
   updatedBy?: string
   locked?: boolean
   align?: 'left' | 'center' | 'right' | 'justify'
+  indent?: number
 }
 
 export interface HeadingBlock extends BlockBase {
@@ -93,6 +101,9 @@ export interface TableBlock extends BlockBase {
   type: 'table'
   data: string[][]
   caption?: string
+  header?: boolean
+  striped?: boolean
+  compact?: boolean
 }
 
 export interface ImageBlock extends BlockBase {
@@ -115,9 +126,22 @@ export interface ChecklistItem {
   runs?: TextRun[]
 }
 
+export interface ListItem {
+  id: string
+  text: string
+  runs?: TextRun[]
+  children?: ListItem[]
+}
+
 export interface ChecklistBlock extends BlockBase {
   type: 'checklist'
   items: ChecklistItem[]
+}
+
+export interface ListBlock extends BlockBase {
+  type: 'list'
+  ordered?: boolean
+  items: ListItem[]
 }
 
 export interface QuoteBlock extends BlockBase {
@@ -137,6 +161,7 @@ export type Block =
   | ImageBlock
   | FileBlock
   | ChecklistBlock
+  | ListBlock
   | QuoteBlock
   | DividerBlock
 

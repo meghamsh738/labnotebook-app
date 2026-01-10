@@ -53,7 +53,7 @@ npx playwright install
 
 ### WSL + mounted drive note
 
-If you work from a mounted Windows drive path like `/mnt/d/...`, `npm install` can fail with `EPERM`/`chmod` errors due to Windows filesystem semantics. The simplest fix is to move the repo into the Linux filesystem (for example `~/projects/...`) before installing.
+If you work from a mounted Windows drive path like `/mnt/<drive>/...`, `npm install` can fail with `EPERM`/`chmod` errors due to Windows filesystem semantics. The simplest fix is to move the repo into the Linux filesystem (for example `~/projects/...`) before installing.
 
 If you must keep the repo on a mounted drive, one workaround is to install dependencies in the Linux filesystem and symlink `web/node_modules` (this path is gitignored):
 
@@ -62,7 +62,7 @@ mkdir -p ~/.labnote-modules
 cd ~/.labnote-modules
 npm init -y
 npm install
-ln -s ~/.labnote-modules/node_modules "/mnt/d/coding projects/lab note taking app/web/node_modules"
+ln -s ~/.labnote-modules/node_modules "/mnt/<drive>/coding-projects/lab-note-taking-app/web/node_modules"
 ```
 
 ## Tests
@@ -387,7 +387,7 @@ Optionally:
 
 * Add a “Default raw data path” per experiment:
 
-  * e.g., `/labserver/TNF_project/2024-10-14/`.
+  * e.g., `/fileserver/labshare/2024-10-14/`.
   * App can auto-append filenames to construct full paths.
 
 ---
@@ -519,7 +519,7 @@ A first clickable shell lives in `web/` using Vite + React + TypeScript.
 **Run it**
 
 ```bash
-cd "${PWD}/web"  # /mnt/d/coding projects/lab note taking app/web
+cd "${PWD}/web"  # /mnt/<drive>/coding-projects/lab-note-taking-app/web
 npm install       # once
 npm run dev -- --host
 ```

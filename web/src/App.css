@@ -401,6 +401,13 @@
   gap: var(--space-3);
 }
 
+.upload-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
 .action-card {
   display: flex;
   align-items: flex-start;
@@ -888,6 +895,22 @@
   overflow: hidden;
 }
 
+.table-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+}
+
+.table-align {
+  display: inline-flex;
+  gap: 6px;
+  margin-left: auto;
+}
+
 .table-wrap table {
   width: 100%;
   border-collapse: collapse;
@@ -903,6 +926,15 @@
   font-weight: 700;
   color: var(--warning);
   background: var(--warning-soft);
+}
+
+.table-wrap.table-striped tr:nth-child(even) td {
+  background: var(--surface-1);
+}
+
+.table-wrap.table-compact td {
+  padding: 6px 8px;
+  font-size: 12px;
 }
 
 .media-card {
@@ -1030,6 +1062,62 @@
   border-bottom: 1px solid var(--border);
 }
 
+.toolbar-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.toolbar-label select {
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+  padding: 4px 8px;
+  font-size: 12px;
+  font-family: var(--font-body);
+}
+
+.toolbar-label input[type='color'] {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--panel);
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.toolbar-label input[type='color']::-webkit-color-swatch-wrapper {
+  padding: 0;
+}
+
+.toolbar-label input[type='color']::-webkit-color-swatch {
+  border: none;
+  border-radius: var(--radius-sm);
+}
+
+.color-swatches {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.color-swatch {
+  width: 16px;
+  height: 16px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  padding: 0;
+  cursor: pointer;
+}
+
 .toolbar-group {
   display: flex;
   gap: 6px;
@@ -1057,6 +1145,19 @@
   outline: none;
 }
 
+.list-block {
+  padding-left: 1.4em;
+  margin: 6px 0;
+}
+
+.list-block.nested {
+  margin-top: 6px;
+}
+
+.list-item {
+  margin: 4px 0;
+}
+
 .divider {
   border: none;
   border-bottom: 1px solid var(--border);
@@ -1081,6 +1182,24 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   padding: 10px 12px;
+}
+
+.sync-check {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sync-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.sync-row > :last-child {
+  text-align: right;
+  word-break: break-word;
 }
 
 .pinned-list,
