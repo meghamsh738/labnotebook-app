@@ -22,12 +22,12 @@ async function boot(
 }
 
 async function selectFirstEntry(page: Page) {
-  const seeded = page.locator('[data-testid="entry-tree-item-entry-1"]')
+  const seeded = page.locator('[data-testid="entry-list-item-entry-1"]')
   if (await seeded.count()) {
     await seeded.first().click()
     return
   }
-  await page.locator('[data-testid^="entry-tree-item-"]').first().click()
+  await page.locator('[data-testid^="entry-list-item-"]').first().click()
 }
 
 test.describe('Lab note taking app', () => {
@@ -96,7 +96,7 @@ test.describe('Lab note taking app', () => {
 
   test('table formatting toggles update table styles', async ({ page }) => {
     await boot(page, { noFail: '1' })
-    await page.getByTestId('entry-tree-item-entry-1').click()
+    await page.getByTestId('entry-list-item-entry-1').click()
 
     const table = page.locator('.table-wrap').first()
     await expect(page.getByTestId('table-header-toggle')).toBeVisible()
@@ -142,7 +142,7 @@ test.describe('Lab note taking app', () => {
     await boot(page, { noFail: '1' })
     await selectFirstEntry(page)
 
-    const entryItems = page.locator('[data-testid^="entry-tree-item-"]')
+    const entryItems = page.locator('[data-testid^="entry-list-item-"]')
     const entryCount = await entryItems.count()
     expect(entryCount).toBeGreaterThan(1)
     await entryItems.nth(1).click()

@@ -29,11 +29,11 @@ test('generate feature screenshots', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 })
   await page.emulateMedia({ reducedMotion: 'reduce' })
   await page.goto('/')
-  const seeded = page.locator('[data-testid="entry-tree-item-entry-1"]')
+  const seeded = page.locator('[data-testid="entry-list-item-entry-1"]')
   if (await seeded.count()) {
     await seeded.first().click()
   } else {
-    await page.locator('[data-testid^="entry-tree-item-"]').first().click()
+    await page.locator('[data-testid^="entry-list-item-"]').first().click()
   }
   await expect(page.getByRole('heading', { name: /day 3/i })).toBeVisible()
   await page.screenshot({ path: path.join(outDir, '01-dashboard.png'), fullPage: true })
@@ -53,11 +53,10 @@ test('generate feature screenshots', async ({ page }) => {
   if (await seeded.count()) {
     await seeded.first().click()
   } else {
-    await page.locator('[data-testid^="entry-tree-item-"]').first().click()
+    await page.locator('[data-testid^="entry-list-item-"]').first().click()
   }
   await page.getByTestId('edit-note-btn').click()
   await expect(page.getByTestId('save-note-btn')).toBeVisible()
-  await page.getByRole('link', { name: /view|open/i }).first().scrollIntoViewIfNeeded()
   await page.screenshot({ path: path.join(outDir, '04-edit-mode.png'), fullPage: true })
 
   await page.getByRole('button', { name: 'Settings' }).click()
@@ -68,6 +67,13 @@ test('generate feature screenshots', async ({ page }) => {
 
   await page.getByTestId('cancel-edit-btn').click()
   await expect(page.getByTestId('edit-note-btn')).toBeVisible()
+  await page.getByTestId('editor-tab-note').click()
+  const seededAgain = page.locator('[data-testid="entry-list-item-entry-1"]')
+  if (await seededAgain.count()) {
+    await seededAgain.first().click()
+  } else {
+    await page.locator('[data-testid^="entry-list-item-"]').first().click()
+  }
   const statusChip = page.getByTestId('sync-status-chip')
   await expect(statusChip).toContainText('Synced')
   await page.context().setOffline(true)
@@ -82,10 +88,18 @@ test('generate feature screenshots', async ({ page }) => {
   await page.getByTestId('sync-now-btn').click()
   await expect(statusChip).toContainText('Synced')
   await page.getByTestId('editor-tab-note').click()
+  const exportEntry = page.locator('[data-testid="entry-list-item-entry-1"]')
+  if (await exportEntry.count()) {
+    await exportEntry.first().click()
+  } else {
+    await page.locator('[data-testid^="entry-list-item-"]').first().click()
+  }
+  const exportPdf = page.getByTestId('export-pdf-btn')
+  await expect(exportPdf).toBeEnabled()
 
   const [popup] = await Promise.all([
     page.waitForEvent('popup'),
-    page.getByTestId('export-pdf-btn').click(),
+    exportPdf.click(),
   ])
   await expect(popup.locator('text=Print / Save to PDF')).toBeVisible()
   await popup.setViewportSize({ width: 1100, height: 780 })

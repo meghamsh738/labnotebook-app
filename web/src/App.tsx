@@ -5,7 +5,7 @@ import type { Descendant } from 'slate'
 import { Slate, Editable, withReact, ReactEditor, useSlate, useSlateStatic } from 'slate-react'
 import type { RenderElementProps, RenderLeafProps } from 'slate-react'
 import lunr from 'lunr'
-import { type LucideIcon, ArrowRight, Calendar, Camera, Columns2, Files, FlaskConical, FolderTree, Info, Link2, NotebookPen, Paperclip, Pin, PinOff, Plus, Search, SlidersHorizontal, X } from 'lucide-react'
+import { type LucideIcon, ArrowRight, Calendar, Camera, Columns2, Files, FlaskConical, FolderTree, Info, Link2, NotebookPen, Paperclip, Pin, PinOff, Plus, Search, X } from 'lucide-react'
 import { cacheFile, getCachedFile } from './idb'
 import { writeFileToCache, restoreCacheHandle, ensureCacheDir, pickCacheDir, clearCacheHandle } from './fileCache'
 import './App.css'
@@ -45,6 +45,13 @@ function newId(prefix: string) {
 function getDateBucket(date: Date): string {
   const offsetMs = date.getTimezoneOffset() * 60_000
   return new Date(date.getTime() - offsetMs).toISOString().slice(0, 10)
+}
+
+function monthStartFromIso(isoDate: string) {
+  const parts = isoDate.split('-')
+  const year = Number(parts[0] ?? new Date().getFullYear())
+  const month = Number(parts[1] ?? 1) - 1
+  return new Date(year, Math.max(0, month), 1)
 }
 
 type EntryTemplateId = 'experiment' | 'blank'
@@ -743,6 +750,9 @@ function App() {
   const [selectedTags, setSelectedTags] = useState<string[]>([])
   const [selectedProject, setSelectedProject] = useState<string>('all')
   const [selectedExperiment, setSelectedExperiment] = useState<string>('all')
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const [selectedDate, setSelectedDate] = useState<string | null>(null)
+  const [calendarMonth, setCalendarMonth] = useState<Date>(() => monthStartFromIso(getDateBucket(new Date())))
   const [filterHasImage, setFilterHasImage] = useState(false)
   const [filterHasFile, setFilterHasFile] = useState(false)
   const [datePreset, setDatePreset] = useState<'all' | '7d' | '30d'>('all')
@@ -915,6 +925,13 @@ function App() {
     } catch (err) {
       return { ok: false, message: err instanceof Error ? err.message : 'Write test failed.' }
     }
+  }, [])
+
+  const handleSelectDate = useCallback((date: string | null) => {
+    setSelectedDate(date)
+    if (!date) return
+    setCalendarMonth(monthStartFromIso(date))
+    setDatePreset('all')
   }, [])
 
   const handleCreateEntry = useCallback(
@@ -1668,7 +1685,9 @@ function App() {
         if (!hasFile) return false
       }
 
-      if (datePreset !== 'all') {
+      if (selectedDate && entry.dateBucket !== selectedDate) return false
+
+      if (!selectedDate && datePreset !== 'all') {
         const entryDate = new Date(entry.dateBucket)
         const days = datePreset === '7d' ? 7 : 30
         const diffDays = (now.getTime() - entryDate.getTime()) / (1000 * 60 * 60 * 24)
@@ -1686,6 +1705,7 @@ function App() {
     filterHasImage,
     filterHasFile,
     matchedIds,
+    selectedDate,
     datePreset,
     entryList,
     attachmentsForEntry,
@@ -1835,7 +1855,7 @@ function App() {
 
   return (
     <div className="app-bg">
-      <div className="app-shell">
+      <div className={`app-shell ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
         <Sidebar
           labs={sampleData.labs}
           projects={projects}
@@ -1859,12 +1879,21 @@ function App() {
           onToggleHasImage={() => setFilterHasImage((v) => !v)}
           onToggleHasFile={() => setFilterHasFile((v) => !v)}
           datePreset={datePreset}
-          onSelectDatePreset={setDatePreset}
+          onSelectDatePreset={(preset) => {
+            setDatePreset(preset)
+            setSelectedDate(null)
+          }}
+          selectedDate={selectedDate}
+          onSelectDate={handleSelectDate}
+          calendarMonth={calendarMonth}
+          onCalendarMonthChange={setCalendarMonth}
           onSelectEntry={(id) => openEntry(id)}
           onNewEntry={() => setNewEntryOpen(true)}
           onNewExperiment={() => setNewExperimentOpen(true)}
           onQuickCapture={() => handleCreateEntry({ templateId: 'blank', quickCapture: true })}
           onOpenSettings={() => setSettingsOpen(true)}
+          collapsed={sidebarCollapsed}
+          onToggleCollapsed={() => setSidebarCollapsed((prev) => !prev)}
         />
         <EditorPane
           entry={entry}
@@ -1999,11 +2028,17 @@ interface SidebarProps {
   onToggleHasFile: () => void
   datePreset: 'all' | '7d' | '30d'
   onSelectDatePreset: (val: 'all' | '7d' | '30d') => void
+  selectedDate: string | null
+  onSelectDate: (date: string | null) => void
+  calendarMonth: Date
+  onCalendarMonthChange: (next: Date) => void
   onSelectEntry: (id: string) => void
   onNewEntry: () => void
   onNewExperiment: () => void
   onQuickCapture: () => void
   onOpenSettings: () => void
+  collapsed: boolean
+  onToggleCollapsed: () => void
 }
 
 function Sidebar({
@@ -2026,11 +2061,17 @@ function Sidebar({
   onToggleHasFile,
   datePreset,
   onSelectDatePreset,
+  selectedDate,
+  onSelectDate,
+  calendarMonth,
+  onCalendarMonthChange,
   onSelectEntry,
   onNewEntry,
   onNewExperiment,
   onQuickCapture,
   onOpenSettings,
+  collapsed,
+  onToggleCollapsed,
 }: SidebarProps) {
   const activeLab = labs[0]
   const allTags = useMemo(
@@ -2042,9 +2083,20 @@ function Sidebar({
     return experiments.filter((ex) => ex.projectId === selectedProject)
   }, [experiments, selectedProject])
   const searchRef = useRef<HTMLInputElement | null>(null)
-  const [activeTab, setActiveTab] = useState<'hierarchy' | 'filters'>('hierarchy')
-  const [collapsedProjects, setCollapsedProjects] = useState<Record<string, boolean>>({})
-  const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({})
+  const [showAdvanced, setShowAdvanced] = useState(false)
+  const [tagQuery, setTagQuery] = useState('')
+  const calendarLabel = useMemo(() => {
+    return new Intl.DateTimeFormat('en-US', { month: 'long', year: 'numeric' }).format(calendarMonth)
+  }, [calendarMonth])
+
+  const normalizedTagQuery = tagQuery.trim().toLowerCase()
+  const filteredTags = useMemo(
+    () =>
+      normalizedTagQuery
+        ? allTags.filter((tag) => tag.toLowerCase().includes(normalizedTagQuery))
+        : allTags,
+    [allTags, normalizedTagQuery]
+  )
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -2057,277 +2109,94 @@ function Sidebar({
     return () => window.removeEventListener('keydown', handler)
   }, [])
 
-  const hierarchy = useMemo(() => {
-    const entriesByProject = new Map<string, Entry[]>()
-    const unassignedEntries: Entry[] = []
+  const calendarDays = useMemo(() => {
+    const year = calendarMonth.getFullYear()
+    const month = calendarMonth.getMonth()
+    const firstDay = new Date(year, month, 1)
+    const startIndex = (firstDay.getDay() + 6) % 7
+    const daysInMonth = new Date(year, month + 1, 0).getDate()
+    const prevMonthDays = new Date(year, month, 0).getDate()
 
-    entries.forEach((entry) => {
-      if (entry.projectId) {
-        const current = entriesByProject.get(entry.projectId) ?? []
-        current.push(entry)
-        entriesByProject.set(entry.projectId, current)
+    return Array.from({ length: 42 }, (_, index) => {
+      const dayNum = index - startIndex + 1
+      let day = dayNum
+      let isOutside = false
+      let date: Date
+
+      if (dayNum < 1) {
+        isOutside = true
+        day = prevMonthDays + dayNum
+        date = new Date(year, month - 1, day)
+      } else if (dayNum > daysInMonth) {
+        isOutside = true
+        day = dayNum - daysInMonth
+        date = new Date(year, month + 1, day)
       } else {
-        unassignedEntries.push(entry)
+        date = new Date(year, month, dayNum)
       }
+
+      const iso = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+      return { day, iso, isOutside }
     })
+  }, [calendarMonth])
 
-    const projectGroups = projects
-      .map((project) => {
-        const projectEntries = entriesByProject.get(project.id) ?? []
-        if (projectEntries.length === 0) return null
-
-        const entriesByExperiment = new Map<string, Entry[]>()
-        const generalEntries: Entry[] = []
-
-        projectEntries.forEach((entry) => {
-          if (entry.experimentId) {
-            const current = entriesByExperiment.get(entry.experimentId) ?? []
-            current.push(entry)
-            entriesByExperiment.set(entry.experimentId, current)
-          } else {
-            generalEntries.push(entry)
-          }
-        })
-
-        const experimentGroups = experiments
-          .filter((ex) => ex.projectId === project.id)
-          .map((ex) => ({
-            id: ex.id,
-            title: ex.title,
-            entries: entriesByExperiment.get(ex.id) ?? [],
-          }))
-          .filter((group) => group.entries.length > 0)
-
-        const orphanEntries = Array.from(entriesByExperiment.entries())
-          .filter(([expId]) => !experiments.some((ex) => ex.id === expId))
-          .flatMap(([, list]) => list)
-
-        const groups = [
-          ...experimentGroups,
-          ...(generalEntries.length
-            ? [{ id: `general-${project.id}`, title: 'General notes', entries: generalEntries }]
-            : []),
-          ...(orphanEntries.length
-            ? [{ id: `orphan-${project.id}`, title: 'Unlinked experiments', entries: orphanEntries }]
-            : []),
-        ]
-
-        return {
-          project,
-          groups,
-          count: projectEntries.length,
-        }
-      })
-      .filter(Boolean) as Array<{ project: Project; groups: { id: string; title: string; entries: Entry[] }[]; count: number }>
-
-    return { projectGroups, unassignedEntries }
-  }, [entries, experiments, projects])
-
-  const toggleProject = useCallback((id: string) => {
-    setCollapsedProjects((prev) => ({ ...prev, [id]: !prev[id] }))
-  }, [])
-
-  const toggleGroup = useCallback((id: string) => {
-    setCollapsedGroups((prev) => ({ ...prev, [id]: !prev[id] }))
-  }, [])
+  const today = new Date()
+  const todayIso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`
 
   return (
-    <aside className="panel sidebar">
-      <div className="lab-head">
-        <div>
-          <p className="eyebrow">Lab</p>
-          <h2>{activeLab?.name ?? 'Lab'}</h2>
-          <p className="muted">Storage: {activeLab?.storageConfig.path}</p>
-        </div>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-          <div className="status-chip success">Sync ready</div>
-          <button className="pill soft" onClick={onOpenSettings} type="button">Settings</button>
-        </div>
-      </div>
-
-      <div className="search-box">
-        <Search className="icon" aria-hidden="true" />
-        <input
-          placeholder="Search notes, samples, files"
-          value={query}
-          ref={searchRef}
-          onChange={(e) => onQueryChange(e.target.value)}
-        />
-        <span className="kbd">Ctrl + K</span>
-      </div>
-
-      <div className="quick-actions">
-        <button className="ghost" onClick={onNewEntry} data-testid="sidebar-new-entry">
-          <Plus className="icon" aria-hidden="true" />
-          New Entry
-        </button>
-        <button className="ghost" onClick={onNewExperiment} data-testid="sidebar-new-experiment">
-          <FlaskConical className="icon" aria-hidden="true" />
-          New Experiment
-        </button>
-        <button className="accent" onClick={onQuickCapture} data-testid="sidebar-quick-capture">
-          <Camera className="icon" aria-hidden="true" />
-          Quick Capture
-        </button>
-      </div>
-
-      <div className="sidebar-tabs" role="tablist" aria-label="Sidebar views">
+    <aside className={`panel sidebar ${collapsed ? 'collapsed' : ''}`}>
+      <div className="sidebar-toggle-row">
         <button
+          className="pill soft sidebar-toggle"
           type="button"
-          role="tab"
-          aria-selected={activeTab === 'hierarchy'}
-          id="sidebar-tab-hierarchy"
-          className={`tab-button ${activeTab === 'hierarchy' ? 'active' : ''}`}
-          onClick={() => setActiveTab('hierarchy')}
-          data-testid="sidebar-tab-hierarchy"
+          onClick={onToggleCollapsed}
+          data-testid="sidebar-toggle"
+          aria-expanded={!collapsed}
         >
-          <FolderTree className="icon" aria-hidden="true" />
-          Hierarchy
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={activeTab === 'filters'}
-          id="sidebar-tab-filters"
-          className={`tab-button ${activeTab === 'filters' ? 'active' : ''}`}
-          onClick={() => setActiveTab('filters')}
-          data-testid="sidebar-tab-filters"
-        >
-          <SlidersHorizontal className="icon" aria-hidden="true" />
-          Filters
+          {collapsed ? 'Show panel' : 'Hide panel'}
         </button>
       </div>
 
-      {activeTab === 'hierarchy' && (
-        <section className="sidebar-section tab-panel" role="tabpanel" aria-labelledby="sidebar-tab-hierarchy">
-          <div className="section-title">Workspace</div>
-          <div className="muted tiny" style={{ marginBottom: 6 }}>
-            Showing {entries.length} item{entries.length === 1 ? '' : 's'}
+      {!collapsed && (
+        <div className="sidebar-content">
+          <div className="lab-head">
+            <div>
+              <p className="eyebrow">Lab</p>
+              <h2>{activeLab?.name ?? 'Lab'}</h2>
+              <p className="muted">Storage: {activeLab?.storageConfig.path}</p>
+            </div>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <div className="status-chip success">Sync ready</div>
+              <button className="pill soft" onClick={onOpenSettings} type="button">Settings</button>
+            </div>
           </div>
-          <div className="tree" data-testid="entry-tree">
-            {hierarchy.projectGroups.map(({ project, groups, count }) => {
-              const isExpanded = !collapsedProjects[project.id]
-              return (
-                <div key={project.id} className="tree-group">
-                  <button
-                    type="button"
-                    className="tree-parent"
-                    onClick={() => toggleProject(project.id)}
-                    aria-expanded={isExpanded}
-                    data-testid={`tree-project-${project.id}`}
-                  >
-                    <span className="tree-caret" aria-hidden="true">{isExpanded ? '▾' : '▸'}</span>
-                    <FolderTree className="icon" aria-hidden="true" />
-                    <span className="tree-label">{project.title}</span>
-                    <span className="pill soft tree-count">{count}</span>
-                  </button>
-                  {isExpanded && (
-                    <div className="tree-children">
-                      {groups.map((group) => {
-                        const groupExpanded = !collapsedGroups[group.id]
-                        const GroupIcon =
-                          group.title === 'General notes'
-                            ? NotebookPen
-                            : group.title === 'Unlinked experiments'
-                              ? Link2
-                              : FlaskConical
-                        return (
-                          <div key={group.id} className="tree-group">
-                            <button
-                              type="button"
-                              className="tree-parent tree-subparent"
-                              onClick={() => toggleGroup(group.id)}
-                              aria-expanded={groupExpanded}
-                              data-testid={`tree-group-${group.id}`}
-                            >
-                              <span className="tree-caret" aria-hidden="true">{groupExpanded ? '▾' : '▸'}</span>
-                              <GroupIcon className="icon" aria-hidden="true" />
-                              <span className="tree-label">{group.title}</span>
-                              <span className="pill soft tree-count">{group.entries.length}</span>
-                            </button>
-                            {groupExpanded && (
-                              <div className="tree-children">
-                                {group.entries.map((entry) => (
-                                  <button
-                                    key={entry.id}
-                                    type="button"
-                                    className={`tree-entry ${selectedEntryId === entry.id ? 'active' : ''}`}
-                                    onClick={() => onSelectEntry(entry.id)}
-                                    data-testid={`entry-tree-item-${entry.id}`}
-                                  >
-                                    <NotebookPen className="icon" aria-hidden="true" />
-                                    <div>
-                                      <div className="title-sm">{entry.title}</div>
-                                      <p className="muted tiny">{dateOnly.format(new Date(entry.createdDatetime))}</p>
-                                    </div>
-                                    {entry.tags[0] ? (
-                                      <span className="pill ghost-pill">{entry.tags[0]}</span>
-                                    ) : (
-                                      <span className="pill soft">Draft</span>
-                                    )}
-                                  </button>
-                                ))}
-                              </div>
-                            )}
-                          </div>
-                        )
-                      })}
-                    </div>
-                  )}
-                </div>
-              )
-            })}
 
-            {hierarchy.unassignedEntries.length > 0 && (
-              <div className="tree-group">
-                <button
-                  type="button"
-                  className="tree-parent"
-                  onClick={() => toggleProject('unassigned')}
-                  aria-expanded={!collapsedProjects.unassigned}
-                  data-testid="tree-project-unassigned"
-                >
-                  <span className="tree-caret" aria-hidden="true">{collapsedProjects.unassigned ? '▸' : '▾'}</span>
-                  <FolderTree className="icon" aria-hidden="true" />
-                  <span className="tree-label">Unassigned</span>
-                  <span className="pill soft tree-count">{hierarchy.unassignedEntries.length}</span>
-                </button>
-                {!collapsedProjects.unassigned && (
-                  <div className="tree-children">
-                    {hierarchy.unassignedEntries.map((entry) => (
-                      <button
-                        key={entry.id}
-                        type="button"
-                        className={`tree-entry ${selectedEntryId === entry.id ? 'active' : ''}`}
-                        onClick={() => onSelectEntry(entry.id)}
-                        data-testid={`entry-tree-item-${entry.id}`}
-                      >
-                        <NotebookPen className="icon" aria-hidden="true" />
-                        <div>
-                          <div className="title-sm">{entry.title}</div>
-                          <p className="muted tiny">{dateOnly.format(new Date(entry.createdDatetime))}</p>
-                        </div>
-                        {entry.tags[0] ? (
-                          <span className="pill ghost-pill">{entry.tags[0]}</span>
-                        ) : (
-                          <span className="pill soft">Draft</span>
-                        )}
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
-
-            {entries.length === 0 && (
-              <div className="muted tiny">No entries match these filters.</div>
-            )}
+          <div className="search-box">
+            <Search className="icon" aria-hidden="true" />
+            <input
+              placeholder="Search notes, samples, files"
+              value={query}
+              ref={searchRef}
+              onChange={(e) => onQueryChange(e.target.value)}
+            />
+            <span className="kbd">Ctrl + K</span>
           </div>
-        </section>
-      )}
 
-      {activeTab === 'filters' && (
-        <div className="tab-panel" role="tabpanel" aria-labelledby="sidebar-tab-filters">
+          <div className="quick-actions">
+            <button className="ghost" onClick={onNewEntry} data-testid="sidebar-new-entry">
+              <Plus className="icon" aria-hidden="true" />
+              New Entry
+            </button>
+            <button className="ghost" onClick={onNewExperiment} data-testid="sidebar-new-experiment">
+              <FlaskConical className="icon" aria-hidden="true" />
+              New Experiment
+            </button>
+            <button className="accent" onClick={onQuickCapture} data-testid="sidebar-quick-capture">
+              <Camera className="icon" aria-hidden="true" />
+              Quick Capture
+            </button>
+          </div>
+
           <section className="sidebar-section">
             <div className="section-title">Filter</div>
             <label className="field">
@@ -2353,60 +2222,183 @@ function Sidebar({
           </section>
 
           <section className="sidebar-section">
-            <div className="section-title">Tag filters</div>
-            <div className="chip-row">
-              {allTags.map((tag) => (
+            <div className="section-title">Calendar</div>
+            <div className="calendar" data-testid="calendar">
+              <div className="calendar-header">
+                <div className="calendar-month">{calendarLabel}</div>
+                <div className="calendar-nav">
+                  <button
+                    type="button"
+                    aria-label="Previous month"
+                    onClick={() =>
+                      onCalendarMonthChange(new Date(calendarMonth.getFullYear(), calendarMonth.getMonth() - 1, 1))
+                    }
+                  >
+                    ^
+                  </button>
+                  <button
+                    type="button"
+                    aria-label="Next month"
+                    onClick={() =>
+                      onCalendarMonthChange(new Date(calendarMonth.getFullYear(), calendarMonth.getMonth() + 1, 1))
+                    }
+                  >
+                    v
+                  </button>
+                </div>
+              </div>
+              <div className="calendar-meta">
+                <span>{selectedDate ? `Selected: ${selectedDate}` : 'All dates'}</span>
+                {selectedDate && (
+                  <button
+                    type="button"
+                    className="calendar-clear"
+                    onClick={() => onSelectDate(null)}
+                    data-testid="calendar-clear"
+                  >
+                    Clear
+                  </button>
+                )}
+              </div>
+              <div className="calendar-weekdays">
+                {['Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa', 'Su'].map((day) => (
+                  <div key={day}>{day}</div>
+                ))}
+              </div>
+              <div className="calendar-grid">
+                {calendarDays.map((day) => {
+                  const isSelected = selectedDate === day.iso
+                  const isToday = todayIso === day.iso
+                  return (
+                    <button
+                      key={day.iso}
+                      type="button"
+                      className={`calendar-day${day.isOutside ? ' outside' : ''}${isSelected ? ' selected' : ''}${isToday ? ' today' : ''}`}
+                      onClick={() => {
+                        if (isSelected) {
+                          onSelectDate(null)
+                          return
+                        }
+                        onSelectDate(day.iso)
+                      }}
+                      aria-pressed={isSelected}
+                      aria-label={`${day.day} ${calendarLabel}`}
+                      data-testid={`calendar-day-${day.iso}`}
+                    >
+                      {day.day}
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+          </section>
+
+          <section className="sidebar-section">
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+              <div className="section-title">Entries</div>
+              <button className="pill soft" type="button" onClick={() => setShowAdvanced((v) => !v)}>
+                {showAdvanced ? 'Less' : 'More'}
+              </button>
+            </div>
+            <div className="muted tiny" style={{ marginBottom: 6 }}>
+              Showing {entries.length} item{entries.length === 1 ? '' : 's'}
+            </div>
+            <div className="entry-list" data-testid="entry-list">
+              {entries.length === 0 && (
+                <div className="muted tiny">No entries match these filters.</div>
+              )}
+              {entries.map((entry) => (
                 <button
-                  key={tag}
-                  className={`pill soft ${selectedTags.includes(tag) ? 'active-pill' : ''}`}
-                  onClick={() => onToggleTag(tag)}
+                  key={entry.id}
+                  type="button"
+                  className={`entry-item ${selectedEntryId === entry.id ? 'active' : ''}`}
+                  onClick={() => onSelectEntry(entry.id)}
+                  data-testid={`entry-list-item-${entry.id}`}
                 >
-                  {tag}
+                  <div>
+                    <div className="title-sm">{entry.title}</div>
+                    <p className="muted tiny">{dateOnly.format(new Date(entry.createdDatetime))}</p>
+                  </div>
+                  {entry.tags[0] ? (
+                    <span className="pill ghost-pill">{entry.tags[0]}</span>
+                  ) : (
+                    <span className="pill soft">Draft</span>
+                  )}
                 </button>
               ))}
             </div>
-          </section>
 
-          <section className="sidebar-section">
-            <div className="section-title">Attachments</div>
-            <div className="chip-row">
-              <button
-                className={`pill soft ${filterHasImage ? 'active-pill' : ''}`}
-                onClick={onToggleHasImage}
-              >
-                Has image
-              </button>
-              <button
-                className={`pill soft ${filterHasFile ? 'active-pill' : ''}`}
-                onClick={onToggleHasFile}
-              >
-                Has file/raw/pdf
-              </button>
-            </div>
-          </section>
+            {showAdvanced && (
+              <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 12 }}>
+                <label className="field">
+                  <span className="muted tiny">Search tags</span>
+                  <input
+                    value={tagQuery}
+                    onChange={(e) => setTagQuery(e.target.value)}
+                    placeholder="Filter tags…"
+                    data-testid="tag-search"
+                  />
+                </label>
 
-          <section className="sidebar-section">
-            <div className="section-title">Date</div>
-            <div className="chip-row">
-              <button
-                className={`pill soft ${datePreset === 'all' ? 'active-pill' : ''}`}
-                onClick={() => onSelectDatePreset('all')}
-              >
-                All time
-              </button>
-              <button
-                className={`pill soft ${datePreset === '7d' ? 'active-pill' : ''}`}
-                onClick={() => onSelectDatePreset('7d')}
-              >
-                Last 7d
-              </button>
-              <button
-                className={`pill soft ${datePreset === '30d' ? 'active-pill' : ''}`}
-                onClick={() => onSelectDatePreset('30d')}
-              >
-                Last 30d
-              </button>
-            </div>
+                <div>
+                  <div className="section-title">Tags</div>
+                  <div className="chip-row" data-testid="tag-list">
+                    {filteredTags.map((tag) => (
+                      <button
+                        key={tag}
+                        className={`pill soft ${selectedTags.includes(tag) ? 'active-pill' : ''}`}
+                        onClick={() => onToggleTag(tag)}
+                      >
+                        {tag}
+                      </button>
+                    ))}
+                    {filteredTags.length === 0 && <span className="muted tiny">No tags found.</span>}
+                  </div>
+                </div>
+
+                <div>
+                  <div className="section-title">Attachments</div>
+                  <div className="chip-row">
+                    <button
+                      className={`pill soft ${filterHasImage ? 'active-pill' : ''}`}
+                      onClick={onToggleHasImage}
+                    >
+                      Has image
+                    </button>
+                    <button
+                      className={`pill soft ${filterHasFile ? 'active-pill' : ''}`}
+                      onClick={onToggleHasFile}
+                    >
+                      Has file/raw/pdf
+                    </button>
+                  </div>
+                </div>
+
+                <div>
+                  <div className="section-title">Date range</div>
+                  <div className="chip-row">
+                    <button
+                      className={`pill soft ${datePreset === 'all' ? 'active-pill' : ''}`}
+                      onClick={() => onSelectDatePreset('all')}
+                    >
+                      All time
+                    </button>
+                    <button
+                      className={`pill soft ${datePreset === '7d' ? 'active-pill' : ''}`}
+                      onClick={() => onSelectDatePreset('7d')}
+                    >
+                      Last 7d
+                    </button>
+                    <button
+                      className={`pill soft ${datePreset === '30d' ? 'active-pill' : ''}`}
+                      onClick={() => onSelectDatePreset('30d')}
+                    >
+                      Last 30d
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
           </section>
         </div>
       )}
