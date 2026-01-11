@@ -1060,6 +1060,8 @@
   gap: 6px;
   padding: 2px 0 10px;
   border-bottom: 1px solid var(--border);
+  align-items: flex-start;
+  max-width: 100%;
 }
 
 .toolbar-label {
@@ -1071,6 +1073,7 @@
   letter-spacing: var(--tracking-label);
   text-transform: uppercase;
   color: var(--muted);
+  flex-wrap: wrap;
 }
 
 .toolbar-label select {
@@ -1107,6 +1110,7 @@
   display: inline-flex;
   gap: 4px;
   align-items: center;
+  flex-wrap: wrap;
 }
 
 .color-swatch {
@@ -1122,6 +1126,9 @@
   display: flex;
   gap: 6px;
   align-items: center;
+  flex-wrap: wrap;
+  max-width: 100%;
+  min-width: 0;
 }
 
 .toolbar-sep {
@@ -1129,6 +1136,20 @@
   background: var(--border);
   align-self: stretch;
   margin: 0 4px;
+}
+
+@media (max-width: 1200px) {
+  .editor-toolbar {
+    gap: var(--s-2);
+  }
+
+  .toolbar-group {
+    width: 100%;
+  }
+
+  .toolbar-sep {
+    display: none;
+  }
 }
 
 .editor-toolbar .pill {
@@ -2513,12 +2534,17 @@ textarea:focus-visible {
   gap: var(--s-2);
   padding: 0 0 var(--s-3);
   border-bottom: 2px solid var(--border);
+  align-items: flex-start;
+  max-width: 100%;
 }
 
 .toolbar-group {
   display: flex;
   gap: var(--s-2);
   align-items: center;
+  flex-wrap: wrap;
+  max-width: 100%;
+  min-width: 0;
 }
 
 .toolbar-sep {
@@ -2526,6 +2552,20 @@ textarea:focus-visible {
   background: var(--border);
   align-self: stretch;
   margin: 0 var(--s-2);
+}
+
+@media (max-width: 1200px) {
+  .editor-toolbar {
+    gap: var(--s-2);
+  }
+
+  .toolbar-group {
+    width: 100%;
+  }
+
+  .toolbar-sep {
+    display: none;
+  }
 }
 
 .editor-toolbar .pill {
