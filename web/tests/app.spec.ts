@@ -47,10 +47,9 @@ const formatUiDate = (isoDate: string) => dateFormatter.format(new Date(`${isoDa
 test.describe('Lab note taking app', () => {
   test('loads baseline UI', async ({ page }) => {
     await boot(page, { noFail: '1' })
-    await expect(page.getByRole('heading', { name: /neuroimmunology lab/i })).toBeVisible()
-    await expect(page.getByTestId('sidebar-new-entry')).toBeVisible()
-    await expect(page.getByTestId('sidebar-quick-capture')).toBeVisible()
-    await expect(page.getByPlaceholder('Search notes, samples, files')).toBeVisible()
+    await expect(page.getByRole('heading', { name: /lab notebook/i })).toBeVisible()
+    await expect(page.getByTestId('sidebar-today-entry')).toBeVisible()
+    await expect(page.getByPlaceholder('Search notes, samples, files')).toHaveCount(0)
     await expect(page.getByTestId('viewer-bar')).toBeVisible()
   })
 
@@ -79,44 +78,31 @@ test.describe('Lab note taking app', () => {
     await selectFirstEntry(page)
     await page.getByTestId('editor-tab-details').click()
 
-    const tagEditor = page.locator('.tag-editor')
+    const tagBlocks = page.locator('.tag-panel-block')
+    const currentTags = tagBlocks.nth(0).locator('.chip-row')
     await page.getByTestId('tag-input').fill('E2E tag')
     await page.getByTestId('tag-add-btn').click()
-    await expect(tagEditor.getByText('E2E tag', { exact: true })).toBeVisible()
+    await expect(currentTags.getByText('E2E tag', { exact: true })).toBeVisible()
 
     await page.getByPlaceholder('Template name').fill('E2E template')
     await page.getByTestId('template-save-btn').click()
-    await expect(page.getByText('E2E template', { exact: true })).toBeVisible()
+    const templateButton = page.locator('.template-list .pill', { hasText: 'E2E template' })
+    await expect(templateButton).toBeVisible()
 
     await page.getByTestId('tag-input').fill('Extra tag')
     await page.getByTestId('tag-add-btn').click()
-    await expect(tagEditor.getByText('Extra tag', { exact: true })).toBeVisible()
+    await expect(currentTags.getByText('Extra tag', { exact: true })).toBeVisible()
 
-    const templateCard = page.locator('.template-card', { hasText: 'E2E template' })
-    await templateCard.getByRole('button', { name: 'Apply' }).click()
-    await expect(tagEditor.getByText('E2E tag', { exact: true })).toBeVisible()
-    await expect(tagEditor.getByText('Extra tag', { exact: true })).not.toBeVisible()
+    await templateButton.click()
+    await expect(currentTags.getByText('E2E template', { exact: true })).toBeVisible()
+    await expect(currentTags.getByText('E2E tag', { exact: true })).not.toBeVisible()
+    await expect(currentTags.getByText('Extra tag', { exact: true })).not.toBeVisible()
   })
 
-  test('creates a new entry from template and pins regions', async ({ page }) => {
+  test('today entry button opens edit mode', async ({ page }) => {
     await boot(page, { noFail: '1' })
-    await selectCalendarDate(page, '2025-12-08')
-    await page.getByTestId('sidebar-new-entry').click()
-    await expect(page.getByRole('dialog')).toBeVisible()
-
-    await page.getByRole('button', { name: 'Create entry' }).click()
-
-    await expect(page.getByRole('heading', { name: formatUiDate('2025-12-08') })).toBeVisible()
+    await page.getByTestId('sidebar-today-entry').click()
     await expect(page.getByTestId('save-note-btn')).toBeVisible()
-
-    await page.getByTestId('save-note-btn').click()
-    await expect(page.getByTestId('edit-note-btn')).toBeVisible()
-
-    await page.getByTestId('editor-tab-details').click()
-    const pinned = page.getByTestId('pinned-regions-list')
-    await expect(pinned.getByText('Aim', { exact: true })).toBeVisible()
-    await expect(pinned.getByText('Experiment', { exact: true })).toBeVisible()
-    await expect(pinned.getByText('Results', { exact: true })).toBeVisible()
   })
 
   test('shows capture photo option on landing', async ({ page }) => {
@@ -198,8 +184,7 @@ test.describe('Lab note taking app', () => {
   test('persists entries after local storage reset', async ({ page }) => {
     await boot(page, { noFail: '1' })
     await selectCalendarDate(page, '2025-12-09')
-    await page.getByTestId('sidebar-new-entry').click()
-    await page.getByRole('button', { name: 'Create entry' }).click()
+    await page.getByTestId('edit-note-btn').click()
     await page.getByTestId('save-note-btn').click()
     await expect(page.getByRole('heading', { name: formatUiDate('2025-12-09') })).toBeVisible()
 
@@ -296,12 +281,12 @@ test.describe('Lab note taking app', () => {
     await expect(dialog.getByText('Disk cache', { exact: true })).toBeVisible()
   })
 
-  test('quick capture reuses the day entry', async ({ page }) => {
+  test('today entry button reuses the day entry', async ({ page }) => {
     await boot(page, { noFail: '1' })
     const title = page.locator('.editor-header h1')
     await expect(title).toBeVisible()
     const before = await title.textContent()
-    await page.getByTestId('sidebar-quick-capture').click()
+    await page.getByTestId('sidebar-today-entry').click()
     await expect(page.getByTestId('save-note-btn')).toBeVisible()
     await expect(title).toHaveText(before ?? '')
   })

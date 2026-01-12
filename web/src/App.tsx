@@ -4,8 +4,7 @@ import { createEditor, Editor, Element as SlateElement, Node, Path, Range, Text,
 import type { Descendant } from 'slate'
 import { Slate, Editable, withReact, ReactEditor, useSlate, useSlateStatic } from 'slate-react'
 import type { RenderElementProps, RenderLeafProps } from 'slate-react'
-import lunr from 'lunr'
-import { type LucideIcon, ArrowLeft, ArrowRight, Calendar, Camera, Columns2, Files, Info, NotebookPen, Paperclip, Pin, PinOff, Plus, Search, X } from 'lucide-react'
+import { type LucideIcon, ArrowLeft, ArrowRight, Calendar, Columns2, Files, Info, NotebookPen, Pin, PinOff, X } from 'lucide-react'
 import { cacheFile, getCachedFile } from './idb'
 import { writeFileToCache, restoreCacheHandle, ensureCacheDir, pickCacheDir, clearCacheHandle } from './fileCache'
 import './App.css'
@@ -400,32 +399,6 @@ type FsDirectoryWithPerm = FileSystemDirectoryHandle & {
 type MockSyncOverrides = { noFail?: boolean; failNext?: boolean }
 type MockSyncWindow = Window & { __labnoteMockSync?: MockSyncOverrides }
 
-function blockToSearchText(block: Block): string {
-  switch (block.type) {
-    case 'heading':
-    case 'paragraph':
-    case 'quote':
-      return block.text
-    case 'table':
-      return block.data.flat().join(' ')
-    case 'checklist':
-      return block.items.map((i) => i.text).join(' ')
-    case 'list': {
-      const collect = (items: ListItem[]): string[] =>
-        items.flatMap((item) => [item.text, ...(item.children ? collect(item.children) : [])])
-      return collect(block.items).join(' ')
-    }
-    case 'image':
-      return block.caption ?? ''
-    case 'file':
-      return block.label ?? ''
-    case 'divider':
-      return ''
-    default:
-      return ''
-  }
-}
-
 function isAbortError(err: unknown): boolean {
   if (!err || typeof err !== 'object') return false
   return 'name' in err && (err as { name?: unknown }).name === 'AbortError'
@@ -788,11 +761,6 @@ function App() {
   })
   const entryList = useMemo(() => Object.values(entryDrafts), [entryDrafts])
   const entryDatesWithEntries = useMemo(() => new Set(entryList.map((entry) => entry.dateBucket)), [entryList])
-  const availableTags = useMemo(() => {
-    const tags = new Set<string>()
-    entryList.forEach((entry) => entry.tags.forEach((tag) => tags.add(tag)))
-    return Array.from(tags).sort((a, b) => a.localeCompare(b))
-  }, [entryList])
   const [openEntryIds, setOpenEntryIds] = useState<string[]>([])
   const [pinnedEntryIds, setPinnedEntryIds] = useState<string[]>([])
   const [splitViewEnabled, setSplitViewEnabled] = useState(false)
@@ -808,14 +776,9 @@ function App() {
   const [newEntryOpen, setNewEntryOpen] = useState(false)
   const [viewerMode, setViewerMode] = useState(true)
   const [autoEditEntryId, setAutoEditEntryId] = useState<string | null>(null)
-  const [query, setQuery] = useState('')
-  const [selectedTags, setSelectedTags] = useState<string[]>([])
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
-  const [selectedDate, setSelectedDate] = useState<string | null>(null)
+  const [selectedDate, setSelectedDate] = useState<string | null>(() => getDateBucket(new Date()))
   const [calendarMonth, setCalendarMonth] = useState<Date>(() => monthStartFromIso(getDateBucket(new Date())))
-  const [filterHasImage, setFilterHasImage] = useState(false)
-  const [filterHasFile, setFilterHasFile] = useState(false)
-  const [datePreset, setDatePreset] = useState<'all' | '7d' | '30d'>('all')
   const [attachmentUrls, setAttachmentUrls] = useState<Record<string, string>>({})
   const [missingAttachments, setMissingAttachments] = useState<Set<string>>(new Set())
   const [changeQueue, setChangeQueue] = useState<ChangeQueueItem[]>([])
@@ -908,22 +871,9 @@ function App() {
       return next
     })
 
-    if (tagTemplates.length === 0) {
-      const templates: TagTemplate[] = []
-      legacyProjects.forEach((project) => {
-        templates.push({ id: newId('tpl-'), name: project.title, tags: [project.title] })
-      })
-      legacyExperiments.forEach((experiment) => {
-        const projectTag = experiment.projectId ? projectMap.get(experiment.projectId) : undefined
-        const tags = mergeTags([experiment.title], projectTag ? [projectTag] : undefined)
-        templates.push({ id: newId('tpl-'), name: experiment.title, tags })
-      })
-      setTagTemplates(templates)
-    }
-
     window.localStorage.setItem(TAG_MIGRATION_KEY, '1')
     setTagsOnlyMigrated(true)
-  }, [legacyExperiments, legacyProjects, tagTemplates.length, tagsOnlyMigrated])
+  }, [legacyExperiments, legacyProjects, tagsOnlyMigrated])
 
   const refreshFsState = useCallback(async () => {
     try {
@@ -1052,11 +1002,9 @@ function App() {
     [entryList, selectEntry]
   )
 
-  const handleSelectDate = useCallback((date: string | null) => {
-    if (!date) return
+  const handleSelectDate = useCallback((date: string) => {
     setSelectedDate(date)
     setCalendarMonth(monthStartFromIso(date))
-    setDatePreset('all')
     openEntryForBucket(date)
   }, [openEntryForBucket])
 
@@ -1107,8 +1055,6 @@ function App() {
           ])
         }
         selectEntry(primary.id, { autoEdit: true })
-        setQuery('')
-        setSelectedTags([])
         setNewEntryOpen(false)
         return
       }
@@ -1137,8 +1083,6 @@ function App() {
 
       setEntryDrafts((prev) => ({ ...prev, [entryId]: entry }))
       selectEntry(entryId, { autoEdit: true })
-      setQuery('')
-      setSelectedTags([])
       setNewEntryOpen(false)
     },
     [entryList, selectedDate, selectEntry]
@@ -1548,18 +1492,18 @@ function App() {
     <title>${safeFileName(displayTitle)}</title>
     <style>
       :root { color-scheme: light; }
-      body { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial; margin: 28px; color: #0b1220; }
-      header { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 18px; }
-      h1 { margin: 0; font-size: 22px; }
-      h2 { margin: 18px 0 6px; font-size: 18px; }
-      h3 { margin: 14px 0 6px; font-size: 15px; color: #243048; }
-      .meta { color: #475569; font-size: 12px; }
-      blockquote { border-left: 3px solid #10b981; padding: 10px 12px; margin: 10px 0; background: #f0fdf4; }
+      body { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial; margin: 0.65in; color: #0f172a; line-height: 1.6; }
+      header { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid #e2e8f0; }
+      h1 { margin: 0; font-size: 24px; font-weight: 600; letter-spacing: 0.02em; }
+      h2 { margin: 18px 0 6px; font-size: 18px; font-weight: 600; }
+      h3 { margin: 14px 0 6px; font-size: 15px; color: #334155; font-weight: 600; }
+      .meta { color: #64748b; font-size: 12px; }
+      blockquote { border-left: 3px solid #38bdf8; padding: 10px 12px; margin: 10px 0; background: #f0f9ff; }
       ul.checklist { list-style: none; padding-left: 0; }
       ul.checklist li { margin: 6px 0; }
       .cb { display: inline-block; width: 20px; }
       figure { margin: 12px 0; }
-      figure img { max-width: 100%; border-radius: 10px; border: 1px solid #e2e8f0; }
+      figure img { max-width: 100%; border-radius: 12px; border: 1px solid #e2e8f0; }
       figcaption { font-size: 12px; color: #475569; margin-top: 6px; }
       .table-wrap { border: 1px solid #e2e8f0; border-radius: 12px; overflow: hidden; }
       .table-wrap table { border-collapse: collapse; width: 100%; }
@@ -1569,8 +1513,8 @@ function App() {
       .table-wrap.table-compact th, .table-wrap.table-compact td { padding: 6px 8px; font-size: 11px; }
       .caption { font-size: 12px; color: #475569; margin-top: 6px; }
       .toolbar { margin-top: 8px; }
-      .toolbar button { border-radius: 10px; border: 1px solid #cbd5e1; background: #ffffff; padding: 8px 12px; cursor: pointer; }
-      @media print { .toolbar { display: none; } body { margin: 0.5in; } }
+      .toolbar button { border-radius: 999px; border: 1px solid #cbd5e1; background: #ffffff; padding: 8px 12px; cursor: pointer; }
+      @media print { .toolbar { display: none; } body { margin: 0.6in; } }
     </style>
   </head>
   <body>
@@ -1753,29 +1697,6 @@ function App() {
     [attachmentUrls, attachmentsStore, entryDrafts]
   )
 
-  const index = useMemo(() => {
-    return lunr(function (this: lunr.Builder) {
-      this.ref('id')
-      this.field('title')
-      this.field('tags')
-      this.field('body')
-      this.field('attachments')
-
-	      entryList.forEach((entry) => {
-	        const attachments = attachmentsForEntry(entry.id)
-	        const body = entry.content.map(blockToSearchText).join(' ')
-	        const doc = {
-	          id: entry.id,
-	          title: entry.title,
-	          tags: entry.tags.join(' '),
-	          body,
-	          attachments: attachments.map((a) => `${a.filename} ${a.sampleId ?? ''}`).join(' '),
-	        }
-	        this.add(doc as Record<string, string>)
-      })
-    })
-  }, [entryList, attachmentsForEntry])
-
   const orderedEntries = useMemo(() => {
     return [...entryList].sort((a, b) => {
       const bucketCompare = b.dateBucket.localeCompare(a.dateBucket)
@@ -1784,50 +1705,7 @@ function App() {
     })
   }, [entryList])
 
-  const matchedIds = useMemo(() => {
-    const q = query.trim()
-    if (!q) return orderedEntries.map((e) => e.id)
-    try {
-      return index.search(q).map((r: lunr.Index.Result) => r.ref)
-    } catch {
-      return []
-    }
-  }, [index, query, orderedEntries])
-
-  const filteredEntries = useMemo(() => {
-    const q = query.trim().toLowerCase()
-    const now = new Date()
-    return orderedEntries.filter((entry) => {
-      if (selectedTags.length && !selectedTags.every((t) => entry.tags.includes(t))) return false
-      if (filterHasImage) {
-        const hasImage = attachmentsForEntry(entry.id).some((a) => a.type === 'image')
-        if (!hasImage) return false
-      }
-      if (filterHasFile) {
-        const hasFile = attachmentsForEntry(entry.id).some((a) => a.type === 'file' || a.type === 'raw' || a.type === 'pdf')
-        if (!hasFile) return false
-      }
-
-      if (datePreset !== 'all') {
-        const entryDate = new Date(entry.dateBucket)
-        const days = datePreset === '7d' ? 7 : 30
-        const diffDays = (now.getTime() - entryDate.getTime()) / (1000 * 60 * 60 * 24)
-        if (diffDays > days) return false
-      }
-
-      if (!q) return matchedIds.includes(entry.id)
-      return matchedIds.includes(entry.id)
-    })
-  }, [
-    query,
-    selectedTags,
-    filterHasImage,
-    filterHasFile,
-    matchedIds,
-    datePreset,
-    orderedEntries,
-    attachmentsForEntry,
-  ])
+  const filteredEntries = useMemo(() => orderedEntries, [orderedEntries])
 
   const dailyEntries = useMemo(() => {
     const byDate = new Map<string, Entry[]>()
@@ -1842,9 +1720,9 @@ function App() {
   }, [filteredEntries])
 
   const listEntries = useMemo(() => {
-    if (!selectedDate) return dailyEntries
-    return dailyEntries.filter((entry) => entry.dateBucket === selectedDate)
-  }, [dailyEntries, selectedDate])
+    const target = selectedDate ?? todayBucket
+    return dailyEntries.filter((entry) => entry.dateBucket === target)
+  }, [dailyEntries, selectedDate, todayBucket])
 
   const viewerEntries = useMemo(() => {
     return [...dailyEntries].sort((a, b) => {
@@ -2014,32 +1892,15 @@ function App() {
     <div className="app-bg">
       <div className={`app-shell ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
         <Sidebar
-          labs={sampleData.labs}
           entries={listEntries}
-          availableTags={availableTags}
           storagePath={serverInfo?.dataDir ?? sampleData.labs[0]?.storageConfig.path ?? '—'}
           selectedEntryId={selectedEntryId}
-          query={query}
-          onQueryChange={setQuery}
-          selectedTags={selectedTags}
-          onToggleTag={(tag) =>
-            setSelectedTags((prev) =>
-              prev.includes(tag) ? prev.filter((t) => t !== tag) : [...prev, tag]
-            )
-          }
-          filterHasImage={filterHasImage}
-          filterHasFile={filterHasFile}
-          onToggleHasImage={() => setFilterHasImage((v) => !v)}
-          onToggleHasFile={() => setFilterHasFile((v) => !v)}
-          datePreset={datePreset}
-          onSelectDatePreset={setDatePreset}
           selectedDate={selectedDate}
           onSelectDate={handleSelectDate}
           calendarMonth={calendarMonth}
           onCalendarMonthChange={setCalendarMonth}
           entryDatesWithEntries={entryDatesWithEntries}
           onSelectEntry={(id) => openEntry(id)}
-          onNewEntry={() => setNewEntryOpen(true)}
           onQuickCapture={() => openEntryForBucket(todayBucket, { autoEdit: true })}
           onOpenSettings={() => setSettingsOpen(true)}
           collapsed={sidebarCollapsed}
@@ -2055,8 +1916,6 @@ function App() {
           attachmentUrls={attachmentUrls}
           missingAttachments={missingAttachments}
           onOpenEntry={openEntry}
-          onNewEntry={() => setNewEntryOpen(true)}
-          onQuickCapture={() => openEntryForBucket(todayBucket, { autoEdit: true })}
           onUpdateEntry={(entryId, content) =>
             setEntryDrafts((prev) => {
               const current = prev[entryId]
@@ -2148,28 +2007,15 @@ function App() {
 }
 
 interface SidebarProps {
-  labs: typeof sampleData.labs
   entries: Entry[]
-  availableTags: string[]
   storagePath: string
   selectedEntryId: string
-  query: string
-  onQueryChange: (val: string) => void
-  selectedTags: string[]
-  onToggleTag: (tag: string) => void
-  filterHasImage: boolean
-  filterHasFile: boolean
-  onToggleHasImage: () => void
-  onToggleHasFile: () => void
-  datePreset: 'all' | '7d' | '30d'
-  onSelectDatePreset: (val: 'all' | '7d' | '30d') => void
   selectedDate: string | null
-  onSelectDate: (date: string | null) => void
+  onSelectDate: (date: string) => void
   calendarMonth: Date
   onCalendarMonthChange: (next: Date) => void
   entryDatesWithEntries: Set<string>
   onSelectEntry: (id: string) => void
-  onNewEntry: () => void
   onQuickCapture: () => void
   onOpenSettings: () => void
   collapsed: boolean
@@ -2177,61 +2023,23 @@ interface SidebarProps {
 }
 
 function Sidebar({
-  labs,
   entries,
-  availableTags,
   storagePath,
   selectedEntryId,
-  query,
-  onQueryChange,
-  selectedTags,
-  onToggleTag,
-  filterHasImage,
-  filterHasFile,
-  onToggleHasImage,
-  onToggleHasFile,
-  datePreset,
-  onSelectDatePreset,
   selectedDate,
   onSelectDate,
   calendarMonth,
   onCalendarMonthChange,
   entryDatesWithEntries,
   onSelectEntry,
-  onNewEntry,
   onQuickCapture,
   onOpenSettings,
   collapsed,
   onToggleCollapsed,
 }: SidebarProps) {
-  const activeLab = labs[0]
-  const allTags = useMemo(() => availableTags, [availableTags])
-  const searchRef = useRef<HTMLInputElement | null>(null)
-  const [showAdvanced, setShowAdvanced] = useState(false)
-  const [tagQuery, setTagQuery] = useState('')
   const calendarLabel = useMemo(() => {
     return new Intl.DateTimeFormat('en-US', { month: 'long', year: 'numeric' }).format(calendarMonth)
   }, [calendarMonth])
-
-  const normalizedTagQuery = tagQuery.trim().toLowerCase()
-  const filteredTags = useMemo(
-    () =>
-      normalizedTagQuery.length >= 2
-        ? allTags.filter((tag) => tag.toLowerCase().includes(normalizedTagQuery))
-        : [],
-    [allTags, normalizedTagQuery]
-  )
-
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
-        e.preventDefault()
-        searchRef.current?.focus()
-      }
-    }
-    window.addEventListener('keydown', handler)
-    return () => window.removeEventListener('keydown', handler)
-  }, [])
 
   const calendarDays = useMemo(() => {
     const year = calendarMonth.getFullYear()
@@ -2286,8 +2094,8 @@ function Sidebar({
           <div className="lab-card">
             <div className="lab-head">
               <div>
-                <p className="eyebrow">Lab</p>
-                <h2>{activeLab?.name ?? 'Lab'}</h2>
+                <p className="eyebrow">Notebook</p>
+                <h2>Lab notebook</h2>
               </div>
               <div className="lab-actions">
                 <div className="status-chip success">Sync ready</div>
@@ -2298,59 +2106,11 @@ function Sidebar({
               <span className="muted tiny">Storage</span>
               <span className="mono-line" title={storagePath}>{storagePath}</span>
             </div>
-          </div>
-
-          <div className="search-box">
-            <Search className="icon" aria-hidden="true" />
-            <input
-              placeholder="Search notes, samples, files"
-              value={query}
-              ref={searchRef}
-              onChange={(e) => onQueryChange(e.target.value)}
-            />
-            <span className="kbd">Ctrl + K</span>
-          </div>
-
-          <div className="quick-actions">
-            <button className="ghost" onClick={onNewEntry} data-testid="sidebar-new-entry">
-              <Plus className="icon" aria-hidden="true" />
-              New Entry
-            </button>
-            <button className="accent" onClick={onQuickCapture} data-testid="sidebar-quick-capture">
-              <Camera className="icon" aria-hidden="true" />
-              Quick Capture
+            <button className="accent full" onClick={onQuickCapture} data-testid="sidebar-today-entry">
+              <NotebookPen className="icon" aria-hidden="true" />
+              Today’s entry
             </button>
           </div>
-
-          <section className="sidebar-section">
-            <div className="section-title">Tags</div>
-            <label className="field">
-              <span className="muted tiny">Search tags</span>
-              <input
-                value={tagQuery}
-                onChange={(e) => setTagQuery(e.target.value)}
-                placeholder="Type at least 2 letters"
-                data-testid="tag-search"
-              />
-            </label>
-            <div className="chip-row" data-testid="tag-list">
-              {filteredTags.map((tag) => (
-                <button
-                  key={tag}
-                  className={`pill soft ${selectedTags.includes(tag) ? 'active-pill' : ''}`}
-                  onClick={() => onToggleTag(tag)}
-                >
-                  {tag}
-                </button>
-              ))}
-              {tagQuery.trim().length < 2 && (
-                <span className="muted tiny">Start typing to see tags.</span>
-              )}
-              {tagQuery.trim().length >= 2 && filteredTags.length === 0 && (
-                <span className="muted tiny">No tags found.</span>
-              )}
-            </div>
-          </section>
 
           <section className="sidebar-section">
             <div className="section-title">Calendar</div>
@@ -2379,7 +2139,7 @@ function Sidebar({
                 </div>
               </div>
               <div className="calendar-meta">
-                <span>{selectedDate ? `Viewing: ${selectedDate}` : 'Pick a date to view entries.'}</span>
+                <span>{`Viewing: ${selectedDate ?? todayIso}`}</span>
                 <button
                   type="button"
                   className="calendar-clear"
@@ -2421,18 +2181,13 @@ function Sidebar({
           </section>
 
           <section className="sidebar-section">
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
-              <div className="section-title">Entries</div>
-              <button className="pill soft" type="button" onClick={() => setShowAdvanced((v) => !v)}>
-                {showAdvanced ? 'Less' : 'More'}
-              </button>
-            </div>
+            <div className="section-title">Entries</div>
             <div className="muted tiny" style={{ marginBottom: 6 }}>
-              Showing {entries.length} item{entries.length === 1 ? '' : 's'}
+              {selectedDate ?? todayIso}
             </div>
             <div className="entry-list" data-testid="entry-list">
               {entries.length === 0 && (
-                <div className="muted tiny">No entries match these filters.</div>
+                <div className="muted tiny">No entry for this day yet.</div>
               )}
               {entries.map((entry) => (
                 <button
@@ -2454,52 +2209,6 @@ function Sidebar({
                 </button>
               ))}
             </div>
-
-            {showAdvanced && (
-              <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 12 }}>
-                <div>
-                  <div className="section-title">Attachments</div>
-                  <div className="chip-row">
-                    <button
-                      className={`pill soft ${filterHasImage ? 'active-pill' : ''}`}
-                      onClick={onToggleHasImage}
-                    >
-                      Has image
-                    </button>
-                    <button
-                      className={`pill soft ${filterHasFile ? 'active-pill' : ''}`}
-                      onClick={onToggleHasFile}
-                    >
-                      Has file/raw/pdf
-                    </button>
-                  </div>
-                </div>
-
-                <div>
-                  <div className="section-title">Date range</div>
-                  <div className="chip-row">
-                    <button
-                      className={`pill soft ${datePreset === 'all' ? 'active-pill' : ''}`}
-                      onClick={() => onSelectDatePreset('all')}
-                    >
-                      All time
-                    </button>
-                    <button
-                      className={`pill soft ${datePreset === '7d' ? 'active-pill' : ''}`}
-                      onClick={() => onSelectDatePreset('7d')}
-                    >
-                      Last 7d
-                    </button>
-                    <button
-                      className={`pill soft ${datePreset === '30d' ? 'active-pill' : ''}`}
-                      onClick={() => onSelectDatePreset('30d')}
-                    >
-                      Last 30d
-                    </button>
-                  </div>
-                </div>
-              </div>
-            )}
           </section>
         </div>
       )}
@@ -2517,8 +2226,6 @@ interface EditorPaneProps {
   attachmentUrls: Record<string, string>
   missingAttachments: Set<string>
   onOpenEntry: (entryId: string, opts?: { autoEdit?: boolean; tab?: EditorTab }) => void
-  onNewEntry: () => void
-  onQuickCapture: () => void
   onUpdateEntry: (entryId: string, content: Block[]) => void
   onUpdateEntryMeta: (entryId: string, updates: Partial<Entry>) => void
   onAddAttachments: (entryId: string, files: File[]) => Promise<Attachment[]>
@@ -2571,8 +2278,6 @@ function EditorPane({
   attachmentUrls,
   missingAttachments,
   onOpenEntry,
-  onNewEntry,
-  onQuickCapture,
   onUpdateEntry,
   onUpdateEntryMeta,
   onAddAttachments,
@@ -2725,10 +2430,10 @@ function EditorPane({
 
   const emptyMessage =
     activeTab === 'files'
-      ? 'Select a note to view files.'
+      ? 'Select an entry to view files.'
       : activeTab === 'details'
-        ? 'Select a note to view details.'
-        : 'Select or create a note to get started.'
+        ? 'Select an entry to view details.'
+        : 'Select a date to open the daily entry.'
 
   const persistDraft = useCallback(
     (value: Descendant[]) => {
@@ -3022,81 +2727,12 @@ function EditorPane({
                   Open entry
                 </button>
               </div>
-              {todayUpdated && (
-                <div className="muted tiny">
-                  Last edited {dtFormat.format(new Date(todayUpdated))}
-                </div>
-              )}
-            </div>
-
-            <div className="action-grid">
-              <button className="action-card" type="button" onClick={onNewEntry} data-testid="today-new-entry">
-                <Plus className="icon" aria-hidden="true" />
-                <div>
-                  <div className="title-sm">New entry</div>
-                  <div className="muted tiny">Start a separate note or protocol run.</div>
-                </div>
-              </button>
-              <button className="action-card" type="button" onClick={onQuickCapture} data-testid="today-quick-capture">
-                <NotebookPen className="icon" aria-hidden="true" />
-                <div>
-                  <div className="title-sm">Quick capture</div>
-                  <div className="muted tiny">Fast scratchpad with autosave.</div>
-                </div>
-              </button>
-              <button
-                className="action-card"
-                type="button"
-                onClick={() => captureInputRef.current?.click()}
-                disabled={!todayEntry}
-                data-testid="today-capture-photo"
-              >
-                <Camera className="icon" aria-hidden="true" />
-                <div>
-                  <div className="title-sm">Capture photo</div>
-                  <div className="muted tiny">Use your camera and attach it instantly.</div>
-                </div>
-              </button>
-              <button
-                className="action-card"
-                type="button"
-                onClick={() => attachInputRef.current?.click()}
-                disabled={!todayEntry}
-                data-testid="today-attach-files"
-              >
-                <Paperclip className="icon" aria-hidden="true" />
-                <div>
-                  <div className="title-sm">Attach files</div>
-                  <div className="muted tiny">Drop images, PDFs, or raw data.</div>
-                </div>
-              </button>
-              <button
-                className="action-card"
-                type="button"
-                onClick={() => todayEntry && onOpenEntry(todayEntry.id, { tab: 'files' })}
-                disabled={!todayEntry}
-                data-testid="today-view-files"
-              >
-                <Files className="icon" aria-hidden="true" />
-                <div>
-                  <div className="title-sm">Browse files</div>
-                  <div className="muted tiny">See all attachments for today.</div>
-                </div>
-              </button>
-              <button
-                className="action-card"
-                type="button"
-                onClick={() => todayEntry && onOpenEntry(todayEntry.id, { tab: 'details' })}
-                disabled={!todayEntry}
-                data-testid="today-view-details"
-              >
-                <Info className="icon" aria-hidden="true" />
-                <div>
-                  <div className="title-sm">Tags & details</div>
-                  <div className="muted tiny">Manage tags, templates, and sync status.</div>
-                </div>
-              </button>
-            </div>
+            {todayUpdated && (
+              <div className="muted tiny">
+                Last edited {dtFormat.format(new Date(todayUpdated))}
+              </div>
+            )}
+          </div>
             {serverHydrated && (
               <div className="upload-toggle">
                 <button
@@ -3634,16 +3270,7 @@ function TagPanel({
   }
 
   const handleApplyTemplate = (template: TagTemplate) => {
-    onUpdateEntryMeta(entry.id, { tags: mergeTags(template.tags) })
-  }
-
-  const handleUpdateTemplate = (template: TagTemplate) => {
-    if (entry.tags.length === 0) {
-      setTemplateError('Add tags before updating a template.')
-      return
-    }
-    onSaveTemplate({ ...template, tags: mergeTags(entry.tags) })
-    setTemplateError(null)
+    onUpdateEntryMeta(entry.id, { tags: mergeTags([template.name]) })
   }
 
   const handleSaveTemplate = () => {
@@ -3652,14 +3279,14 @@ function TagPanel({
       setTemplateError('Template name is required.')
       return
     }
-    if (entry.tags.length === 0) {
-      setTemplateError('Add tags before saving a template.')
+    if (tagTemplates.some((template) => template.name.toLowerCase() === name.toLowerCase())) {
+      setTemplateError('Template already exists.')
       return
     }
     const template: TagTemplate = {
       id: newId('tpl-'),
       name,
-      tags: mergeTags(entry.tags),
+      tags: [name],
     }
     onSaveTemplate(template)
     setTemplateName('')
@@ -3668,113 +3295,90 @@ function TagPanel({
 
   return (
     <section className="link-panel tag-panel">
-      <div className="section-title">Tag templates</div>
-      <div className="tag-editor">
-        <div className="chip-row">
-          {entry.tags.map((tag) => (
-            <span key={tag} className="pill soft tag-chip">
-              {tag}
-              <button
-                type="button"
-                className="icon-button"
-                onClick={() => handleRemoveTag(tag)}
-                aria-label={`Remove tag ${tag}`}
-              >
-                <X className="icon" aria-hidden="true" />
-              </button>
-            </span>
-          ))}
-          {entry.tags.length === 0 && <span className="muted tiny">No tags yet. Add your first tag below.</span>}
+      <div className="tag-panel-grid">
+        <div className="tag-panel-block">
+          <div className="section-title">Current tags</div>
+          <div className="chip-row">
+            {entry.tags.map((tag) => (
+              <span key={tag} className="pill soft tag-chip">
+                {tag}
+                <button
+                  type="button"
+                  className="icon-button"
+                  onClick={() => handleRemoveTag(tag)}
+                  aria-label={`Remove tag ${tag}`}
+                >
+                  <X className="icon" aria-hidden="true" />
+                </button>
+              </span>
+            ))}
+            {entry.tags.length === 0 && <span className="muted tiny">No tags yet.</span>}
+          </div>
+          <div className="field-row">
+            <input
+              value={tagInput}
+              onChange={(e) => setTagInput(e.target.value)}
+              placeholder="Add a tag"
+              onKeyDown={(e) => {
+                if (e.key !== 'Enter') return
+                e.preventDefault()
+                handleAddTag()
+              }}
+              data-testid="tag-input"
+            />
+            <button className="accent" type="button" onClick={handleAddTag} data-testid="tag-add-btn">
+              Add
+            </button>
+          </div>
         </div>
-        <div className="field-row">
-          <input
-            value={tagInput}
-            onChange={(e) => setTagInput(e.target.value)}
-            placeholder="Add a tag"
-            onKeyDown={(e) => {
-              if (e.key !== 'Enter') return
-              e.preventDefault()
-              handleAddTag()
-            }}
-            data-testid="tag-input"
-          />
-          <button className="accent" type="button" onClick={handleAddTag} data-testid="tag-add-btn">
-            Add
-          </button>
-        </div>
-      </div>
 
-      <div className="template-block">
-        <div className="section-title">Templates</div>
-        <div className="muted tiny" style={{ marginBottom: 8 }}>
-          Templates replace tags on the entry. Use Update to overwrite the template with current tags.
-        </div>
-        {tagTemplates.length === 0 && (
-          <div className="muted tiny">No templates yet. Save the current tags to reuse later.</div>
-        )}
-        <div className="template-grid">
-          {tagTemplates.map((template) => (
-            <div key={template.id} className="template-card">
-              <div>
-                <div className="title-sm">{template.name}</div>
-                {template.tags.length > 0 && (
-                  <div className="chip-row">
-                    {template.tags.map((tag) => (
-                      <span key={tag} className="pill soft">
-                        {tag}
-                      </span>
-                    ))}
-                  </div>
-                )}
-              </div>
-              <div className="template-actions">
-                <button
-                  className="ghost"
-                  type="button"
-                  onClick={() => handleApplyTemplate(template)}
-                  data-testid={`template-apply-${template.id}`}
-                >
-                  Apply
-                </button>
-                <button
-                  className="ghost"
-                  type="button"
-                  onClick={() => handleUpdateTemplate(template)}
-                  disabled={entry.tags.length === 0}
-                  data-testid={`template-update-${template.id}`}
-                >
-                  Update
-                </button>
-                <button
-                  className="ghost"
-                  type="button"
-                  onClick={() => onDeleteTemplate(template.id)}
-                  data-testid={`template-delete-${template.id}`}
-                >
-                  Remove
-                </button>
-              </div>
+        <div className="tag-panel-block">
+          <div className="section-title">Tag templates</div>
+          <div className="muted tiny" style={{ marginBottom: 8 }}>
+            Tap a template to replace the tag list for this entry.
+          </div>
+          {tagTemplates.length === 0 ? (
+            <div className="muted tiny">No templates yet.</div>
+          ) : (
+            <div className="template-list">
+              {tagTemplates.map((template) => (
+                <div key={template.id} className="template-pill">
+                  <button
+                    type="button"
+                    className="pill soft"
+                    onClick={() => handleApplyTemplate(template)}
+                    data-testid={`template-apply-${template.id}`}
+                  >
+                    {template.name}
+                  </button>
+                  <button
+                    type="button"
+                    className="icon-button"
+                    onClick={() => onDeleteTemplate(template.id)}
+                    aria-label={`Remove template ${template.name}`}
+                    data-testid={`template-delete-${template.id}`}
+                  >
+                    <X className="icon" aria-hidden="true" />
+                  </button>
+                </div>
+              ))}
             </div>
-          ))}
+          )}
+          <div className="field-row">
+            <input
+              value={templateName}
+              onChange={(e) => {
+                setTemplateName(e.target.value)
+                setTemplateError(null)
+              }}
+              placeholder="Template name"
+            />
+            <button className="ghost" type="button" onClick={handleSaveTemplate} data-testid="template-save-btn">
+              Save
+            </button>
+          </div>
+          {templateError && <div className="field-error tiny">{templateError}</div>}
         </div>
-      </div>
-
-      <div className="field">
-        <span className="muted tiny">Save current tags as a template</span>
-        <div className="field-row">
-          <input
-            value={templateName}
-            onChange={(e) => {
-              setTemplateName(e.target.value)
-              setTemplateError(null)
-            }}
-            placeholder="Template name"
-          />
-          <button className="ghost" type="button" onClick={handleSaveTemplate} data-testid="template-save-btn">
-            Save
-          </button>
-        </div>
-        {templateError && <div className="field-error tiny">{templateError}</div>}
       </div>
     </section>
   )
@@ -5659,7 +5263,7 @@ function NewEntryModal({
   }
 
   const handleApplyTemplate = (template: TagTemplate) => {
-    setTags(mergeTags(template.tags))
+    setTags(mergeTags([template.name]))
   }
 
   return (

@@ -50,16 +50,9 @@ test('generate feature screenshots', async ({ page }) => {
   await expect(page.getByRole('heading', { name: formatUiDate('2025-12-07') })).toBeVisible()
   await page.screenshot({ path: path.join(outDir, '01-dashboard.png'), fullPage: true })
 
-  await page.getByTestId('sidebar-new-entry').click()
-  await expect(page.getByRole('dialog')).toBeVisible()
-  await page.screenshot({ path: path.join(outDir, '02-new-entry-modal.png') })
-  await page.getByRole('button', { name: 'Cancel' }).click()
-
-  await page.getByTestId('sidebar-new-entry').click()
-  await page.getByRole('button', { name: 'Create entry' }).click()
-  await expect(page.getByTestId('save-note-btn')).toBeVisible()
-  await page.getByTestId('save-note-btn').click()
-  await page.screenshot({ path: path.join(outDir, '03-template-entry.png'), fullPage: true })
+  await page.getByTestId('editor-tab-details').click()
+  await page.screenshot({ path: path.join(outDir, '02-details.png'), fullPage: true })
+  await page.getByTestId('editor-tab-note').click()
 
   await selectCalendarDate(page, '2025-12-07')
   if (await seeded.count()) {
@@ -69,12 +62,12 @@ test('generate feature screenshots', async ({ page }) => {
   }
   await page.getByTestId('edit-note-btn').click()
   await expect(page.getByTestId('save-note-btn')).toBeVisible()
-  await page.screenshot({ path: path.join(outDir, '04-edit-mode.png'), fullPage: true })
+  await page.screenshot({ path: path.join(outDir, '03-edit-mode.png'), fullPage: true })
 
   await page.getByRole('button', { name: 'Settings' }).click()
   const settingsDialog = page.getByRole('dialog')
   await expect(settingsDialog).toBeVisible()
-  await page.screenshot({ path: path.join(outDir, '05-settings.png') })
+  await page.screenshot({ path: path.join(outDir, '04-settings.png') })
   await settingsDialog.getByRole('button', { name: 'Close', exact: true }).click()
 
   await page.getByTestId('cancel-edit-btn').click()
@@ -96,7 +89,7 @@ test('generate feature screenshots', async ({ page }) => {
   await page.getByTestId('editor-tab-details').click()
   await expect(page.getByText('Sync queue')).toBeVisible()
   await page.getByText('Sync queue').scrollIntoViewIfNeeded()
-  await page.screenshot({ path: path.join(outDir, '06-sync-failed.png'), fullPage: true })
+  await page.screenshot({ path: path.join(outDir, '05-sync-failed.png'), fullPage: true })
   await page.context().setOffline(false)
   await page.getByTestId('sync-now-btn').click()
   await expect(statusChip).toContainText('Synced')
@@ -117,7 +110,7 @@ test('generate feature screenshots', async ({ page }) => {
   ])
   await expect(popup.locator('text=Print / Save to PDF')).toBeVisible()
   await popup.setViewportSize({ width: 1100, height: 780 })
-  await popup.screenshot({ path: path.join(outDir, '07-export-pdf.png'), fullPage: true })
+  await popup.screenshot({ path: path.join(outDir, '06-export-pdf.png'), fullPage: true })
   await popup.close()
 })
 
