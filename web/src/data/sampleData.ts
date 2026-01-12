@@ -35,7 +35,7 @@ const labs: Lab[] = [
     ],
     storageConfig: {
       location: 'institutional',
-      path: '\\\\fileserver\\labshare\\2025',
+      path: '\\\\labshare\\data\\2025',
     },
   },
 ]
@@ -67,7 +67,7 @@ const experiments: Experiment[] = [
     animalModel: 'C57BL/6J',
     startDatetime: '2025-12-07T09:00:00Z',
     endDatetime: '2025-12-07T18:00:00Z',
-    defaultRawDataPath: '/fileserver/labshare/2025-12-07/',
+    defaultRawDataPath: '/labshare/data/2025-12-07/',
   },
   {
     id: 'exp-microglia-culture',
@@ -118,7 +118,7 @@ const attachments: Attachment[] = [
     type: 'raw',
     filename: 'MG_LPS_TNF_plate2_export.csv',
     filesize: '1.2 MB',
-    storagePath: '/fileserver/labshare/2025-12-07/raw/MG_LPS_TNF_plate2_export.csv',
+    storagePath: '/labshare/data/2025-12-07/raw/MG_LPS_TNF_plate2_export.csv',
     sampleId: 'TNF-042',
     pinnedOffline: false,
   },
@@ -128,7 +128,7 @@ const attachments: Attachment[] = [
     type: 'image',
     filename: 'gel_scan_day3.tif',
     filesize: '3.6 MB',
-    storagePath: '/fileserver/labshare/2025-12-07/gel_scan_day3.tif',
+    storagePath: '/labshare/data/2025-12-07/gel_scan_day3.tif',
     thumbnail:
       'https://images.unsplash.com/photo-1582719478250-c89cae4dc85b?auto=format&fit=crop&w=800&q=60',
     tag: 'Gel',
@@ -141,7 +141,7 @@ const attachments: Attachment[] = [
     type: 'pdf',
     filename: 'instrument-run-log.pdf',
     filesize: '890 KB',
-    storagePath: '/fileserver/labshare/2025-12-07/instrument-run-log.pdf',
+    storagePath: '/labshare/data/2025-12-07/instrument-run-log.pdf',
     pinnedOffline: false,
   },
 ]
@@ -190,7 +190,7 @@ const entries: Entry[] = [
       {
         id: 'b7',
         type: 'paragraph',
-        text: 'Raw exports live on \\\\fileserver\\labshare\\2025-12-07/. Linked key files to samples below.',
+        text: 'Raw exports live on \\\\labshare\\data\\2025-12-07/. Linked key files to samples below.',
       },
       {
         id: 'b8',

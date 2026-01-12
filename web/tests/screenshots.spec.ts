@@ -123,7 +123,6 @@ test('mobile landing', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 })
   await page.emulateMedia({ reducedMotion: 'reduce' })
   await page.goto('/')
-  await expect(page.getByTestId('today-entry-card')).toBeVisible()
-  await expect(page.getByTestId('today-capture-photo')).toBeVisible()
+  await expect(page.getByTestId('viewer-bar')).toBeVisible()
   await page.screenshot({ path: path.join(outDir, '08-mobile-landing.png'), fullPage: true })
 })

@@ -5,7 +5,7 @@ import type { Descendant } from 'slate'
 import { Slate, Editable, withReact, ReactEditor, useSlate, useSlateStatic } from 'slate-react'
 import type { RenderElementProps, RenderLeafProps } from 'slate-react'
 import lunr from 'lunr'
-import { type LucideIcon, ArrowRight, Calendar, Camera, Columns2, Files, FlaskConical, FolderTree, Info, Link2, NotebookPen, Paperclip, Pin, PinOff, Plus, Search, X } from 'lucide-react'
+import { type LucideIcon, ArrowLeft, ArrowRight, Calendar, Camera, Columns2, Files, Info, NotebookPen, Paperclip, Pin, PinOff, Plus, Search, X } from 'lucide-react'
 import { cacheFile, getCachedFile } from './idb'
 import { writeFileToCache, restoreCacheHandle, ensureCacheDir, pickCacheDir, clearCacheHandle } from './fileCache'
 import './App.css'
@@ -47,6 +47,28 @@ function getDateBucket(date: Date): string {
   return new Date(date.getTime() - offsetMs).toISOString().slice(0, 10)
 }
 
+function dateFromBucket(bucket: string): Date {
+  const [year, month, day] = bucket.split('-').map((part) => Number(part))
+  return new Date(year || 0, Math.max(0, (month || 1) - 1), Math.max(1, day || 1), 9, 0, 0)
+}
+
+function normalizeTag(value: string) {
+  return value.trim().replace(/\s+/g, ' ')
+}
+
+function mergeTags(...groups: Array<string[] | undefined>) {
+  const tags: string[] = []
+  groups.forEach((group) => {
+    if (!group) return
+    group.forEach((tag) => {
+      const cleaned = normalizeTag(tag)
+      if (!cleaned) return
+      if (!tags.includes(cleaned)) tags.push(cleaned)
+    })
+  })
+  return tags
+}
+
 function monthStartFromIso(isoDate: string) {
   const parts = isoDate.split('-')
   const year = Number(parts[0] ?? new Date().getFullYear())
@@ -57,6 +79,12 @@ function monthStartFromIso(isoDate: string) {
 type EntryTemplateId = 'experiment' | 'blank'
 type SyncStatus = 'pending' | 'synced' | 'failed'
 type EditorTab = 'note' | 'files' | 'details'
+
+type TagTemplate = {
+  id: string
+  name: string
+  tags: string[]
+}
 
 type ChangeQueueItem = {
   id: string
@@ -90,6 +118,9 @@ type LabnoteServerInfo = {
   serverTime?: string
   hostname?: string
 }
+
+const TAG_TEMPLATE_KEY = 'labnote.tagTemplates'
+const TAG_MIGRATION_KEY = 'labnote.tagsOnlyMigration'
 
 function getEntryTimestamp(entry?: Entry): number {
   if (!entry) return 0
@@ -680,40 +711,26 @@ type EditorAttachmentContextValue = {
 const EditorAttachmentContext = createContext<EditorAttachmentContextValue | null>(null)
 
 function App() {
-  const [projects, setProjects] = useState<Project[]>(() => {
+  const legacyProjects = useMemo(() => {
     if (typeof window === 'undefined') return sampleData.projects
     try {
       const saved = window.localStorage.getItem('labnote.projects')
-      if (saved) {
-        const parsed = JSON.parse(saved) as Project[]
-        const byId = new Map(parsed.map((p) => [p.id, p]))
-        for (const seeded of sampleData.projects) {
-          if (!byId.has(seeded.id)) byId.set(seeded.id, seeded)
-        }
-        return Array.from(byId.values())
-      }
+      if (saved) return JSON.parse(saved) as Project[]
     } catch (err) {
       console.warn('Unable to read cached projects', err)
     }
     return sampleData.projects
-  })
-  const [experiments, setExperiments] = useState<Experiment[]>(() => {
+  }, [])
+  const legacyExperiments = useMemo(() => {
     if (typeof window === 'undefined') return sampleData.experiments
     try {
       const saved = window.localStorage.getItem('labnote.experiments')
-      if (saved) {
-        const parsed = JSON.parse(saved) as Experiment[]
-        const byId = new Map(parsed.map((ex) => [ex.id, ex]))
-        for (const seeded of sampleData.experiments) {
-          if (!byId.has(seeded.id)) byId.set(seeded.id, seeded)
-        }
-        return Array.from(byId.values())
-      }
+      if (saved) return JSON.parse(saved) as Experiment[]
     } catch (err) {
       console.warn('Unable to read cached experiments', err)
     }
     return sampleData.experiments
-  })
+  }, [])
   const [entryDrafts, setEntryDrafts] = useState<Record<string, Entry>>(() => {
     if (typeof window === 'undefined') {
       return Object.fromEntries(sampleData.entries.map((e) => [e.id, e]))
@@ -730,26 +747,30 @@ function App() {
     return Object.fromEntries(sampleData.entries.map((e) => [e.id, e]))
   })
   const entryList = useMemo(() => Object.values(entryDrafts), [entryDrafts])
+  const entryDatesWithEntries = useMemo(() => new Set(entryList.map((entry) => entry.dateBucket)), [entryList])
+  const availableTags = useMemo(() => {
+    const tags = new Set<string>()
+    entryList.forEach((entry) => entry.tags.forEach((tag) => tags.add(tag)))
+    return Array.from(tags).sort((a, b) => a.localeCompare(b))
+  }, [entryList])
   const [openEntryIds, setOpenEntryIds] = useState<string[]>([])
   const [pinnedEntryIds, setPinnedEntryIds] = useState<string[]>([])
   const [splitViewEnabled, setSplitViewEnabled] = useState(false)
   const [secondaryEntryId, setSecondaryEntryId] = useState<string | null>(null)
   const todayBucket = useMemo(() => getDateBucket(new Date()), [])
-  const todayEntry = useMemo(() => entryList.find((e) => e.dateBucket === todayBucket), [entryList, todayBucket])
-  const openEntries = useMemo(
-    () => openEntryIds.map((id) => entryDrafts[id]).filter(Boolean) as Entry[],
-    [openEntryIds, entryDrafts]
-  )
+  const todayEntry = useMemo(() => {
+    const matches = entryList.filter((entry) => entry.dateBucket === todayBucket)
+    if (matches.length === 0) return undefined
+    return matches.sort((a, b) => getEntryTimestamp(b) - getEntryTimestamp(a))[0]
+  }, [entryList, todayBucket])
   const [selectedEntryId, setSelectedEntryId] = useState('')
   const [hasUserSelectedEntry, setHasUserSelectedEntry] = useState(false)
   const [editorTab, setEditorTab] = useState<EditorTab>('note')
   const [newEntryOpen, setNewEntryOpen] = useState(false)
-  const [newExperimentOpen, setNewExperimentOpen] = useState(false)
+  const [viewerMode, setViewerMode] = useState(true)
   const [autoEditEntryId, setAutoEditEntryId] = useState<string | null>(null)
   const [query, setQuery] = useState('')
   const [selectedTags, setSelectedTags] = useState<string[]>([])
-  const [selectedProject, setSelectedProject] = useState<string>('all')
-  const [selectedExperiment, setSelectedExperiment] = useState<string>('all')
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [selectedDate, setSelectedDate] = useState<string | null>(null)
   const [calendarMonth, setCalendarMonth] = useState<Date>(() => monthStartFromIso(getDateBucket(new Date())))
@@ -771,84 +792,99 @@ function App() {
     if (typeof window === 'undefined') return true
     return window.localStorage.getItem('labnote.uploadShared') !== '0'
   })
+  const [tagTemplates, setTagTemplates] = useState<TagTemplate[]>(() => {
+    if (typeof window === 'undefined') return []
+    try {
+      const saved = window.localStorage.getItem(TAG_TEMPLATE_KEY)
+      if (saved) return JSON.parse(saved) as TagTemplate[]
+    } catch (err) {
+      console.warn('Unable to read tag templates', err)
+    }
+    return []
+  })
+  const [tagsOnlyMigrated, setTagsOnlyMigrated] = useState(() => {
+    if (typeof window === 'undefined') return true
+    return window.localStorage.getItem(TAG_MIGRATION_KEY) === '1'
+  })
+
+  const openEntries = useMemo(() => {
+    if (viewerMode) {
+      const active = entryDrafts[selectedEntryId]
+      return active ? [active] : []
+    }
+    return openEntryIds.map((id) => entryDrafts[id]).filter(Boolean) as Entry[]
+  }, [entryDrafts, openEntryIds, selectedEntryId, viewerMode])
+
+  useEffect(() => {
+    if (!viewerMode) return
+    if (!splitViewEnabled) return
+    setSplitViewEnabled(false)
+  }, [splitViewEnabled, viewerMode])
 
   useEffect(() => {
     if (typeof window === 'undefined') return
     window.localStorage.setItem('labnote.uploadShared', uploadShared ? '1' : '0')
   }, [uploadShared])
-
   useEffect(() => {
     if (typeof window === 'undefined') return
     const id = window.setTimeout(() => {
       try {
-        window.localStorage.setItem('labnote.projects', JSON.stringify(projects))
+        window.localStorage.setItem(TAG_TEMPLATE_KEY, JSON.stringify(tagTemplates))
       } catch (err) {
-        console.warn('Unable to cache projects', err)
+        console.warn('Unable to cache tag templates', err)
       }
     }, 250)
     return () => window.clearTimeout(id)
-  }, [projects])
+  }, [tagTemplates])
+
+  useEffect(() => {
+    const bucket = entryDrafts[selectedEntryId]?.dateBucket
+    if (!bucket) return
+    setSelectedDate(bucket)
+    setCalendarMonth(monthStartFromIso(bucket))
+  }, [entryDrafts, selectedEntryId])
 
   useEffect(() => {
     if (typeof window === 'undefined') return
-    const id = window.setTimeout(() => {
-      try {
-        window.localStorage.setItem('labnote.experiments', JSON.stringify(experiments))
-      } catch (err) {
-        console.warn('Unable to cache experiments', err)
-      }
-    }, 250)
-    return () => window.clearTimeout(id)
-  }, [experiments])
+    if (tagsOnlyMigrated) return
 
-  const createProject = useCallback(
-    (title: string): string => {
-      const cleaned = title.trim().replace(/\s+/g, ' ')
-      if (!cleaned) {
-        throw new Error('Project name is required.')
-      }
+    const projectMap = new Map(legacyProjects.map((p) => [p.id, p.title]))
+    const experimentMap = new Map(legacyExperiments.map((ex) => [ex.id, ex]))
 
-      const existing = projects.find((p) => p.title.trim().toLowerCase() === cleaned.toLowerCase())
-      if (existing) return existing.id
+    setEntryDrafts((prev) => {
+      const next: Record<string, Entry> = {}
+      Object.entries(prev).forEach(([id, entry]) => {
+        const projectTag = entry.projectId ? projectMap.get(entry.projectId) : undefined
+        const experiment = entry.experimentId ? experimentMap.get(entry.experimentId) : undefined
+        const experimentTag = experiment?.title
+        const experimentProjectTag = experiment?.projectId ? projectMap.get(experiment.projectId) : undefined
+        const tags = mergeTags(entry.tags, projectTag ? [projectTag] : undefined, experimentTag ? [experimentTag] : undefined, experimentProjectTag ? [experimentProjectTag] : undefined)
+        next[id] = {
+          ...entry,
+          tags,
+          projectId: undefined,
+          experimentId: undefined,
+        }
+      })
+      return next
+    })
 
-      const project: Project = {
-        id: newId('proj-'),
-        labId: sampleData.labs[0]?.id ?? sampleData.users[0]?.settings.defaultLabId ?? 'lab',
-        title: cleaned,
-        tags: [],
-      }
+    if (tagTemplates.length === 0) {
+      const templates: TagTemplate[] = []
+      legacyProjects.forEach((project) => {
+        templates.push({ id: newId('tpl-'), name: project.title, tags: [project.title] })
+      })
+      legacyExperiments.forEach((experiment) => {
+        const projectTag = experiment.projectId ? projectMap.get(experiment.projectId) : undefined
+        const tags = mergeTags([experiment.title], projectTag ? [projectTag] : undefined)
+        templates.push({ id: newId('tpl-'), name: experiment.title, tags })
+      })
+      setTagTemplates(templates)
+    }
 
-      setProjects((prev) => [...prev, project])
-      return project.id
-    },
-    [projects]
-  )
-
-  const createExperiment = useCallback(
-    (opts: { title: string; projectId: string; protocolRef?: string; defaultRawDataPath?: string }): string => {
-      const cleanedTitle = opts.title.trim().replace(/\s+/g, ' ')
-      if (!cleanedTitle) throw new Error('Experiment name is required.')
-      if (!opts.projectId) throw new Error('Project is required.')
-
-      const existing = experiments.find(
-        (ex) => ex.projectId === opts.projectId && ex.title.trim().toLowerCase() === cleanedTitle.toLowerCase()
-      )
-      if (existing) return existing.id
-
-      const experiment: Experiment = {
-        id: newId('exp-'),
-        projectId: opts.projectId,
-        title: cleanedTitle,
-        protocolRef: opts.protocolRef?.trim() || undefined,
-        defaultRawDataPath: opts.defaultRawDataPath?.trim() || undefined,
-        startDatetime: new Date().toISOString(),
-      }
-
-      setExperiments((prev) => [...prev, experiment])
-      return experiment.id
-    },
-    [experiments]
-  )
+    window.localStorage.setItem(TAG_MIGRATION_KEY, '1')
+    setTagsOnlyMigrated(true)
+  }, [legacyExperiments, legacyProjects, tagTemplates.length, tagsOnlyMigrated])
 
   const refreshFsState = useCallback(async () => {
     try {
@@ -927,15 +963,68 @@ function App() {
     }
   }, [])
 
+  const selectEntry = useCallback(
+    (entryId: string, opts?: { autoEdit?: boolean; tab?: EditorTab }) => {
+      if (!entryId) return
+      if (!viewerMode) {
+        setOpenEntryIds((prev) => (prev.includes(entryId) ? prev : [...prev, entryId]))
+      }
+      setSelectedEntryId(entryId)
+      setHasUserSelectedEntry(true)
+      setEditorTab(opts?.tab ?? 'note')
+      if (opts?.autoEdit) {
+        setAutoEditEntryId(entryId)
+      }
+    },
+    [viewerMode]
+  )
+
+  const openEntryForBucket = useCallback(
+    (bucket: string, opts?: { autoEdit?: boolean }) => {
+      const matches = entryList
+        .filter((entry) => entry.dateBucket === bucket)
+        .sort((a, b) => getEntryTimestamp(b) - getEntryTimestamp(a))
+
+      if (matches.length > 0) {
+        selectEntry(matches[0].id, { autoEdit: opts?.autoEdit })
+        return
+      }
+
+      const bucketDate = dateFromBucket(bucket)
+      const nowIso = bucketDate.toISOString()
+      const entryId = newId('entry-')
+      const { content, pinnedRegions } = buildTemplate('blank', entryId, nowIso)
+      const entry: Entry = {
+        id: entryId,
+        experimentId: undefined,
+        projectId: undefined,
+        createdDatetime: nowIso,
+        lastEditedDatetime: nowIso,
+        authorId: sampleData.users[1]?.id ?? sampleData.users[0]?.id ?? 'me',
+        title: `Daily note – ${dateOnly.format(bucketDate)}`,
+        dateBucket: bucket,
+        content,
+        tags: [],
+        searchTerms: [],
+        linkedFiles: [],
+        pinnedRegions,
+      }
+      setEntryDrafts((prev) => ({ ...prev, [entryId]: entry }))
+      selectEntry(entryId, { autoEdit: opts?.autoEdit })
+    },
+    [entryList, selectEntry]
+  )
+
   const handleSelectDate = useCallback((date: string | null) => {
-    setSelectedDate(date)
     if (!date) return
+    setSelectedDate(date)
     setCalendarMonth(monthStartFromIso(date))
     setDatePreset('all')
-  }, [])
+    openEntryForBucket(date)
+  }, [openEntryForBucket])
 
   const handleCreateEntry = useCallback(
-    (opts: { title?: string; projectId?: string; experimentId?: string; templateId: EntryTemplateId; quickCapture?: boolean }) => {
+    (opts: { title?: string; templateId: EntryTemplateId; quickCapture?: boolean; tags?: string[] }) => {
       const now = new Date()
       const nowIso = now.toISOString()
       const dateBucket = getDateBucket(now)
@@ -947,39 +1036,31 @@ function App() {
           ? `Quick capture – ${dtFormat.format(now)}`
           : `Untitled note – ${dateOnly.format(now)}`)
 
-      const projectId =
-        opts.projectId ??
-        (selectedProject !== 'all' ? selectedProject : sampleData.users[1]?.settings.defaultProjectId)
-
       const { content, pinnedRegions } = buildTemplate(opts.templateId, entryId, nowIso)
 
       const entry: Entry = {
         id: entryId,
-        experimentId: opts.experimentId,
-        projectId,
+        experimentId: undefined,
+        projectId: undefined,
         createdDatetime: nowIso,
         lastEditedDatetime: nowIso,
         authorId: sampleData.users[1]?.id ?? sampleData.users[0]?.id ?? 'me',
         title,
         dateBucket,
         content,
-        tags: [],
+        tags: mergeTags(opts.tags ?? []),
         searchTerms: [],
         linkedFiles: [],
         pinnedRegions,
       }
 
       setEntryDrafts((prev) => ({ ...prev, [entryId]: entry }))
-      setOpenEntryIds((prev) => (prev.includes(entryId) ? prev : [...prev, entryId]))
-      setSelectedEntryId(entryId)
-      setHasUserSelectedEntry(true)
-      setEditorTab('note')
+      selectEntry(entryId, { autoEdit: true })
       setQuery('')
       setSelectedTags([])
-      setAutoEditEntryId(entryId)
       setNewEntryOpen(false)
     },
-    [selectedProject]
+    [selectEntry]
   )
 
   const syncRunningRef = useRef(false)
@@ -1088,8 +1169,6 @@ function App() {
 
       if (state) {
         setServerAvailable(true)
-        setProjects((local) => mergeById(state.projects, local))
-        setExperiments((local) => mergeById(state.experiments, local))
         setEntryDrafts((local) => mergeEntries(state.entries, local))
         setAttachmentsStore((local) => mergeById(state.attachments, local))
       } else {
@@ -1150,8 +1229,8 @@ function App() {
     const id = window.setTimeout(() => {
       void (async () => {
         const ok = await patchServerState({
-          projects,
-          experiments,
+          projects: [],
+          experiments: [],
           entries: entryDrafts,
           attachments: attachmentsStore,
         })
@@ -1162,7 +1241,7 @@ function App() {
       })()
     }, 400)
     return () => window.clearTimeout(id)
-  }, [attachmentsStore, entryDrafts, experiments, projects, refreshServerInfo, serverAvailable, serverHydrated])
+  }, [attachmentsStore, entryDrafts, refreshServerInfo, serverAvailable, serverHydrated])
 
   const attachmentsForEntry = useCallback(
     (entryId: string) => attachmentsStore.filter((a) => a.entryId === entryId),
@@ -1368,20 +1447,14 @@ function App() {
     )
   }, [])
 
-  const exportExperiment = useCallback(
-    async (experimentId: string, format: 'markdown' | 'pdf') => {
-      const experiment = experiments.find((ex) => ex.id === experimentId)
-      if (!experiment) {
-        window.alert('Experiment not found.')
+  const exportEntry = useCallback(
+    async (entryId: string, format: 'markdown' | 'pdf') => {
+      const entry = entryDrafts[entryId]
+      if (!entry) {
+        window.alert('Entry not found.')
         return
       }
-      const project = projects.find((p) => p.id === experiment.projectId)
-      const entries = entryList
-        .filter((e) => e.experimentId === experimentId)
-        .sort((a, b) => a.createdDatetime.localeCompare(b.createdDatetime))
-
-      const entryIds = new Set(entries.map((e) => e.id))
-      const attachments = attachmentsStore.filter((a) => entryIds.has(a.entryId))
+      const attachments = attachmentsStore.filter((a) => a.entryId === entryId)
       const attachmentsById = Object.fromEntries(attachments.map((a) => [a.id, a]))
 
       if (format === 'pdf') {
@@ -1390,7 +1463,7 @@ function App() {
 <html>
   <head>
     <meta charset="utf-8" />
-    <title>${safeFileName(experiment.title)}</title>
+    <title>${safeFileName(entry.title)}</title>
     <style>
       :root { color-scheme: light; }
       body { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial; margin: 28px; color: #0b1220; }
@@ -1399,7 +1472,6 @@ function App() {
       h2 { margin: 18px 0 6px; font-size: 18px; }
       h3 { margin: 14px 0 6px; font-size: 15px; color: #243048; }
       .meta { color: #475569; font-size: 12px; }
-      .entry { border-top: 1px solid #e2e8f0; padding-top: 14px; margin-top: 14px; }
       blockquote { border-left: 3px solid #10b981; padding: 10px 12px; margin: 10px 0; background: #f0fdf4; }
       ul.checklist { list-style: none; padding-left: 0; }
       ul.checklist li { margin: 6px 0; }
@@ -1422,29 +1494,18 @@ function App() {
   <body>
     <header>
       <div>
-        <h1>${experiment.title}</h1>
+        <h1>${entry.title}</h1>
         <div class="meta">
-          ${project ? `Project: ${project.title} · ` : ''}
-          ${experiment.protocolRef ? `Protocol: ${experiment.protocolRef} · ` : ''}
-          Exported: ${new Date().toLocaleString()}
+          ${entry.dateBucket} · Created ${new Date(entry.createdDatetime).toLocaleString()} · Last edited ${new Date(entry.lastEditedDatetime).toLocaleString()}
         </div>
+        ${entry.tags.length ? `<div class="meta">Tags: ${entry.tags.join(', ')}</div>` : ''}
       </div>
       <div class="toolbar">
         <button onclick="window.print()">Print / Save to PDF</button>
       </div>
     </header>
 
-    ${entries
-      .map(
-        (e) => `
-      <section class="entry">
-        <h2>${e.title}</h2>
-        <div class="meta">Created ${new Date(e.createdDatetime).toLocaleString()} · Last edited ${new Date(e.lastEditedDatetime).toLocaleString()}</div>
-        ${blocksToHtml(e.content, attachmentsById, attachmentUrls)}
-      </section>
-    `
-      )
-      .join('\n')}
+    ${blocksToHtml(entry.content, attachmentsById, attachmentUrls)}
   </body>
 </html>
         `.trim()
@@ -1461,9 +1522,8 @@ function App() {
       }
 
       const exportedAt = new Date().toISOString()
-      const dateBucket = exportedAt.slice(0, 10)
-      const folderName = safeFileName(`labnote_${dateBucket}_${experiment.title}`)
-      const exportMdName = safeFileName(`${experiment.title}.md`)
+      const folderName = safeFileName(`labnote_${entry.dateBucket}_${entry.title}`)
+      const exportMdName = safeFileName(`${entry.title}.md`)
 
       const attachmentExportNameById: Record<string, string> = {}
       attachments.forEach((a) => {
@@ -1476,18 +1536,15 @@ function App() {
       )
 
       const content = [
-        `# ${experiment.title}`,
+        `# ${entry.title}`,
         '',
-        project ? `- Project: ${project.title}` : '',
-        experiment.protocolRef ? `- Protocol: ${experiment.protocolRef}` : '',
+        `- Date: ${entry.dateBucket}`,
+        `- Created: ${entry.createdDatetime}`,
+        `- Last edited: ${entry.lastEditedDatetime}`,
+        entry.tags.length ? `- Tags: ${entry.tags.join(', ')}` : '',
         `- Exported: ${exportedAt}`,
         '',
-        ...entries.flatMap((e) => {
-          const header = `## ${e.title}`
-          const meta = `Created ${dateOnly.format(new Date(e.createdDatetime))} · Last edited ${dateOnly.format(new Date(e.lastEditedDatetime))}`
-          const md = blocksToMarkdown(e.content, attachmentsById, attachmentExportPathById)
-          return [header, meta, '', md, '']
-        }),
+        blocksToMarkdown(entry.content, attachmentsById, attachmentExportPathById),
       ]
         .filter(Boolean)
         .join('\n')
@@ -1495,21 +1552,19 @@ function App() {
       const manifest = {
         exportedAt,
         scope: {
-          type: 'experiment',
-          experimentId: experiment.id,
-          experimentTitle: experiment.title,
-          projectId: project?.id ?? null,
-          projectTitle: project?.title ?? null,
+          type: 'entry',
+          entryId: entry.id,
+          entryTitle: entry.title,
         },
-        entries: entries.map((e) => ({
-          id: e.id,
-          title: e.title,
-          dateBucket: e.dateBucket,
-          createdDatetime: e.createdDatetime,
-          lastEditedDatetime: e.lastEditedDatetime,
-          tags: e.tags,
-          linkedFiles: e.linkedFiles,
-        })),
+        entry: {
+          id: entry.id,
+          title: entry.title,
+          dateBucket: entry.dateBucket,
+          createdDatetime: entry.createdDatetime,
+          lastEditedDatetime: entry.lastEditedDatetime,
+          tags: entry.tags,
+          linkedFiles: entry.linkedFiles,
+        },
         attachments: attachments.map((a) => ({
           id: a.id,
           entryId: a.entryId,
@@ -1544,27 +1599,27 @@ function App() {
           }
         }
 
-	        if (att.cachedPath?.startsWith('fs://')) {
-	          const name = att.cachedPath.replace('fs://', '')
-	          const dir = await restoreCacheHandle()
-	          if (!dir) return null
-	          try {
-	            const dirWithPerm = dir as FsDirectoryWithPerm
-	            const permFn = dirWithPerm.queryPermission
-	            const reqFn = dirWithPerm.requestPermission
-	            if (permFn) {
-	              const perm = await permFn({ mode: 'read' })
-	              if (perm !== 'granted' && reqFn) {
-	                const req = await reqFn({ mode: 'read' })
-	                if (req !== 'granted') return null
-	              }
-	            }
-	            const handle = await dir.getFileHandle(name)
-	            return await handle.getFile()
-	          } catch {
-	            return null
-	          }
-	        }
+        if (att.cachedPath?.startsWith('fs://')) {
+          const name = att.cachedPath.replace('fs://', '')
+          const dir = await restoreCacheHandle()
+          if (!dir) return null
+          try {
+            const dirWithPerm = dir as FsDirectoryWithPerm
+            const permFn = dirWithPerm.queryPermission
+            const reqFn = dirWithPerm.requestPermission
+            if (permFn) {
+              const perm = await permFn({ mode: 'read' })
+              if (perm !== 'granted' && reqFn) {
+                const req = await reqFn({ mode: 'read' })
+                if (req !== 'granted') return null
+              }
+            }
+            const handle = await dir.getFileHandle(name)
+            return await handle.getFile()
+          } catch {
+            return null
+          }
+        }
 
         if (url) {
           try {
@@ -1579,38 +1634,22 @@ function App() {
         return null
       }
 
-	      try {
-	        const root = await picker({ mode: 'readwrite', id: 'labnote-export' })
-	        const dir = await root.getDirectoryHandle(folderName, { create: true })
+      try {
+        const root = await picker({ mode: 'readwrite', id: 'labnote-export' })
+        const dir = await root.getDirectoryHandle(folderName, { create: true })
 
-	        const writeText = async (targetDir: FileSystemDirectoryHandle, name: string, text: string) => {
-	          const handle = await targetDir.getFileHandle(name, { create: true })
-	          const writable = await handle.createWritable()
-	          await writable.write(new Blob([text], { type: 'text/plain;charset=utf-8' }))
-	          await writable.close()
-	        }
+        const writeText = async (targetDir: FileSystemDirectoryHandle, name: string, text: string) => {
+          const handle = await targetDir.getFileHandle(name, { create: true })
+          const writable = await handle.createWritable()
+          await writable.write(new Blob([text], { type: 'text/plain;charset=utf-8' }))
+          await writable.close()
+        }
 
-	        const ensureDir = async (targetDir: FileSystemDirectoryHandle, name: string) =>
-	          await targetDir.getDirectoryHandle(name, { create: true })
+        const ensureDir = async (targetDir: FileSystemDirectoryHandle, name: string) =>
+          await targetDir.getDirectoryHandle(name, { create: true })
 
         await writeText(dir, exportMdName, content)
         await writeText(dir, 'manifest.json', JSON.stringify(manifest, null, 2))
-
-        const entriesDir = await ensureDir(dir, 'entries')
-        for (const e of entries) {
-          const entryMd = [
-            `# ${e.title}`,
-            '',
-            `- Created: ${e.createdDatetime}`,
-            `- Last edited: ${e.lastEditedDatetime}`,
-            e.tags.length ? `- Tags: ${e.tags.join(', ')}` : '',
-            '',
-            blocksToMarkdown(e.content, attachmentsById, attachmentExportPathById),
-          ]
-            .filter(Boolean)
-            .join('\n')
-          await writeText(entriesDir, `${safeFileName(`${e.dateBucket}_${e.id}`)}.md`, entryMd)
-        }
 
         const attachmentsDir = await ensureDir(dir, 'attachments')
         for (const att of attachments) {
@@ -1621,16 +1660,16 @@ function App() {
           await writable.write(blob)
           await writable.close()
         }
-	
-	        window.alert('Export complete.')
-	      } catch (err: unknown) {
-	        if (isAbortError(err)) return
-	        console.warn('Export failed', err)
-	        window.alert('Export failed. Check console for details.')
-	      }
+
+        window.alert('Export complete.')
+      } catch (err: unknown) {
+        if (isAbortError(err)) return
+        console.warn('Export failed', err)
+        window.alert('Export failed. Check console for details.')
+      }
     },
-    [attachmentsStore, attachmentUrls, entryList, experiments, projects]
-	  )
+    [attachmentUrls, attachmentsStore, entryDrafts]
+  )
 
   const index = useMemo(() => {
     return lunr(function (this: lunr.Builder) {
@@ -1651,30 +1690,32 @@ function App() {
 	          attachments: attachments.map((a) => `${a.filename} ${a.sampleId ?? ''}`).join(' '),
 	        }
 	        this.add(doc as Record<string, string>)
-	      })
-	    })
-	  }, [entryList, attachmentsForEntry])
+      })
+    })
+  }, [entryList, attachmentsForEntry])
+
+  const orderedEntries = useMemo(() => {
+    return [...entryList].sort((a, b) => {
+      const bucketCompare = b.dateBucket.localeCompare(a.dateBucket)
+      if (bucketCompare !== 0) return bucketCompare
+      return b.createdDatetime.localeCompare(a.createdDatetime)
+    })
+  }, [entryList])
 
   const matchedIds = useMemo(() => {
     const q = query.trim()
-    if (!q) return entryList.map((e) => e.id)
-	    try {
-	      return index.search(q).map((r: lunr.Index.Result) => r.ref)
-	    } catch {
-	      return []
-	    }
-	  }, [index, query, entryList])
+    if (!q) return orderedEntries.map((e) => e.id)
+    try {
+      return index.search(q).map((r: lunr.Index.Result) => r.ref)
+    } catch {
+      return []
+    }
+  }, [index, query, orderedEntries])
 
   const filteredEntries = useMemo(() => {
     const q = query.trim().toLowerCase()
     const now = new Date()
-    return entryList.filter((entry) => {
-      if (selectedProject !== 'all' && entry.projectId !== selectedProject) return false
-      if (selectedExperiment === 'none') {
-        if (entry.experimentId) return false
-      } else if (selectedExperiment !== 'all' && entry.experimentId !== selectedExperiment) {
-        return false
-      }
+    return orderedEntries.filter((entry) => {
       if (selectedTags.length && !selectedTags.every((t) => entry.tags.includes(t))) return false
       if (filterHasImage) {
         const hasImage = attachmentsForEntry(entry.id).some((a) => a.type === 'image')
@@ -1685,9 +1726,7 @@ function App() {
         if (!hasFile) return false
       }
 
-      if (selectedDate && entry.dateBucket !== selectedDate) return false
-
-      if (!selectedDate && datePreset !== 'all') {
+      if (datePreset !== 'all') {
         const entryDate = new Date(entry.dateBucket)
         const days = datePreset === '7d' ? 7 : 30
         const diffDays = (now.getTime() - entryDate.getTime()) / (1000 * 60 * 60 * 24)
@@ -1699,45 +1738,43 @@ function App() {
     })
   }, [
     query,
-    selectedProject,
-    selectedExperiment,
     selectedTags,
     filterHasImage,
     filterHasFile,
     matchedIds,
-    selectedDate,
     datePreset,
-    entryList,
+    orderedEntries,
     attachmentsForEntry,
   ])
 
-  // Keep experiment filter in sync with project filter.
-  useEffect(() => {
-    if (selectedExperiment === 'all' || selectedExperiment === 'none') return
-    const ex = experiments.find((e) => e.id === selectedExperiment)
-    if (!ex) {
-      setSelectedExperiment('all')
-      return
-    }
-    if (selectedProject !== 'all' && ex.projectId !== selectedProject) {
-      setSelectedExperiment('all')
-    }
-  }, [experiments, selectedExperiment, selectedProject])
+  const viewerEntries = useMemo(() => {
+    return [...filteredEntries].sort((a, b) => {
+      const bucketCompare = a.dateBucket.localeCompare(b.dateBucket)
+      if (bucketCompare !== 0) return bucketCompare
+      return a.createdDatetime.localeCompare(b.createdDatetime)
+    })
+  }, [filteredEntries])
+  const viewerIndex = useMemo(
+    () => viewerEntries.findIndex((item) => item.id === selectedEntryId),
+    [selectedEntryId, viewerEntries]
+  )
+  const hasPrevEntry = viewerIndex > 0
+  const hasNextEntry = viewerIndex >= 0 && viewerIndex < viewerEntries.length - 1
+
+  const handleViewPrev = useCallback(() => {
+    if (!hasPrevEntry) return
+    const prev = viewerEntries[viewerIndex - 1]
+    if (prev) selectEntry(prev.id)
+  }, [hasPrevEntry, viewerEntries, viewerIndex, selectEntry])
+
+  const handleViewNext = useCallback(() => {
+    if (!hasNextEntry) return
+    const next = viewerEntries[viewerIndex + 1]
+    if (next) selectEntry(next.id)
+  }, [hasNextEntry, viewerEntries, viewerIndex, selectEntry])
 
   const entry = entryDrafts[selectedEntryId]
-  const project = entry?.projectId ? projects.find((p) => p.id === entry.projectId) : undefined
-  const experiment = entry?.experimentId ? experiments.find((ex) => ex.id === entry.experimentId) : undefined
   const attachments = entry ? attachmentsForEntry(entry.id) : []
-
-  const selectedExperimentObj =
-    selectedExperiment !== 'all' && selectedExperiment !== 'none'
-      ? experiments.find((ex) => ex.id === selectedExperiment)
-      : undefined
-  const fallbackProjectId = sampleData.users[1]?.settings.defaultProjectId ?? projects[0]?.id ?? ''
-  const defaultProjectIdForNewEntry =
-    selectedProject !== 'all'
-      ? selectedProject
-      : selectedExperimentObj?.projectId ?? fallbackProjectId
 
   useEffect(() => {
     if (!serverHydrated) return
@@ -1746,11 +1783,10 @@ function App() {
     const nowIso = now.toISOString()
     const entryId = newId('entry-')
     const { content, pinnedRegions } = buildTemplate('blank', entryId, nowIso)
-    const projectId = defaultProjectIdForNewEntry || fallbackProjectId
     const entry: Entry = {
       id: entryId,
       experimentId: undefined,
-      projectId: projectId || undefined,
+      projectId: undefined,
       createdDatetime: nowIso,
       lastEditedDatetime: nowIso,
       authorId: sampleData.users[1]?.id ?? sampleData.users[0]?.id ?? 'me',
@@ -1763,24 +1799,32 @@ function App() {
       pinnedRegions,
     }
     setEntryDrafts((prev) => ({ ...prev, [entryId]: entry }))
-  }, [defaultProjectIdForNewEntry, fallbackProjectId, serverHydrated, todayBucket, todayEntry])
+  }, [serverHydrated, todayBucket, todayEntry])
+
+  useEffect(() => {
+    if (!serverHydrated) return
+    if (!todayEntry) return
+    setSelectedEntryId((current) => (hasUserSelectedEntry && current ? current : todayEntry.id))
+    if (!hasUserSelectedEntry) {
+      setHasUserSelectedEntry(true)
+      setEditorTab('note')
+    }
+  }, [hasUserSelectedEntry, serverHydrated, todayEntry])
 
   const openEntry = useCallback(
     (entryId: string, opts?: { autoEdit?: boolean; tab?: EditorTab }) => {
-      setOpenEntryIds((prev) => (prev.includes(entryId) ? prev : [...prev, entryId]))
-      setSelectedEntryId(entryId)
-      setHasUserSelectedEntry(true)
-      setEditorTab(opts?.tab ?? 'note')
-      if (opts?.autoEdit) {
-        setAutoEditEntryId(entryId)
-      }
+      selectEntry(entryId, opts)
     },
-    []
+    [selectEntry]
   )
 
   const updateEntryMeta = useCallback((entryId: string, updates: Partial<Entry>) => {
     const timestamp = new Date().toISOString()
     const blocks = entryDrafts[entryId]?.content.map((block) => block.id) ?? []
+    const normalizedUpdates = {
+      ...updates,
+      ...(updates.tags ? { tags: mergeTags(updates.tags) } : null),
+    }
     setEntryDrafts((prev) => {
       const current = prev[entryId]
       if (!current) return prev
@@ -1788,7 +1832,7 @@ function App() {
         ...prev,
         [entryId]: {
           ...current,
-          ...updates,
+          ...normalizedUpdates,
           lastEditedDatetime: timestamp,
         },
       }
@@ -1805,6 +1849,19 @@ function App() {
       ...prev,
     ])
   }, [entryDrafts])
+
+  const handleSaveTagTemplate = useCallback((template: TagTemplate) => {
+    setTagTemplates((prev) => {
+      if (prev.some((item) => item.id === template.id)) {
+        return prev.map((item) => (item.id === template.id ? template : item))
+      }
+      return [...prev, template]
+    })
+  }, [])
+
+  const handleDeleteTagTemplate = useCallback((templateId: string) => {
+    setTagTemplates((prev) => prev.filter((item) => item.id !== templateId))
+  }, [])
 
   const togglePinEntry = useCallback((entryId: string) => {
     setPinnedEntryIds((prev) => (
@@ -1827,9 +1884,10 @@ function App() {
 
   useEffect(() => {
     if (!selectedEntryId) return
+    if (viewerMode) return
     if (openEntryIds.includes(selectedEntryId)) return
     setOpenEntryIds((prev) => [...prev, selectedEntryId])
-  }, [openEntryIds, selectedEntryId])
+  }, [openEntryIds, selectedEntryId, viewerMode])
 
   useEffect(() => {
     if (!splitViewEnabled) return
@@ -1858,16 +1916,12 @@ function App() {
       <div className={`app-shell ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
         <Sidebar
           labs={sampleData.labs}
-          projects={projects}
-          experiments={experiments}
           entries={filteredEntries}
+          availableTags={availableTags}
+          storagePath={serverInfo?.dataDir ?? sampleData.labs[0]?.storageConfig.path ?? '—'}
           selectedEntryId={selectedEntryId}
           query={query}
           onQueryChange={setQuery}
-          selectedProject={selectedProject}
-          onSelectProject={setSelectedProject}
-          selectedExperiment={selectedExperiment}
-          onSelectExperiment={setSelectedExperiment}
           selectedTags={selectedTags}
           onToggleTag={(tag) =>
             setSelectedTags((prev) =>
@@ -1879,17 +1933,14 @@ function App() {
           onToggleHasImage={() => setFilterHasImage((v) => !v)}
           onToggleHasFile={() => setFilterHasFile((v) => !v)}
           datePreset={datePreset}
-          onSelectDatePreset={(preset) => {
-            setDatePreset(preset)
-            setSelectedDate(null)
-          }}
+          onSelectDatePreset={setDatePreset}
           selectedDate={selectedDate}
           onSelectDate={handleSelectDate}
           calendarMonth={calendarMonth}
           onCalendarMonthChange={setCalendarMonth}
+          entryDatesWithEntries={entryDatesWithEntries}
           onSelectEntry={(id) => openEntry(id)}
           onNewEntry={() => setNewEntryOpen(true)}
-          onNewExperiment={() => setNewExperimentOpen(true)}
           onQuickCapture={() => handleCreateEntry({ templateId: 'blank', quickCapture: true })}
           onOpenSettings={() => setSettingsOpen(true)}
           collapsed={sidebarCollapsed}
@@ -1898,10 +1949,6 @@ function App() {
         <EditorPane
           entry={entry}
           todayEntry={todayEntry}
-          project={project}
-          experiment={experiment}
-          projects={projects}
-          experiments={experiments}
           openEntries={openEntries}
           activeEntryId={selectedEntryId}
           pinnedEntryIds={pinnedEntryIds}
@@ -1910,7 +1957,6 @@ function App() {
           missingAttachments={missingAttachments}
           onOpenEntry={openEntry}
           onNewEntry={() => setNewEntryOpen(true)}
-          onNewExperiment={() => setNewExperimentOpen(true)}
           onQuickCapture={() => handleCreateEntry({ templateId: 'blank', quickCapture: true })}
           onUpdateEntry={(entryId, content) =>
             setEntryDrafts((prev) => {
@@ -1946,7 +1992,7 @@ function App() {
           syncing={syncing}
           autoEditEntryId={autoEditEntryId}
           onConsumeAutoEdit={() => setAutoEditEntryId(null)}
-          onExportExperiment={exportExperiment}
+          onExportEntry={exportEntry}
           onTogglePinned={togglePinned}
           onSyncNow={() => syncNow({ entryId: selectedEntryId, includeFailed: true })}
           onRetryChange={retryChange}
@@ -1966,30 +2012,24 @@ function App() {
           serverHydrated={serverHydrated}
           serverInfo={serverInfo}
           lastServerSync={lastServerSync}
+          viewerMode={viewerMode}
+          onToggleViewerMode={() => setViewerMode((prev) => !prev)}
+          viewerIndex={viewerIndex}
+          viewerTotal={viewerEntries.length}
+          hasPrevEntry={hasPrevEntry}
+          hasNextEntry={hasNextEntry}
+          onViewPrev={handleViewPrev}
+          onViewNext={handleViewNext}
+          tagTemplates={tagTemplates}
+          onSaveTagTemplate={handleSaveTagTemplate}
+          onDeleteTagTemplate={handleDeleteTagTemplate}
         />
       </div>
       {newEntryOpen && (
         <NewEntryModal
           onClose={() => setNewEntryOpen(false)}
-          projects={projects}
-          experiments={experiments}
-          defaultProjectId={defaultProjectIdForNewEntry}
-          defaultExperimentId={selectedExperiment !== 'all' && selectedExperiment !== 'none' ? selectedExperiment : ''}
-          onCreateProject={createProject}
-          onCreateExperiment={createExperiment}
+          tagTemplates={tagTemplates}
           onCreate={(val) => handleCreateEntry(val)}
-        />
-      )}
-      {newExperimentOpen && (
-        <NewExperimentModal
-          onClose={() => setNewExperimentOpen(false)}
-          projects={projects}
-          defaultProjectId={defaultProjectIdForNewEntry}
-          onCreateProject={createProject}
-          onCreate={(val) => {
-            createExperiment(val)
-            setNewExperimentOpen(false)
-          }}
         />
       )}
       {settingsOpen && (
@@ -2010,16 +2050,12 @@ function App() {
 
 interface SidebarProps {
   labs: typeof sampleData.labs
-  projects: Project[]
-  experiments: Experiment[]
   entries: Entry[]
+  availableTags: string[]
+  storagePath: string
   selectedEntryId: string
   query: string
   onQueryChange: (val: string) => void
-  selectedProject: string
-  onSelectProject: (id: string) => void
-  selectedExperiment: string
-  onSelectExperiment: (id: string) => void
   selectedTags: string[]
   onToggleTag: (tag: string) => void
   filterHasImage: boolean
@@ -2032,9 +2068,9 @@ interface SidebarProps {
   onSelectDate: (date: string | null) => void
   calendarMonth: Date
   onCalendarMonthChange: (next: Date) => void
+  entryDatesWithEntries: Set<string>
   onSelectEntry: (id: string) => void
   onNewEntry: () => void
-  onNewExperiment: () => void
   onQuickCapture: () => void
   onOpenSettings: () => void
   collapsed: boolean
@@ -2043,16 +2079,12 @@ interface SidebarProps {
 
 function Sidebar({
   labs,
-  projects,
-  experiments,
   entries,
+  availableTags,
+  storagePath,
   selectedEntryId,
   query,
   onQueryChange,
-  selectedProject,
-  onSelectProject,
-  selectedExperiment,
-  onSelectExperiment,
   selectedTags,
   onToggleTag,
   filterHasImage,
@@ -2065,23 +2097,16 @@ function Sidebar({
   onSelectDate,
   calendarMonth,
   onCalendarMonthChange,
+  entryDatesWithEntries,
   onSelectEntry,
   onNewEntry,
-  onNewExperiment,
   onQuickCapture,
   onOpenSettings,
   collapsed,
   onToggleCollapsed,
 }: SidebarProps) {
   const activeLab = labs[0]
-  const allTags = useMemo(
-    () => Array.from(new Set(projects.flatMap((p) => p.tags))).slice(0, 12),
-    [projects]
-  )
-  const visibleExperiments = useMemo(() => {
-    if (selectedProject === 'all') return experiments
-    return experiments.filter((ex) => ex.projectId === selectedProject)
-  }, [experiments, selectedProject])
+  const allTags = useMemo(() => availableTags.slice(0, 24), [availableTags])
   const searchRef = useRef<HTMLInputElement | null>(null)
   const [showAdvanced, setShowAdvanced] = useState(false)
   const [tagQuery, setTagQuery] = useState('')
@@ -2163,7 +2188,7 @@ function Sidebar({
             <div>
               <p className="eyebrow">Lab</p>
               <h2>{activeLab?.name ?? 'Lab'}</h2>
-              <p className="muted">Storage: {activeLab?.storageConfig.path}</p>
+              <p className="muted">Storage: {storagePath}</p>
             </div>
             <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
               <div className="status-chip success">Sync ready</div>
@@ -2187,10 +2212,6 @@ function Sidebar({
               <Plus className="icon" aria-hidden="true" />
               New Entry
             </button>
-            <button className="ghost" onClick={onNewExperiment} data-testid="sidebar-new-experiment">
-              <FlaskConical className="icon" aria-hidden="true" />
-              New Experiment
-            </button>
             <button className="accent" onClick={onQuickCapture} data-testid="sidebar-quick-capture">
               <Camera className="icon" aria-hidden="true" />
               Quick Capture
@@ -2198,27 +2219,28 @@ function Sidebar({
           </div>
 
           <section className="sidebar-section">
-            <div className="section-title">Filter</div>
+            <div className="section-title">Tags</div>
             <label className="field">
-              <span className="muted tiny">Project</span>
-              <select value={selectedProject} onChange={(e) => onSelectProject(e.target.value)}>
-                <option value="all">All projects</option>
-                {projects.map((p) => (
-                  <option key={p.id} value={p.id}>{p.title}</option>
-                ))}
-              </select>
+              <span className="muted tiny">Search tags</span>
+              <input
+                value={tagQuery}
+                onChange={(e) => setTagQuery(e.target.value)}
+                placeholder="Filter tags…"
+                data-testid="tag-search"
+              />
             </label>
-
-            <label className="field">
-              <span className="muted tiny">Experiment</span>
-              <select value={selectedExperiment} onChange={(e) => onSelectExperiment(e.target.value)}>
-                <option value="all">All experiments</option>
-                <option value="none">General notes</option>
-                {visibleExperiments.map((ex) => (
-                  <option key={ex.id} value={ex.id}>{ex.title}</option>
-                ))}
-              </select>
-            </label>
+            <div className="chip-row" data-testid="tag-list">
+              {filteredTags.map((tag) => (
+                <button
+                  key={tag}
+                  className={`pill soft ${selectedTags.includes(tag) ? 'active-pill' : ''}`}
+                  onClick={() => onToggleTag(tag)}
+                >
+                  {tag}
+                </button>
+              ))}
+              {filteredTags.length === 0 && <span className="muted tiny">No tags found.</span>}
+            </div>
           </section>
 
           <section className="sidebar-section">
@@ -2248,17 +2270,15 @@ function Sidebar({
                 </div>
               </div>
               <div className="calendar-meta">
-                <span>{selectedDate ? `Selected: ${selectedDate}` : 'All dates'}</span>
-                {selectedDate && (
-                  <button
-                    type="button"
-                    className="calendar-clear"
-                    onClick={() => onSelectDate(null)}
-                    data-testid="calendar-clear"
-                  >
-                    Clear
-                  </button>
-                )}
+                <span>{selectedDate ? `Viewing: ${selectedDate}` : 'Pick a date to view entries.'}</span>
+                <button
+                  type="button"
+                  className="calendar-clear"
+                  onClick={() => onSelectDate(todayIso)}
+                  data-testid="calendar-today"
+                >
+                  Today
+                </button>
               </div>
               <div className="calendar-weekdays">
                 {['Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa', 'Su'].map((day) => (
@@ -2269,23 +2289,21 @@ function Sidebar({
                 {calendarDays.map((day) => {
                   const isSelected = selectedDate === day.iso
                   const isToday = todayIso === day.iso
+                  const hasEntry = entryDatesWithEntries.has(day.iso)
                   return (
                     <button
                       key={day.iso}
                       type="button"
-                      className={`calendar-day${day.isOutside ? ' outside' : ''}${isSelected ? ' selected' : ''}${isToday ? ' today' : ''}`}
+                      className={`calendar-day${day.isOutside ? ' outside' : ''}${isSelected ? ' selected' : ''}${isToday ? ' today' : ''}${hasEntry ? ' has-entry' : ''}`}
                       onClick={() => {
-                        if (isSelected) {
-                          onSelectDate(null)
-                          return
-                        }
                         onSelectDate(day.iso)
                       }}
                       aria-pressed={isSelected}
                       aria-label={`${day.day} ${calendarLabel}`}
                       data-testid={`calendar-day-${day.iso}`}
                     >
-                      {day.day}
+                      <span>{day.day}</span>
+                      {hasEntry && <span className="calendar-dot" aria-hidden="true" />}
                     </button>
                   )
                 })}
@@ -2330,32 +2348,6 @@ function Sidebar({
 
             {showAdvanced && (
               <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 12 }}>
-                <label className="field">
-                  <span className="muted tiny">Search tags</span>
-                  <input
-                    value={tagQuery}
-                    onChange={(e) => setTagQuery(e.target.value)}
-                    placeholder="Filter tags…"
-                    data-testid="tag-search"
-                  />
-                </label>
-
-                <div>
-                  <div className="section-title">Tags</div>
-                  <div className="chip-row" data-testid="tag-list">
-                    {filteredTags.map((tag) => (
-                      <button
-                        key={tag}
-                        className={`pill soft ${selectedTags.includes(tag) ? 'active-pill' : ''}`}
-                        onClick={() => onToggleTag(tag)}
-                      >
-                        {tag}
-                      </button>
-                    ))}
-                    {filteredTags.length === 0 && <span className="muted tiny">No tags found.</span>}
-                  </div>
-                </div>
-
                 <div>
                   <div className="section-title">Attachments</div>
                   <div className="chip-row">
@@ -2409,10 +2401,6 @@ function Sidebar({
 interface EditorPaneProps {
   entry?: Entry
   todayEntry?: Entry
-  project?: Project
-  experiment?: Experiment
-  projects: Project[]
-  experiments: Experiment[]
   openEntries: Entry[]
   activeEntryId: string
   pinnedEntryIds: string[]
@@ -2421,7 +2409,6 @@ interface EditorPaneProps {
   missingAttachments: Set<string>
   onOpenEntry: (entryId: string, opts?: { autoEdit?: boolean; tab?: EditorTab }) => void
   onNewEntry: () => void
-  onNewExperiment: () => void
   onQuickCapture: () => void
   onUpdateEntry: (entryId: string, content: Block[]) => void
   onUpdateEntryMeta: (entryId: string, updates: Partial<Entry>) => void
@@ -2432,7 +2419,7 @@ interface EditorPaneProps {
   syncing: boolean
   autoEditEntryId: string | null
   onConsumeAutoEdit: () => void
-  onExportExperiment: (experimentId: string, format: 'markdown' | 'pdf') => Promise<void>
+  onExportEntry: (entryId: string, format: 'markdown' | 'pdf') => Promise<void>
   onTogglePinned: (attachmentId: string) => void
   onSyncNow: () => void
   onRetryChange: (changeId: string) => void
@@ -2452,15 +2439,22 @@ interface EditorPaneProps {
   serverHydrated: boolean
   serverInfo: LabnoteServerInfo | null
   lastServerSync: string | null
+  viewerMode: boolean
+  onToggleViewerMode: () => void
+  viewerIndex: number
+  viewerTotal: number
+  hasPrevEntry: boolean
+  hasNextEntry: boolean
+  onViewPrev: () => void
+  onViewNext: () => void
+  tagTemplates: TagTemplate[]
+  onSaveTagTemplate: (template: TagTemplate) => void
+  onDeleteTagTemplate: (templateId: string) => void
 }
 
 function EditorPane({
   entry,
   todayEntry,
-  project,
-  experiment,
-  projects,
-  experiments,
   openEntries,
   activeEntryId,
   pinnedEntryIds,
@@ -2469,7 +2463,6 @@ function EditorPane({
   missingAttachments,
   onOpenEntry,
   onNewEntry,
-  onNewExperiment,
   onQuickCapture,
   onUpdateEntry,
   onUpdateEntryMeta,
@@ -2480,7 +2473,7 @@ function EditorPane({
   syncing,
   autoEditEntryId,
   onConsumeAutoEdit,
-  onExportExperiment,
+  onExportEntry,
   onTogglePinned,
   onSyncNow,
   onRetryChange,
@@ -2500,6 +2493,17 @@ function EditorPane({
   serverHydrated,
   serverInfo,
   lastServerSync,
+  viewerMode,
+  onToggleViewerMode,
+  viewerIndex,
+  viewerTotal,
+  hasPrevEntry,
+  hasNextEntry,
+  onViewPrev,
+  onViewNext,
+  tagTemplates,
+  onSaveTagTemplate,
+  onDeleteTagTemplate,
 }: EditorPaneProps) {
   const [exporting, setExporting] = useState(false)
   const [isEditing, setIsEditing] = useState(false)
@@ -2550,14 +2554,6 @@ function EditorPane({
     () => Object.fromEntries(secondaryAttachments.map((att) => [att.id, att])),
     [secondaryAttachments]
   )
-  const secondaryProject = useMemo(
-    () => (secondaryEntry ? projects.find((item) => item.id === secondaryEntry.projectId) : undefined),
-    [projects, secondaryEntry]
-  )
-  const secondaryExperiment = useMemo(
-    () => (secondaryEntry ? experiments.find((item) => item.id === secondaryEntry.experimentId) : undefined),
-    [experiments, secondaryEntry]
-  )
 
   const handleUpdateBlock = useCallback(
     (updated: Block) => {
@@ -2601,6 +2597,42 @@ function EditorPane({
       : activeTab === 'details'
         ? 'Select a note to view details.'
         : 'Select or create a note to get started.'
+
+  const viewerPosition = viewerTotal > 0 && viewerIndex >= 0 ? `${viewerIndex + 1} / ${viewerTotal}` : `0 / ${viewerTotal}`
+
+  const viewerBar = (
+    <div className="viewer-bar" data-testid="viewer-bar">
+      <div className="viewer-nav">
+        <button
+          className="ghost"
+          type="button"
+          onClick={onViewPrev}
+          disabled={!hasPrevEntry}
+          data-testid="viewer-prev"
+        >
+          <ArrowLeft className="icon" aria-hidden="true" />
+          Prev
+        </button>
+        <button
+          className="ghost"
+          type="button"
+          onClick={onViewNext}
+          disabled={!hasNextEntry}
+          data-testid="viewer-next"
+        >
+          Next
+          <ArrowRight className="icon" aria-hidden="true" />
+        </button>
+      </div>
+      <div className="viewer-meta">
+        <span className="pill soft">{viewerPosition}</span>
+        {entry?.dateBucket && <span className="pill">{entry.dateBucket}</span>}
+      </div>
+      <button className="ghost" type="button" onClick={onToggleViewerMode} data-testid="viewer-toggle">
+        Tabs view
+      </button>
+    </div>
+  )
 
   const workspaceBar = (
     <div className="workspace-bar">
@@ -2649,6 +2681,14 @@ function EditorPane({
         })}
       </div>
       <div className="workspace-controls">
+        <button
+          className="ghost"
+          type="button"
+          onClick={onToggleViewerMode}
+          data-testid="viewer-toggle"
+        >
+          Viewer mode
+        </button>
         <button
           className={`ghost ${splitViewEnabled ? 'active-pill' : ''}`}
           type="button"
@@ -2705,7 +2745,7 @@ function EditorPane({
   if (!entry) {
     return (
       <main className="panel editor">
-        {workspaceBar}
+        {viewerMode ? viewerBar : workspaceBar}
         <div className="editor-tabs" role="tablist" aria-label="Note views">
           {tabItems.map((tab) => (
             <button
@@ -2738,7 +2778,7 @@ function EditorPane({
                 <span className="pill soft">{todayHasContent ? 'In progress' : 'Ready'}</span>
               </div>
               <p className="muted">
-                Log your work, attach raw data, and link everything to the right experiment. Autosave is on by default.
+                Log your work, attach raw data, and keep everything organized with tags. Autosave is on by default.
               </p>
               <div className="today-actions">
                 <button
@@ -2812,19 +2852,6 @@ function EditorPane({
               <button
                 className="action-card"
                 type="button"
-                onClick={() => todayEntry && onOpenEntry(todayEntry.id, { tab: 'details' })}
-                disabled={!todayEntry}
-                data-testid="today-link-experiment"
-              >
-                <Link2 className="icon" aria-hidden="true" />
-                <div>
-                  <div className="title-sm">Link experiment</div>
-                  <div className="muted tiny">Attach this entry to a master experiment.</div>
-                </div>
-              </button>
-              <button
-                className="action-card"
-                type="button"
                 onClick={() => todayEntry && onOpenEntry(todayEntry.id, { tab: 'files' })}
                 disabled={!todayEntry}
                 data-testid="today-view-files"
@@ -2844,8 +2871,8 @@ function EditorPane({
               >
                 <Info className="icon" aria-hidden="true" />
                 <div>
-                  <div className="title-sm">Review details</div>
-                  <div className="muted tiny">Metadata, tags, and sync status.</div>
+                  <div className="title-sm">Tags & details</div>
+                  <div className="muted tiny">Manage tags, templates, and sync status.</div>
                 </div>
               </button>
             </div>
@@ -3129,17 +3156,15 @@ function EditorPane({
               <div className="muted tiny">{entry.title}</div>
             </div>
           </div>
-          <EntryLinkPanel
+          <TagPanel
             entry={entry}
-            projects={projects}
-            experiments={experiments}
+            tagTemplates={tagTemplates}
             onUpdateEntryMeta={onUpdateEntryMeta}
-            onNewExperiment={onNewExperiment}
+            onSaveTemplate={onSaveTagTemplate}
+            onDeleteTemplate={onDeleteTagTemplate}
           />
           <MetaPanelContent
             entry={entry}
-            project={project}
-            experiment={experiment}
             attachments={attachments}
             onTogglePinned={onTogglePinned}
             missing={missingAttachments}
@@ -3177,8 +3202,20 @@ function EditorPane({
             <span className="pill soft">{secondaryEntry.dateBucket}</span>
           </div>
           <div className="secondary-meta">
-            <span className="pill">{secondaryProject?.title ?? 'No project'}</span>
-            <span className="pill soft">{secondaryExperiment?.title ?? 'No experiment'}</span>
+            {secondaryEntry.tags.length > 0 ? (
+              <>
+                {secondaryEntry.tags.slice(0, 3).map((tag) => (
+                  <span key={tag} className="pill">
+                    {tag}
+                  </span>
+                ))}
+                {secondaryEntry.tags.length > 3 && (
+                  <span className="pill soft">+{secondaryEntry.tags.length - 3}</span>
+                )}
+              </>
+            ) : (
+              <span className="pill soft">No tags</span>
+            )}
             <span className="pill ghost-pill">{secondaryAttachments.length} files</span>
           </div>
           {secondaryEntry.content.length === 0 ? (
@@ -3203,7 +3240,7 @@ function EditorPane({
 
   return (
     <main className="panel editor" onDrop={handleDrop} onDragOver={(e) => e.preventDefault()} onPaste={handlePaste}>
-      {workspaceBar}
+      {viewerMode ? viewerBar : workspaceBar}
       <div className="editor-tabs" role="tablist" aria-label="Note views">
         {tabItems.map((tab) => {
           const isDisabled = isEditing && tab.id !== 'note'
@@ -3232,52 +3269,55 @@ function EditorPane({
       </div>
       <div className="editor-header">
         <div className="breadcrumbs">
-          <span>{project?.title ?? 'Project'}</span>
-          <span>/</span>
-          <span>{experiment?.title ?? 'General note'}</span>
           <span className="pill soft">{entry.dateBucket}</span>
+          {entry.tags.length > 0 ? (
+            <>
+              {entry.tags.slice(0, 3).map((tag) => (
+                <span key={tag} className="pill">
+                  {tag}
+                </span>
+              ))}
+              {entry.tags.length > 3 && (
+                <span className="pill soft">+{entry.tags.length - 3}</span>
+              )}
+            </>
+          ) : (
+            <span className="muted tiny">No tags yet</span>
+          )}
           <span className={`status-chip ${syncing || hasWork ? 'warning' : 'success'}`} data-testid="sync-status-chip">
             {syncing ? 'Syncing…' : failedCount ? `${failedCount} failed` : pendingCount ? `${pendingCount} pending` : 'Synced'}
           </span>
           <div className="spacer" />
-          {experiment ? (
-            <>
-              <button
-                className="ghost"
-                disabled={exporting}
-                data-testid="export-pdf-btn"
-                onClick={async () => {
-                  setExporting(true)
-                  try {
-                    await onExportExperiment(experiment.id, 'pdf')
-                  } finally {
-                    setExporting(false)
-                  }
-                }}
-              >
-                Export PDF
-              </button>
-              <button
-                className="ghost"
-                disabled={exporting}
-                data-testid="export-md-btn"
-                onClick={async () => {
-                  setExporting(true)
-                  try {
-                    await onExportExperiment(experiment.id, 'markdown')
-                  } finally {
-                    setExporting(false)
-                  }
-                }}
-              >
-                Export MD
-              </button>
-            </>
-          ) : (
-            <button className="ghost" disabled title="Attach this note to an experiment to export a bundle." data-testid="export-pdf-btn">
-              Export PDF
-            </button>
-          )}
+          <button
+            className="ghost"
+            disabled={exporting}
+            data-testid="export-pdf-btn"
+            onClick={async () => {
+              setExporting(true)
+              try {
+                await onExportEntry(entry.id, 'pdf')
+              } finally {
+                setExporting(false)
+              }
+            }}
+          >
+            Export PDF
+          </button>
+          <button
+            className="ghost"
+            disabled={exporting}
+            data-testid="export-md-btn"
+            onClick={async () => {
+              setExporting(true)
+              try {
+                await onExportEntry(entry.id, 'markdown')
+              } finally {
+                setExporting(false)
+              }
+            }}
+          >
+            Export MD
+          </button>
           {activeTab === 'note' && (
             !isEditing ? (
               <button
@@ -3309,7 +3349,6 @@ function EditorPane({
         </div>
         <div className="title-row">
           <h1>{entry.title}</h1>
-          {experiment?.protocolRef && <span className="pill">{experiment.protocolRef}</span>}
         </div>
       </div>
       <div className={`editor-body ${splitViewEnabled ? 'split' : ''}`}>
@@ -3322,8 +3361,6 @@ function EditorPane({
 
 interface MetaPanelProps {
   entry?: Entry
-  project?: Project
-  experiment?: Experiment
   attachments: Attachment[]
   onTogglePinned: (attachmentId: string) => void
   missing: Set<string>
@@ -3340,98 +3377,156 @@ interface MetaPanelProps {
   uploadShared: boolean
 }
 
-function EntryLinkPanel({
+function TagPanel({
   entry,
-  projects,
-  experiments,
+  tagTemplates,
   onUpdateEntryMeta,
-  onNewExperiment,
+  onSaveTemplate,
+  onDeleteTemplate,
 }: {
   entry: Entry
-  projects: Project[]
-  experiments: Experiment[]
+  tagTemplates: TagTemplate[]
   onUpdateEntryMeta: (entryId: string, updates: Partial<Entry>) => void
-  onNewExperiment?: () => void
+  onSaveTemplate: (template: TagTemplate) => void
+  onDeleteTemplate: (templateId: string) => void
 }) {
-  const projectId = entry.projectId ?? ''
-  const experimentId = entry.experimentId ?? ''
-  const projectExperiments = projectId
-    ? experiments.filter((ex) => ex.projectId === projectId)
-    : experiments
+  const [tagInput, setTagInput] = useState('')
+  const [templateName, setTemplateName] = useState('')
+  const [templateError, setTemplateError] = useState<string | null>(null)
 
-  const handleProjectChange = (nextProjectId: string) => {
-    const normalizedProjectId = nextProjectId || undefined
-    let nextExperimentId = entry.experimentId
-    if (!normalizedProjectId) {
-      nextExperimentId = undefined
-    } else if (
-      nextExperimentId &&
-      !experiments.some((ex) => ex.id === nextExperimentId && ex.projectId === normalizedProjectId)
-    ) {
-      nextExperimentId = undefined
-    }
-    onUpdateEntryMeta(entry.id, { projectId: normalizedProjectId, experimentId: nextExperimentId })
+  const handleAddTag = () => {
+    const cleaned = normalizeTag(tagInput)
+    if (!cleaned) return
+    onUpdateEntryMeta(entry.id, { tags: mergeTags(entry.tags, [cleaned]) })
+    setTagInput('')
+    setTemplateError(null)
   }
 
-  const handleExperimentChange = (nextExperimentId: string) => {
-    const normalizedExperimentId = nextExperimentId || undefined
-    const experiment = normalizedExperimentId
-      ? experiments.find((ex) => ex.id === normalizedExperimentId)
-      : undefined
-    onUpdateEntryMeta(entry.id, {
-      experimentId: normalizedExperimentId,
-      projectId: experiment?.projectId ?? entry.projectId,
-    })
+  const handleRemoveTag = (tag: string) => {
+    onUpdateEntryMeta(entry.id, { tags: entry.tags.filter((item) => item !== tag) })
+  }
+
+  const handleApplyTemplate = (template: TagTemplate) => {
+    onUpdateEntryMeta(entry.id, { tags: mergeTags(entry.tags, template.tags) })
+  }
+
+  const handleSaveTemplate = () => {
+    const name = normalizeTag(templateName)
+    if (!name) {
+      setTemplateError('Template name is required.')
+      return
+    }
+    if (entry.tags.length === 0) {
+      setTemplateError('Add tags before saving a template.')
+      return
+    }
+    const template: TagTemplate = {
+      id: newId('tpl-'),
+      name,
+      tags: mergeTags(entry.tags),
+    }
+    onSaveTemplate(template)
+    setTemplateName('')
+    setTemplateError(null)
   }
 
   return (
-    <section className="link-panel">
-      <div className="section-title">Link entry</div>
-      <div className="field">
-        <span className="muted tiny">Project</span>
+    <section className="link-panel tag-panel">
+      <div className="section-title">Tags & templates</div>
+      <div className="tag-editor">
+        <div className="chip-row">
+          {entry.tags.map((tag) => (
+            <span key={tag} className="pill soft tag-chip">
+              {tag}
+              <button
+                type="button"
+                className="icon-button"
+                onClick={() => handleRemoveTag(tag)}
+                aria-label={`Remove tag ${tag}`}
+              >
+                <X className="icon" aria-hidden="true" />
+              </button>
+            </span>
+          ))}
+          {entry.tags.length === 0 && <span className="muted tiny">No tags yet. Add your first tag below.</span>}
+        </div>
         <div className="field-row">
-          <FolderTree className="icon" aria-hidden="true" />
-          <select
-            value={projectId}
-            onChange={(e) => handleProjectChange(e.target.value)}
-            data-testid="entry-project-select"
-          >
-            <option value="">No project</option>
-            {projects.map((project) => (
-              <option key={project.id} value={project.id}>
-                {project.title}
-              </option>
-            ))}
-          </select>
+          <input
+            value={tagInput}
+            onChange={(e) => setTagInput(e.target.value)}
+            placeholder="Add a tag"
+            onKeyDown={(e) => {
+              if (e.key !== 'Enter') return
+              e.preventDefault()
+              handleAddTag()
+            }}
+            data-testid="tag-input"
+          />
+          <button className="accent" type="button" onClick={handleAddTag} data-testid="tag-add-btn">
+            Add
+          </button>
+        </div>
+      </div>
+
+      <div className="template-block">
+        <div className="section-title">Templates</div>
+        {tagTemplates.length === 0 && (
+          <div className="muted tiny">No templates yet. Save the current tags to reuse later.</div>
+        )}
+        <div className="template-grid">
+          {tagTemplates.map((template) => (
+            <div key={template.id} className="template-card">
+              <div>
+                <div className="title-sm">{template.name}</div>
+                {template.tags.length > 0 && (
+                  <div className="chip-row">
+                    {template.tags.map((tag) => (
+                      <span key={tag} className="pill soft">
+                        {tag}
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <div className="template-actions">
+                <button
+                  className="ghost"
+                  type="button"
+                  onClick={() => handleApplyTemplate(template)}
+                  data-testid={`template-apply-${template.id}`}
+                >
+                  Apply
+                </button>
+                <button
+                  className="ghost"
+                  type="button"
+                  onClick={() => onDeleteTemplate(template.id)}
+                  data-testid={`template-delete-${template.id}`}
+                >
+                  Remove
+                </button>
+              </div>
+            </div>
+          ))}
         </div>
       </div>
 
       <div className="field">
-        <span className="muted tiny">Experiment</span>
+        <span className="muted tiny">Save current tags as a template</span>
         <div className="field-row">
-          <FlaskConical className="icon" aria-hidden="true" />
-          <select
-            value={experimentId}
-            onChange={(e) => handleExperimentChange(e.target.value)}
-            data-testid="entry-experiment-select"
-          >
-            <option value="">General notes</option>
-            {projectExperiments.map((ex) => (
-              <option key={ex.id} value={ex.id}>
-                {ex.title}
-              </option>
-            ))}
-          </select>
-          {onNewExperiment && (
-            <button className="ghost" type="button" onClick={onNewExperiment} data-testid="entry-new-experiment">
-              <Plus className="icon" aria-hidden="true" />
-              New experiment
-            </button>
-          )}
+          <input
+            value={templateName}
+            onChange={(e) => {
+              setTemplateName(e.target.value)
+              setTemplateError(null)
+            }}
+            placeholder="Template name"
+          />
+          <button className="ghost" type="button" onClick={handleSaveTemplate} data-testid="template-save-btn">
+            Save
+          </button>
         </div>
-      </div>
-      <div className="muted tiny">
-        The master experiment groups entries, tags, and attachments in one timeline.
+        {templateError && <div className="field-error tiny">{templateError}</div>}
       </div>
     </section>
   )
@@ -3439,8 +3534,6 @@ function EntryLinkPanel({
 
 function MetaPanelContent({
   entry,
-  project,
-  experiment,
   attachments,
   onTogglePinned,
   missing,
@@ -3467,51 +3560,6 @@ function MetaPanelContent({
 
   return (
     <>
-      <section>
-        <div className="section-title">Project</div>
-        {project ? (
-          <div className="meta-card">
-            <div className="title-sm">{project.title}</div>
-            {project.description && <p className="muted tiny">{project.description}</p>}
-            <div className="chip-row">
-              {project.tags.map((tag) => (
-                <span key={tag} className="pill soft">
-                  {tag}
-                </span>
-              ))}
-            </div>
-          </div>
-        ) : (
-          <div className="muted tiny">No project linked</div>
-        )}
-      </section>
-
-      <section>
-        <div className="section-title">Experiment</div>
-        {experiment ? (
-          <div className="meta-card">
-            <div>
-              <div className="title-sm">{experiment.title}</div>
-              <p className="muted tiny">{experiment.protocolRef}</p>
-              <p className="muted tiny">Default path: {experiment.defaultRawDataPath ?? '—'}</p>
-            </div>
-          </div>
-        ) : (
-          <div className="muted tiny">No experiment linked</div>
-        )}
-      </section>
-
-      <section>
-        <div className="section-title">Tags</div>
-        <div className="chip-row">
-          {entry?.tags.map((tag) => (
-            <span key={tag} className="pill">
-              {tag}
-            </span>
-          ))}
-        </div>
-      </section>
-
       <section>
         <div className="section-title">Pinned regions</div>
         <div className="pinned-list" data-testid="pinned-regions-list">
@@ -5335,43 +5383,18 @@ export default App
 
 function NewEntryModal({
   onClose,
-  projects,
-  experiments,
-  defaultProjectId,
-  defaultExperimentId,
-  onCreateProject,
-  onCreateExperiment,
+  tagTemplates,
   onCreate,
 }: {
   onClose: () => void
-  projects: Project[]
-  experiments: Experiment[]
-  defaultProjectId: string
-  defaultExperimentId?: string
-  onCreateProject: (title: string) => string
-  onCreateExperiment: (opts: { title: string; projectId: string }) => string
-  onCreate: (val: { title?: string; projectId?: string; experimentId?: string; templateId: EntryTemplateId }) => void
+  tagTemplates: TagTemplate[]
+  onCreate: (val: { title?: string; templateId: EntryTemplateId; tags?: string[] }) => void
 }) {
   const [title, setTitle] = useState('')
-  const resolvedDefaultProjectId = projects.some((p) => p.id === defaultProjectId)
-    ? defaultProjectId
-    : (projects[0]?.id ?? '')
-  const [projectId, setProjectId] = useState(resolvedDefaultProjectId)
-  const resolvedDefaultExperimentId =
-    defaultExperimentId && experiments.some((ex) => ex.id === defaultExperimentId && ex.projectId === resolvedDefaultProjectId)
-      ? defaultExperimentId
-      : ''
-  const [experimentId, setExperimentId] = useState<string>(resolvedDefaultExperimentId)
   const [templateId, setTemplateId] = useState<EntryTemplateId>('experiment')
-  const [creatingProject, setCreatingProject] = useState(false)
-  const [newProjectTitle, setNewProjectTitle] = useState('')
-  const [projectError, setProjectError] = useState<string | null>(null)
-  const [creatingExperiment, setCreatingExperiment] = useState(false)
-  const [newExperimentTitle, setNewExperimentTitle] = useState('')
-  const [experimentError, setExperimentError] = useState<string | null>(null)
+  const [tagInput, setTagInput] = useState('')
+  const [tags, setTags] = useState<string[]>([])
   const titleRef = useRef<HTMLInputElement | null>(null)
-  const newProjectRef = useRef<HTMLInputElement | null>(null)
-  const newExperimentRef = useRef<HTMLInputElement | null>(null)
 
   useEffect(() => {
     window.setTimeout(() => titleRef.current?.focus(), 0)
@@ -5385,45 +5408,19 @@ function NewEntryModal({
     return () => window.removeEventListener('keydown', handler)
   }, [onClose])
 
-  const projectExperiments = experiments.filter((ex) => (projectId ? ex.projectId === projectId : true))
-
-  const handleAddProject = () => {
-    const cleaned = newProjectTitle.trim().replace(/\s+/g, ' ')
-    if (!cleaned) {
-      setProjectError('Project name is required.')
-      return
-    }
-    try {
-      const id = onCreateProject(cleaned)
-      setProjectId(id)
-      setExperimentId('')
-      setCreatingProject(false)
-      setNewProjectTitle('')
-      setProjectError(null)
-    } catch (err) {
-      setProjectError(err instanceof Error ? err.message : 'Unable to create project.')
-    }
+  const handleAddTag = () => {
+    const cleaned = normalizeTag(tagInput)
+    if (!cleaned) return
+    setTags((prev) => mergeTags(prev, [cleaned]))
+    setTagInput('')
   }
 
-  const handleAddExperiment = () => {
-    const cleaned = newExperimentTitle.trim().replace(/\s+/g, ' ')
-    if (!cleaned) {
-      setExperimentError('Experiment name is required.')
-      return
-    }
-    if (!projectId) {
-      setExperimentError('Select a project first.')
-      return
-    }
-    try {
-      const id = onCreateExperiment({ title: cleaned, projectId })
-      setExperimentId(id)
-      setCreatingExperiment(false)
-      setNewExperimentTitle('')
-      setExperimentError(null)
-    } catch (err) {
-      setExperimentError(err instanceof Error ? err.message : 'Unable to create experiment.')
-    }
+  const handleRemoveTag = (tag: string) => {
+    setTags((prev) => prev.filter((item) => item !== tag))
+  }
+
+  const handleApplyTemplate = (template: TagTemplate) => {
+    setTags((prev) => mergeTags(prev, template.tags))
   }
 
   return (
@@ -5432,7 +5429,7 @@ function NewEntryModal({
         <div className="modal-head">
           <div>
             <div className="title-sm">New entry</div>
-            <div className="muted tiny">Choose a template and where it belongs.</div>
+            <div className="muted tiny">Pick a template and add tags.</div>
           </div>
           <button className="ghost" onClick={onClose}>Close</button>
         </div>
@@ -5443,129 +5440,61 @@ function NewEntryModal({
             <input ref={titleRef} value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Untitled note" />
           </label>
 
-          <label className="field">
-            <span className="muted tiny">Project</span>
-            {!creatingProject ? (
-              <div className="field-row">
-                <select
-                  value={projectId}
-                  onChange={(e) => {
-                    const nextProjectId = e.target.value
-                    setProjectId(nextProjectId)
-                    if (!experimentId) return
-                    const stillValid = experiments.some((ex) => ex.id === experimentId && ex.projectId === nextProjectId)
-                    if (!stillValid) setExperimentId('')
-                  }}
-                >
-                  {projects.map((p) => (
-                    <option key={p.id} value={p.id}>{p.title}</option>
-                  ))}
-                </select>
-                <button
-                  className="ghost"
-                  type="button"
-                  onClick={() => {
-                    setCreatingProject(true)
-                    setProjectError(null)
-                    setNewProjectTitle('')
-                    window.setTimeout(() => newProjectRef.current?.focus(), 0)
-                  }}
-                >
-                  + Project
-                </button>
-              </div>
-            ) : (
-              <div className="field-row">
-                <input
-                  ref={newProjectRef}
-                  value={newProjectTitle}
-                  onChange={(e) => {
-                    setProjectError(null)
-                    setNewProjectTitle(e.target.value)
-                  }}
-                  placeholder="New project name"
-                  onKeyDown={(e) => {
-                    if (e.key !== 'Enter') return
-                    e.preventDefault()
-                    handleAddProject()
-                  }}
-                />
-                <button className="accent" type="button" onClick={handleAddProject}>
-                  Add
-                </button>
-                <button
-                  className="ghost"
-                  type="button"
-                  onClick={() => {
-                    setCreatingProject(false)
-                    setProjectError(null)
-                    setNewProjectTitle('')
-                  }}
-                >
-                  Cancel
-                </button>
-              </div>
-            )}
-            {projectError && <div className="field-error tiny">{projectError}</div>}
-          </label>
+          <div className="field">
+            <span className="muted tiny">Tags</span>
+            <div className="chip-row">
+              {tags.map((tag) => (
+                <span key={tag} className="pill soft tag-chip">
+                  {tag}
+                  <button
+                    type="button"
+                    className="icon-button"
+                    aria-label={`Remove tag ${tag}`}
+                    onClick={() => handleRemoveTag(tag)}
+                  >
+                    <X className="icon" aria-hidden="true" />
+                  </button>
+                </span>
+              ))}
+              {tags.length === 0 && <span className="muted tiny">No tags yet.</span>}
+            </div>
+            <div className="field-row">
+              <input
+                value={tagInput}
+                onChange={(e) => setTagInput(e.target.value)}
+                placeholder="Add a tag"
+                onKeyDown={(e) => {
+                  if (e.key !== 'Enter') return
+                  e.preventDefault()
+                  handleAddTag()
+                }}
+              />
+              <button className="ghost" type="button" onClick={handleAddTag}>
+                Add
+              </button>
+            </div>
+          </div>
 
-          <label className="field">
-            <span className="muted tiny">Experiment (optional)</span>
-            {!creatingExperiment ? (
-              <div className="field-row">
-                <select value={experimentId} onChange={(e) => setExperimentId(e.target.value)}>
-                  <option value="">General note</option>
-                  {projectExperiments.map((ex) => (
-                    <option key={ex.id} value={ex.id}>{ex.title}</option>
-                  ))}
-                </select>
-                <button
-                  className="ghost"
-                  type="button"
-                  onClick={() => {
-                    setCreatingExperiment(true)
-                    setExperimentError(null)
-                    setNewExperimentTitle('')
-                    window.setTimeout(() => newExperimentRef.current?.focus(), 0)
-                  }}
-                >
-                  + Experiment
-                </button>
-              </div>
+          <div className="field">
+            <span className="muted tiny">Templates</span>
+            {tagTemplates.length === 0 ? (
+              <div className="muted tiny">No templates saved yet.</div>
             ) : (
-              <div className="field-row">
-                <input
-                  ref={newExperimentRef}
-                  value={newExperimentTitle}
-                  onChange={(e) => {
-                    setExperimentError(null)
-                    setNewExperimentTitle(e.target.value)
-                  }}
-                  placeholder="New experiment name"
-                  onKeyDown={(e) => {
-                    if (e.key !== 'Enter') return
-                    e.preventDefault()
-                    handleAddExperiment()
-                  }}
-                />
-                <button className="accent" type="button" onClick={handleAddExperiment}>
-                  Add
-                </button>
-                <button
-                  className="ghost"
-                  type="button"
-                  onClick={() => {
-                    setCreatingExperiment(false)
-                    setExperimentError(null)
-                    setNewExperimentTitle('')
-                  }}
-                >
-                  Cancel
-                </button>
+              <div className="chip-row">
+                {tagTemplates.map((template) => (
+                  <button
+                    key={template.id}
+                    type="button"
+                    className="pill soft"
+                    onClick={() => handleApplyTemplate(template)}
+                    data-testid={`new-entry-template-${template.id}`}
+                  >
+                    {template.name}
+                  </button>
+                ))}
               </div>
             )}
-            {experimentError && <div className="field-error tiny">{experimentError}</div>}
-          </label>
+          </div>
 
           <div className="field">
             <span className="muted tiny">Template</span>
@@ -5597,9 +5526,8 @@ function NewEntryModal({
             onClick={() =>
               onCreate({
                 title: title.trim() || undefined,
-                projectId: projectId || undefined,
-                experimentId: experimentId || undefined,
                 templateId,
+                tags,
               })
             }
           >
@@ -5611,195 +5539,6 @@ function NewEntryModal({
   )
 }
 
-function NewExperimentModal({
-  onClose,
-  projects,
-  defaultProjectId,
-  onCreateProject,
-  onCreate,
-}: {
-  onClose: () => void
-  projects: Project[]
-  defaultProjectId: string
-  onCreateProject: (title: string) => string
-  onCreate: (val: { title: string; projectId: string; protocolRef?: string; defaultRawDataPath?: string }) => void
-}) {
-  const resolvedDefaultProjectId = projects.some((p) => p.id === defaultProjectId)
-    ? defaultProjectId
-    : (projects[0]?.id ?? '')
-
-  const [title, setTitle] = useState('')
-  const [projectId, setProjectId] = useState(resolvedDefaultProjectId)
-  const [creatingProject, setCreatingProject] = useState(false)
-  const [newProjectTitle, setNewProjectTitle] = useState('')
-  const [projectError, setProjectError] = useState<string | null>(null)
-  const [protocolRef, setProtocolRef] = useState('')
-  const [defaultRawDataPath, setDefaultRawDataPath] = useState('')
-  const [error, setError] = useState<string | null>(null)
-  const titleRef = useRef<HTMLInputElement | null>(null)
-  const newProjectRef = useRef<HTMLInputElement | null>(null)
-
-  useEffect(() => {
-    window.setTimeout(() => titleRef.current?.focus(), 0)
-  }, [])
-
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose()
-    }
-    window.addEventListener('keydown', handler)
-    return () => window.removeEventListener('keydown', handler)
-  }, [onClose])
-
-  const handleAddProject = () => {
-    const cleaned = newProjectTitle.trim().replace(/\s+/g, ' ')
-    if (!cleaned) {
-      setProjectError('Project name is required.')
-      return
-    }
-    try {
-      const id = onCreateProject(cleaned)
-      setProjectId(id)
-      setCreatingProject(false)
-      setNewProjectTitle('')
-      setProjectError(null)
-    } catch (err) {
-      setProjectError(err instanceof Error ? err.message : 'Unable to create project.')
-    }
-  }
-
-  return (
-    <div className="modal-overlay" role="dialog" aria-modal="true" onMouseDown={onClose}>
-      <div className="modal" onMouseDown={(e) => e.stopPropagation()}>
-        <div className="modal-head">
-          <div>
-            <div className="title-sm">New experiment</div>
-            <div className="muted tiny">Create an experiment under a project.</div>
-          </div>
-          <button className="ghost" onClick={onClose} type="button">Close</button>
-        </div>
-
-        <div className="modal-grid">
-          <label className="field">
-            <span className="muted tiny">Title</span>
-            <input
-              ref={titleRef}
-              value={title}
-              onChange={(e) => {
-                setError(null)
-                setTitle(e.target.value)
-              }}
-              placeholder="e.g. Day 5 – imaging session"
-            />
-          </label>
-
-          <label className="field">
-            <span className="muted tiny">Project</span>
-            {!creatingProject ? (
-              <div className="field-row">
-                <select value={projectId} onChange={(e) => setProjectId(e.target.value)}>
-                  {projects.map((p) => (
-                    <option key={p.id} value={p.id}>{p.title}</option>
-                  ))}
-                </select>
-                <button
-                  className="ghost"
-                  type="button"
-                  onClick={() => {
-                    setCreatingProject(true)
-                    setProjectError(null)
-                    setNewProjectTitle('')
-                    window.setTimeout(() => newProjectRef.current?.focus(), 0)
-                  }}
-                >
-                  + Project
-                </button>
-              </div>
-            ) : (
-              <div className="field-row">
-                <input
-                  ref={newProjectRef}
-                  value={newProjectTitle}
-                  onChange={(e) => {
-                    setProjectError(null)
-                    setNewProjectTitle(e.target.value)
-                  }}
-                  placeholder="New project name"
-                  onKeyDown={(e) => {
-                    if (e.key !== 'Enter') return
-                    e.preventDefault()
-                    handleAddProject()
-                  }}
-                />
-                <button className="accent" type="button" onClick={handleAddProject}>
-                  Add
-                </button>
-                <button
-                  className="ghost"
-                  type="button"
-                  onClick={() => {
-                    setCreatingProject(false)
-                    setProjectError(null)
-                    setNewProjectTitle('')
-                  }}
-                >
-                  Cancel
-                </button>
-              </div>
-            )}
-            {projectError && <div className="field-error tiny">{projectError}</div>}
-          </label>
-
-          <label className="field" style={{ gridColumn: '1 / -1' }}>
-            <span className="muted tiny">Protocol ref (optional)</span>
-            <input
-              value={protocolRef}
-              onChange={(e) => setProtocolRef(e.target.value)}
-              placeholder="e.g. PR-2025-12-IMAGING"
-            />
-          </label>
-
-          <label className="field" style={{ gridColumn: '1 / -1' }}>
-            <span className="muted tiny">Default raw data path (optional)</span>
-            <input
-              value={defaultRawDataPath}
-              onChange={(e) => setDefaultRawDataPath(e.target.value)}
-              placeholder="e.g. \\\\fileserver\\labshare\\2025-12-17\\"
-            />
-            {error && <div className="field-error tiny">{error}</div>}
-          </label>
-        </div>
-
-        <div className="modal-actions">
-          <button className="ghost" onClick={onClose} type="button">Cancel</button>
-          <button
-            className="accent"
-            type="button"
-            onClick={() => {
-              const cleaned = title.trim().replace(/\s+/g, ' ')
-              if (!cleaned) {
-                setError('Experiment title is required.')
-                return
-              }
-              if (!projectId) {
-                setError('Project is required.')
-                return
-              }
-              onCreate({
-                title: cleaned,
-                projectId,
-                protocolRef: protocolRef.trim() || undefined,
-                defaultRawDataPath: defaultRawDataPath.trim() || undefined,
-              })
-            }}
-          >
-            Create experiment
-          </button>
-        </div>
-      </div>
-    </div>
-  )
-}
 
 function SettingsModal({
   onClose,

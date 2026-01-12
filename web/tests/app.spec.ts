@@ -37,7 +37,41 @@ test.describe('Lab note taking app', () => {
     await expect(page.getByTestId('sidebar-new-entry')).toBeVisible()
     await expect(page.getByTestId('sidebar-quick-capture')).toBeVisible()
     await expect(page.getByPlaceholder('Search notes, samples, files')).toBeVisible()
-    await expect(page.getByTestId('today-entry-card')).toBeVisible()
+    await expect(page.getByTestId('viewer-bar')).toBeVisible()
+  })
+
+  test('viewer mode navigates by date order', async ({ page }) => {
+    await boot(page, { noFail: '1' })
+    const title = page.locator('.editor-header h1')
+    await expect(title).toBeVisible()
+    const initial = await title.textContent()
+
+    const prevBtn = page.getByTestId('viewer-prev')
+    await expect(prevBtn).toBeEnabled()
+    await prevBtn.click()
+    await expect(title).not.toHaveText(initial ?? '')
+  })
+
+  test('tags can be added and templates reused', async ({ page }) => {
+    await boot(page, { noFail: '1' })
+    await selectFirstEntry(page)
+    await page.getByTestId('editor-tab-details').click()
+
+    const tagEditor = page.locator('.tag-editor')
+    await page.getByTestId('tag-input').fill('E2E tag')
+    await page.getByTestId('tag-add-btn').click()
+    await expect(tagEditor.getByText('E2E tag', { exact: true })).toBeVisible()
+
+    await page.getByPlaceholder('Template name').fill('E2E template')
+    await page.getByTestId('template-save-btn').click()
+    await expect(page.getByText('E2E template', { exact: true })).toBeVisible()
+
+    await page.getByLabel('Remove tag E2E tag').click()
+    await expect(tagEditor.getByText('E2E tag', { exact: true })).not.toBeVisible()
+
+    const templateCard = page.locator('.template-card', { hasText: 'E2E template' })
+    await templateCard.getByRole('button', { name: 'Apply' }).click()
+    await expect(tagEditor.getByText('E2E tag', { exact: true })).toBeVisible()
   })
 
   test('creates a new entry from template and pins regions', async ({ page }) => {
@@ -63,14 +97,17 @@ test.describe('Lab note taking app', () => {
 
   test('shows capture photo option on landing', async ({ page }) => {
     await boot(page, { noFail: '1' })
-    await expect(page.getByTestId('today-capture-photo')).toBeVisible()
-    await expect(page.getByTestId('today-capture-input')).toHaveAttribute('accept', 'image/*')
-    await expect(page.getByTestId('today-capture-input')).toHaveAttribute('capture', 'environment')
+    await selectFirstEntry(page)
+    await page.getByTestId('edit-note-btn').click()
+    await expect(page.getByTestId('editor-camera-input')).toHaveAttribute('accept', 'image/*')
+    await expect(page.getByTestId('editor-camera-input')).toHaveAttribute('capture', 'environment')
   })
 
   test('shared upload defaults on when server is available', async ({ page }) => {
     await boot(page, { noFail: '1' })
-    const toggle = page.getByTestId('upload-shared-toggle-landing')
+    await selectFirstEntry(page)
+    await page.getByTestId('edit-note-btn').click()
+    const toggle = page.getByTestId('upload-shared-toggle')
     await expect(toggle).toBeVisible()
     await expect(toggle).toBeEnabled()
     await expect(toggle).toHaveClass(/active-pill/)
@@ -134,12 +171,13 @@ test.describe('Lab note taking app', () => {
     await page.evaluate(() => window.localStorage.clear())
     await page.reload()
 
-    await page.getByText('Server persistence note', { exact: true }).click()
+    await page.locator('[data-testid^="entry-list-item-"]', { hasText: 'Server persistence note' }).first().click()
     await expect(page.getByRole('heading', { name: 'Server persistence note' })).toBeVisible()
   })
 
   test('workspace tabs support split view', async ({ page }) => {
     await boot(page, { noFail: '1' })
+    await page.getByTestId('viewer-toggle').click()
     await selectFirstEntry(page)
 
     const entryItems = page.locator('[data-testid^="entry-list-item-"]')
