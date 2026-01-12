@@ -3904,22 +3904,14 @@ const renderElement = (props: RenderElementProps) => {
   const locked = element.locked === true
   switch (element.type) {
     case 'heading-two':
-      return locked ? (
-        <h2 className="block-heading h2 locked-block" {...attributes} style={style} contentEditable={false}>
-          {children}
-        </h2>
-      ) : (
-        <h2 className="block-heading h2" {...attributes} style={style}>
+      return (
+        <h2 className={`block-heading h2${locked ? ' locked-block' : ''}`} {...attributes} style={style}>
           {children}
         </h2>
       )
     case 'heading-three':
-      return locked ? (
-        <h3 className="block-heading h3 locked-block" {...attributes} style={style} contentEditable={false}>
-          {children}
-        </h3>
-      ) : (
-        <h3 className="block-heading h3" {...attributes} style={style}>
+      return (
+        <h3 className={`block-heading h3${locked ? ' locked-block' : ''}`} {...attributes} style={style}>
           {children}
         </h3>
       )
