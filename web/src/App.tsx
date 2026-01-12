@@ -428,16 +428,7 @@ function isBlock(value: unknown): value is Block {
   return typeof value.id === 'string' && typeof value.type === 'string'
 }
 
-function hashString(input: string): number {
-  let h = 2166136261
-  for (let i = 0; i < input.length; i++) {
-    h ^= input.charCodeAt(i)
-    h = Math.imul(h, 16777619)
-  }
-  return h >>> 0
-}
-
-async function mockSyncApi(change: ChangeQueueItem): Promise<void> {
+async function mockSyncApi(): Promise<void> {
   await new Promise<void>((resolve) => setTimeout(resolve, 450))
   if (typeof navigator !== 'undefined' && 'onLine' in navigator && navigator.onLine === false) {
     throw new Error('Offline')
@@ -461,12 +452,6 @@ async function mockSyncApi(change: ChangeQueueItem): Promise<void> {
     }
   } catch {
     // ignore localStorage access errors
-  }
-
-  // Deterministic fail-on-first-try so retries demonstrate UX.
-  const shouldFail = change.attempts === 0 && hashString(change.id) % 5 === 0
-  if (shouldFail) {
-    throw new Error('Mock API error (500)')
   }
 }
 
@@ -1182,7 +1167,7 @@ function App() {
         )
 
         try {
-          await mockSyncApi(change)
+          await mockSyncApi()
           setChangeQueue((prev) =>
             prev.map((c) => (c.id === change.id ? { ...c, status: 'synced', lastError: undefined } : c))
           )
@@ -2721,6 +2706,48 @@ function EditorPane({
         ? 'Select a note to view details.'
         : 'Select or create a note to get started.'
 
+  const persistDraft = useCallback(
+    (value: Descendant[]) => {
+      if (!entry) return
+      const updatedBlocks = slateToBlocks(value)
+      const timestamp = new Date().toISOString()
+      updatedBlocks.forEach((b) => {
+        b.updatedAt = timestamp
+        b.updatedBy = 'me'
+      })
+      onUpdateEntry(entry.id, updatedBlocks)
+      onEnqueueChange(entry.id, updatedBlocks.map((b) => b.id), timestamp)
+    },
+    [entry, onUpdateEntry, onEnqueueChange]
+  )
+
+  const handleTabSwitch = useCallback(
+    (nextTab: EditorTab) => {
+      if (isEditing && nextTab !== 'note') {
+        persistDraft(editorValue)
+        setIsEditing(false)
+      }
+      onTabChange(nextTab)
+    },
+    [editorValue, isEditing, onTabChange, persistDraft]
+  )
+
+  const handleViewPrevSafe = useCallback(() => {
+    if (isEditing) {
+      persistDraft(editorValue)
+      setIsEditing(false)
+    }
+    onViewPrev()
+  }, [editorValue, isEditing, onViewPrev, persistDraft])
+
+  const handleViewNextSafe = useCallback(() => {
+    if (isEditing) {
+      persistDraft(editorValue)
+      setIsEditing(false)
+    }
+    onViewNext()
+  }, [editorValue, isEditing, onViewNext, persistDraft])
+
   const viewerPosition = viewerTotal > 0 && viewerIndex >= 0 ? `${viewerIndex + 1} / ${viewerTotal}` : `0 / ${viewerTotal}`
 
   const viewerBar = (
@@ -2729,7 +2756,7 @@ function EditorPane({
         <button
           className="ghost"
           type="button"
-          onClick={onViewPrev}
+          onClick={handleViewPrevSafe}
           disabled={!hasPrevEntry}
           data-testid="viewer-prev"
         >
@@ -2739,7 +2766,7 @@ function EditorPane({
         <button
           className="ghost"
           type="button"
-          onClick={onViewNext}
+          onClick={handleViewNextSafe}
           disabled={!hasNextEntry}
           data-testid="viewer-next"
         >
@@ -2844,18 +2871,6 @@ function EditorPane({
       </div>
     </div>
   )
-
-  const persistDraft = useCallback((value: Descendant[]) => {
-    if (!entry) return
-    const updatedBlocks = slateToBlocks(value)
-    const timestamp = new Date().toISOString()
-    updatedBlocks.forEach((b) => {
-      b.updatedAt = timestamp
-      b.updatedBy = 'me'
-    })
-    onUpdateEntry(entry.id, updatedBlocks)
-    onEnqueueChange(entry.id, updatedBlocks.map((b) => b.id), timestamp)
-  }, [entry, onUpdateEntry, onEnqueueChange])
 
   useEffect(() => {
     if (!entry || !isEditing) return
@@ -3361,22 +3376,15 @@ function EditorPane({
       {viewerMode ? viewerBar : workspaceBar}
       <div className="editor-tabs" role="tablist" aria-label="Note views">
         {tabItems.map((tab) => {
-          const isDisabled = isEditing && tab.id !== 'note'
           return (
             <button
               key={tab.id}
               type="button"
               role="tab"
               aria-selected={activeTab === tab.id}
-              aria-disabled={isDisabled || undefined}
               id={`editor-tab-${tab.id}`}
               className={`tab-button ${activeTab === tab.id ? 'active' : ''}`}
-              onClick={() => {
-                if (isDisabled) return
-                onTabChange(tab.id)
-              }}
-              disabled={isDisabled}
-              title={isDisabled ? 'Finish editing to switch tabs.' : undefined}
+              onClick={() => handleTabSwitch(tab.id)}
               data-testid={`editor-tab-${tab.id}`}
             >
               <tab.icon className="icon" aria-hidden="true" />
@@ -3436,28 +3444,33 @@ function EditorPane({
           >
             Export MD
           </button>
-          {activeTab === 'note' && (
-            !isEditing ? (
+          {!isEditing ? (
+            <button
+              className="accent"
+              onClick={() => {
+                onTabChange('note')
+                setIsEditing(true)
+              }}
+              data-testid="edit-note-btn"
+            >
+              Edit
+            </button>
+          ) : (
+            <div className="edit-actions">
               <button
-                className="accent"
+                className="ghost"
                 onClick={() => {
-                  onTabChange('note')
-                  setIsEditing(true)
+                  persistDraft(editorValue)
+                  setIsEditing(false)
                 }}
-                data-testid="edit-note-btn"
+                data-testid="cancel-edit-btn"
               >
-                Edit
+                Exit
               </button>
-            ) : (
-              <div className="edit-actions">
-                <button className="ghost" onClick={() => setIsEditing(false)} data-testid="cancel-edit-btn">
-                  Cancel
-                </button>
-                <button className="accent" onClick={handleSave} data-testid="save-note-btn">
-                  Save
-                </button>
-              </div>
-            )
+              <button className="accent" onClick={handleSave} data-testid="save-note-btn">
+                Save
+              </button>
+            </div>
           )}
         </div>
         <div className="meta-row">
