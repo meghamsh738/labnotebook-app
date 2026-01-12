@@ -7,6 +7,8 @@ test.skip(process.env.GENERATE_SCREENSHOTS !== '1', 'Set GENERATE_SCREENSHOTS=1 
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const outDir = path.join(here, '..', '..', 'screenshots')
+const dateFormatter = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+const formatUiDate = (isoDate: string) => dateFormatter.format(new Date(`${isoDate}T12:00:00`))
 
 async function selectCalendarDate(page: Page, isoDate: string) {
   const target = page.getByTestId(`calendar-day-${isoDate}`)
@@ -45,7 +47,7 @@ test('generate feature screenshots', async ({ page }) => {
   } else {
     await page.locator('[data-testid^="entry-list-item-"]').first().click()
   }
-  await expect(page.getByRole('heading', { name: /day 3/i })).toBeVisible()
+  await expect(page.getByRole('heading', { name: formatUiDate('2025-12-07') })).toBeVisible()
   await page.screenshot({ path: path.join(outDir, '01-dashboard.png'), fullPage: true })
 
   await page.getByTestId('sidebar-new-entry').click()
@@ -54,7 +56,6 @@ test('generate feature screenshots', async ({ page }) => {
   await page.getByRole('button', { name: 'Cancel' }).click()
 
   await page.getByTestId('sidebar-new-entry').click()
-  await page.getByLabel('Title').fill('Template example')
   await page.getByRole('button', { name: 'Create entry' }).click()
   await expect(page.getByTestId('save-note-btn')).toBeVisible()
   await page.getByTestId('save-note-btn').click()

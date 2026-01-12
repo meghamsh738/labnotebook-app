@@ -179,6 +179,11 @@ function getEntryTimestamp(entry?: Entry): number {
   return Number.isNaN(ts) ? 0 : ts
 }
 
+function getEntryDisplayTitle(entry: Entry): string {
+  const baseDate = entry.dateBucket ? dateFromBucket(entry.dateBucket) : new Date(entry.createdDatetime)
+  return dateOnly.format(baseDate)
+}
+
 function mergeById<T extends { id: string }>(serverItems: T[], localItems: T[]): T[] {
   const byId = new Map<string, T>()
   for (const item of serverItems) byId.set(item.id, item)
@@ -1026,7 +1031,6 @@ function App() {
       const nowIso = bucketDate.toISOString()
       const entryId = newId('entry-')
       const { content, pinnedRegions } = buildTemplate('blank', entryId, nowIso)
-      const isToday = bucket === getDateBucket(new Date())
       const entry: Entry = {
         id: entryId,
         experimentId: undefined,
@@ -1034,7 +1038,7 @@ function App() {
         createdDatetime: nowIso,
         lastEditedDatetime: nowIso,
         authorId: sampleData.users[1]?.id ?? sampleData.users[0]?.id ?? 'me',
-        title: `${isToday ? 'Today\'s entry' : 'Daily entry'} – ${dateOnly.format(bucketDate)}`,
+        title: dateOnly.format(bucketDate),
         dateBucket: bucket,
         content,
         tags: [],
@@ -1057,21 +1061,17 @@ function App() {
   }, [openEntryForBucket])
 
   const handleCreateEntry = useCallback(
-    (opts: { title?: string; templateId: EntryTemplateId; quickCapture?: boolean; tags?: string[] }) => {
+    (opts: { templateId: EntryTemplateId; tags?: string[] }) => {
       const now = new Date()
       const nowIso = now.toISOString()
       const targetBucket = selectedDate ?? getDateBucket(now)
       const matches = entryList.filter((entry) => entry.dateBucket === targetBucket)
       const primary = pickDailyEntry(matches)
       if (primary) {
-        const trimmedTitle = opts.title?.trim()
-        const nextTags = opts.tags?.length ? mergeTags(primary.tags, opts.tags) : undefined
+        const nextTags = opts.tags?.length ? mergeTags(opts.tags) : undefined
         const shouldApplyTemplate = opts.templateId !== 'blank' && isEntryContentEmpty(primary)
         const template = shouldApplyTemplate ? buildTemplate(opts.templateId, primary.id, nowIso) : null
         const updates: Partial<Entry> = {}
-        if (trimmedTitle && shouldReplaceTitle(primary.title)) {
-          updates.title = trimmedTitle
-        }
         if (nextTags) {
           updates.tags = nextTags
         }
@@ -1115,11 +1115,7 @@ function App() {
 
       const entryId = newId('entry-')
       const bucketDate = dateFromBucket(targetBucket)
-      const title =
-        opts.title?.trim() ||
-        (opts.quickCapture
-          ? `Quick capture – ${dtFormat.format(now)}`
-          : `Untitled note – ${dateOnly.format(bucketDate)}`)
+      const title = dateOnly.format(bucketDate)
 
       const { content, pinnedRegions } = buildTemplate(opts.templateId, entryId, nowIso)
 
@@ -1539,6 +1535,7 @@ function App() {
         window.alert('Entry not found.')
         return
       }
+      const displayTitle = getEntryDisplayTitle(entry)
       const attachments = attachmentsStore.filter((a) => a.entryId === entryId)
       const attachmentsById = Object.fromEntries(attachments.map((a) => [a.id, a]))
 
@@ -1548,7 +1545,7 @@ function App() {
 <html>
   <head>
     <meta charset="utf-8" />
-    <title>${safeFileName(entry.title)}</title>
+    <title>${safeFileName(displayTitle)}</title>
     <style>
       :root { color-scheme: light; }
       body { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial; margin: 28px; color: #0b1220; }
@@ -1579,7 +1576,7 @@ function App() {
   <body>
     <header>
       <div>
-        <h1>${entry.title}</h1>
+        <h1>${displayTitle}</h1>
         <div class="meta">
           ${entry.dateBucket} · Created ${new Date(entry.createdDatetime).toLocaleString()} · Last edited ${new Date(entry.lastEditedDatetime).toLocaleString()}
         </div>
@@ -1607,8 +1604,8 @@ function App() {
       }
 
       const exportedAt = new Date().toISOString()
-      const folderName = safeFileName(`labnote_${entry.dateBucket}_${entry.title}`)
-      const exportMdName = safeFileName(`${entry.title}.md`)
+      const folderName = safeFileName(`labnote_${entry.dateBucket}_${displayTitle}`)
+      const exportMdName = safeFileName(`${displayTitle}.md`)
 
       const attachmentExportNameById: Record<string, string> = {}
       attachments.forEach((a) => {
@@ -1621,7 +1618,7 @@ function App() {
       )
 
       const content = [
-        `# ${entry.title}`,
+        `# ${displayTitle}`,
         '',
         `- Date: ${entry.dateBucket}`,
         `- Created: ${entry.createdDatetime}`,
@@ -1639,11 +1636,11 @@ function App() {
         scope: {
           type: 'entry',
           entryId: entry.id,
-          entryTitle: entry.title,
+          entryTitle: displayTitle,
         },
         entry: {
           id: entry.id,
-          title: entry.title,
+          title: displayTitle,
           dateBucket: entry.dateBucket,
           createdDatetime: entry.createdDatetime,
           lastEditedDatetime: entry.lastEditedDatetime,
@@ -1892,7 +1889,7 @@ function App() {
       createdDatetime: nowIso,
       lastEditedDatetime: nowIso,
       authorId: sampleData.users[1]?.id ?? sampleData.users[0]?.id ?? 'me',
-      title: `Today's entry – ${dateOnly.format(now)}`,
+      title: dateOnly.format(now),
       dateBucket: todayBucket,
       content,
       tags: [],
@@ -2208,7 +2205,7 @@ function Sidebar({
   onToggleCollapsed,
 }: SidebarProps) {
   const activeLab = labs[0]
-  const allTags = useMemo(() => availableTags.slice(0, 24), [availableTags])
+  const allTags = useMemo(() => availableTags, [availableTags])
   const searchRef = useRef<HTMLInputElement | null>(null)
   const [showAdvanced, setShowAdvanced] = useState(false)
   const [tagQuery, setTagQuery] = useState('')
@@ -2219,9 +2216,9 @@ function Sidebar({
   const normalizedTagQuery = tagQuery.trim().toLowerCase()
   const filteredTags = useMemo(
     () =>
-      normalizedTagQuery
+      normalizedTagQuery.length >= 2
         ? allTags.filter((tag) => tag.toLowerCase().includes(normalizedTagQuery))
-        : allTags,
+        : [],
     [allTags, normalizedTagQuery]
   )
 
@@ -2286,15 +2283,20 @@ function Sidebar({
 
       {!collapsed && (
         <div className="sidebar-content">
-          <div className="lab-head">
-            <div>
-              <p className="eyebrow">Lab</p>
-              <h2>{activeLab?.name ?? 'Lab'}</h2>
-              <p className="muted">Storage: {storagePath}</p>
+          <div className="lab-card">
+            <div className="lab-head">
+              <div>
+                <p className="eyebrow">Lab</p>
+                <h2>{activeLab?.name ?? 'Lab'}</h2>
+              </div>
+              <div className="lab-actions">
+                <div className="status-chip success">Sync ready</div>
+                <button className="pill soft" onClick={onOpenSettings} type="button">Settings</button>
+              </div>
             </div>
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-              <div className="status-chip success">Sync ready</div>
-              <button className="pill soft" onClick={onOpenSettings} type="button">Settings</button>
+            <div className="lab-meta">
+              <span className="muted tiny">Storage</span>
+              <span className="mono-line" title={storagePath}>{storagePath}</span>
             </div>
           </div>
 
@@ -2327,7 +2329,7 @@ function Sidebar({
               <input
                 value={tagQuery}
                 onChange={(e) => setTagQuery(e.target.value)}
-                placeholder="Filter tags…"
+                placeholder="Type at least 2 letters"
                 data-testid="tag-search"
               />
             </label>
@@ -2341,7 +2343,12 @@ function Sidebar({
                   {tag}
                 </button>
               ))}
-              {filteredTags.length === 0 && <span className="muted tiny">No tags found.</span>}
+              {tagQuery.trim().length < 2 && (
+                <span className="muted tiny">Start typing to see tags.</span>
+              )}
+              {tagQuery.trim().length >= 2 && filteredTags.length === 0 && (
+                <span className="muted tiny">No tags found.</span>
+              )}
             </div>
           </section>
 
@@ -2436,7 +2443,7 @@ function Sidebar({
                   data-testid={`entry-list-item-${entry.id}`}
                 >
                   <div>
-                    <div className="title-sm">{entry.title}</div>
+                    <div className="title-sm">{getEntryDisplayTitle(entry)}</div>
                     <p className="muted tiny">{dateOnly.format(new Date(entry.createdDatetime))}</p>
                   </div>
                   {entry.tags[0] ? (
@@ -2700,7 +2707,7 @@ function EditorPane({
   ]
 
   const todayDate = todayEntry ? new Date(todayEntry.createdDatetime) : new Date()
-  const todayTitle = todayEntry?.title ?? `Today's entry – ${dateOnly.format(todayDate)}`
+  const todayTitle = todayEntry ? getEntryDisplayTitle(todayEntry) : dateOnly.format(todayDate)
   const todayUpdated = todayEntry?.lastEditedDatetime
   const todayHasContent = (todayEntry?.content ?? []).some((block) => {
     if (block.type === 'paragraph' || block.type === 'quote') return block.text.trim().length > 0
@@ -2881,7 +2888,7 @@ function EditorPane({
                 onClick={() => onOpenEntry(open.id)}
               >
                 <NotebookPen className="icon" aria-hidden="true" />
-                <span className="workspace-tab-title">{open.title}</span>
+                <span className="workspace-tab-title">{getEntryDisplayTitle(open)}</span>
               </button>
               <button
                 type="button"
@@ -2937,7 +2944,7 @@ function EditorPane({
                 .filter((item) => item.id !== activeEntryId)
                 .map((item) => (
                   <option key={item.id} value={item.id}>
-                    {item.title}
+                    {getEntryDisplayTitle(item)}
                   </option>
                 ))}
             </select>
@@ -3375,7 +3382,7 @@ function EditorPane({
           <div className="details-head">
             <div>
               <div className="title-sm">Details</div>
-              <div className="muted tiny">{entry.title}</div>
+              <div className="muted tiny">{getEntryDisplayTitle(entry)}</div>
             </div>
           </div>
           <TagPanel
@@ -3416,7 +3423,7 @@ function EditorPane({
           <div className="secondary-header">
             <div>
               <div className="eyebrow">Reference</div>
-              <h2>{secondaryEntry.title}</h2>
+              <h2>{getEntryDisplayTitle(secondaryEntry)}</h2>
               <div className="muted tiny">
                 Last edited {dtFormat.format(new Date(secondaryEntry.lastEditedDatetime))}
               </div>
@@ -3568,7 +3575,7 @@ function EditorPane({
           <span className="muted tiny">Last edited {dtFormat.format(new Date(entry.lastEditedDatetime))}</span>
         </div>
         <div className="title-row">
-          <h1>{entry.title}</h1>
+          <h1>{getEntryDisplayTitle(entry)}</h1>
         </div>
       </div>
       <div className={`editor-body ${splitViewEnabled ? 'split' : ''}`}>
@@ -3627,7 +3634,7 @@ function TagPanel({
   }
 
   const handleApplyTemplate = (template: TagTemplate) => {
-    onUpdateEntryMeta(entry.id, { tags: mergeTags(entry.tags, template.tags) })
+    onUpdateEntryMeta(entry.id, { tags: mergeTags(template.tags) })
   }
 
   const handleUpdateTemplate = (template: TagTemplate) => {
@@ -3661,7 +3668,7 @@ function TagPanel({
 
   return (
     <section className="link-panel tag-panel">
-      <div className="section-title">Tags & templates</div>
+      <div className="section-title">Tag templates</div>
       <div className="tag-editor">
         <div className="chip-row">
           {entry.tags.map((tag) => (
@@ -3700,7 +3707,7 @@ function TagPanel({
       <div className="template-block">
         <div className="section-title">Templates</div>
         <div className="muted tiny" style={{ marginBottom: 8 }}>
-          Save tag sets and re-apply them in one click. Use Update to overwrite a template with the current tags.
+          Templates replace tags on the entry. Use Update to overwrite the template with current tags.
         </div>
         {tagTemplates.length === 0 && (
           <div className="muted tiny">No templates yet. Save the current tags to reuse later.</div>
@@ -5621,16 +5628,15 @@ function NewEntryModal({
 }: {
   onClose: () => void
   tagTemplates: TagTemplate[]
-  onCreate: (val: { title?: string; templateId: EntryTemplateId; tags?: string[] }) => void
+  onCreate: (val: { templateId: EntryTemplateId; tags?: string[] }) => void
 }) {
-  const [title, setTitle] = useState('')
   const [templateId, setTemplateId] = useState<EntryTemplateId>('experiment')
   const [tagInput, setTagInput] = useState('')
   const [tags, setTags] = useState<string[]>([])
-  const titleRef = useRef<HTMLInputElement | null>(null)
+  const tagInputRef = useRef<HTMLInputElement | null>(null)
 
   useEffect(() => {
-    window.setTimeout(() => titleRef.current?.focus(), 0)
+    window.setTimeout(() => tagInputRef.current?.focus(), 0)
   }, [])
 
   useEffect(() => {
@@ -5653,7 +5659,7 @@ function NewEntryModal({
   }
 
   const handleApplyTemplate = (template: TagTemplate) => {
-    setTags((prev) => mergeTags(prev, template.tags))
+    setTags(mergeTags(template.tags))
   }
 
   return (
@@ -5662,16 +5668,16 @@ function NewEntryModal({
         <div className="modal-head">
           <div>
             <div className="title-sm">New entry</div>
-            <div className="muted tiny">Pick a template and add tags.</div>
+            <div className="muted tiny">Pick a template or add tags.</div>
           </div>
           <button className="ghost" onClick={onClose}>Close</button>
         </div>
 
         <div className="modal-grid">
-          <label className="field">
+          <div className="field">
             <span className="muted tiny">Title</span>
-            <input ref={titleRef} value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Untitled note" />
-          </label>
+            <div className="muted tiny">Entries are titled by date automatically.</div>
+          </div>
 
           <div className="field">
             <span className="muted tiny">Tags</span>
@@ -5693,6 +5699,7 @@ function NewEntryModal({
             </div>
             <div className="field-row">
               <input
+                ref={tagInputRef}
                 value={tagInput}
                 onChange={(e) => setTagInput(e.target.value)}
                 placeholder="Add a tag"
@@ -5709,7 +5716,7 @@ function NewEntryModal({
           </div>
 
           <div className="field">
-            <span className="muted tiny">Templates</span>
+            <span className="muted tiny">Tag templates</span>
             {tagTemplates.length === 0 ? (
               <div className="muted tiny">No templates saved yet.</div>
             ) : (
@@ -5728,12 +5735,12 @@ function NewEntryModal({
               </div>
             )}
             <div className="muted tiny" style={{ marginTop: 6 }}>
-              Manage templates in the Details tab of any entry.
+              Applying a template replaces existing tags. Manage templates in Details.
             </div>
           </div>
 
           <div className="field">
-            <span className="muted tiny">Template</span>
+            <span className="muted tiny">Entry layout</span>
             <div className="template-row">
               <button
                 type="button"
@@ -5761,7 +5768,6 @@ function NewEntryModal({
             className="accent"
             onClick={() =>
               onCreate({
-                title: title.trim() || undefined,
                 templateId,
                 tags,
               })

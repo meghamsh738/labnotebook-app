@@ -41,6 +41,9 @@ async function selectFirstEntry(page: Page) {
   await page.locator('[data-testid^="entry-list-item-"]').first().click()
 }
 
+const dateFormatter = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+const formatUiDate = (isoDate: string) => dateFormatter.format(new Date(`${isoDate}T12:00:00`))
+
 test.describe('Lab note taking app', () => {
   test('loads baseline UI', async ({ page }) => {
     await boot(page, { noFail: '1' })
@@ -68,7 +71,7 @@ test.describe('Lab note taking app', () => {
     await selectCalendarDate(page, '2025-12-07')
     const entries = page.locator('[data-testid^="entry-list-item-"]')
     await expect(entries).toHaveCount(1)
-    await expect(entries.first()).toContainText(/day 3/i)
+    await expect(entries.first()).toContainText(formatUiDate('2025-12-07'))
   })
 
   test('tags can be added and templates reused', async ({ page }) => {
@@ -85,23 +88,25 @@ test.describe('Lab note taking app', () => {
     await page.getByTestId('template-save-btn').click()
     await expect(page.getByText('E2E template', { exact: true })).toBeVisible()
 
-    await page.getByLabel('Remove tag E2E tag').click()
-    await expect(tagEditor.getByText('E2E tag', { exact: true })).not.toBeVisible()
+    await page.getByTestId('tag-input').fill('Extra tag')
+    await page.getByTestId('tag-add-btn').click()
+    await expect(tagEditor.getByText('Extra tag', { exact: true })).toBeVisible()
 
     const templateCard = page.locator('.template-card', { hasText: 'E2E template' })
     await templateCard.getByRole('button', { name: 'Apply' }).click()
     await expect(tagEditor.getByText('E2E tag', { exact: true })).toBeVisible()
+    await expect(tagEditor.getByText('Extra tag', { exact: true })).not.toBeVisible()
   })
 
   test('creates a new entry from template and pins regions', async ({ page }) => {
     await boot(page, { noFail: '1' })
+    await selectCalendarDate(page, '2025-12-08')
     await page.getByTestId('sidebar-new-entry').click()
     await expect(page.getByRole('dialog')).toBeVisible()
 
-    await page.getByLabel('Title').fill('E2E template note')
     await page.getByRole('button', { name: 'Create entry' }).click()
 
-    await expect(page.getByRole('heading', { name: 'E2E template note' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: formatUiDate('2025-12-08') })).toBeVisible()
     await expect(page.getByTestId('save-note-btn')).toBeVisible()
 
     await page.getByTestId('save-note-btn').click()
@@ -192,18 +197,18 @@ test.describe('Lab note taking app', () => {
 
   test('persists entries after local storage reset', async ({ page }) => {
     await boot(page, { noFail: '1' })
+    await selectCalendarDate(page, '2025-12-09')
     await page.getByTestId('sidebar-new-entry').click()
-    await page.getByLabel('Title').fill('Server persistence note')
     await page.getByRole('button', { name: 'Create entry' }).click()
     await page.getByTestId('save-note-btn').click()
-    await expect(page.getByRole('heading', { name: 'Server persistence note' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: formatUiDate('2025-12-09') })).toBeVisible()
 
     await page.waitForTimeout(600)
     await page.evaluate(() => window.localStorage.clear())
     await page.reload()
 
-    await page.locator('[data-testid^="entry-list-item-"]', { hasText: 'Server persistence note' }).first().click()
-    await expect(page.getByRole('heading', { name: 'Server persistence note' })).toBeVisible()
+    await selectCalendarDate(page, '2025-12-09')
+    await expect(page.getByRole('heading', { name: formatUiDate('2025-12-09') })).toBeVisible()
   })
 
   test('workspace tabs support split view', async ({ page }) => {
@@ -218,8 +223,8 @@ test.describe('Lab note taking app', () => {
     await expect(tabs).toBeVisible()
     const tabItems = tabs.locator('[data-testid^="workspace-tab-"]')
     expect(await tabItems.count()).toBeGreaterThanOrEqual(2)
-    await expect(tabs).toContainText('Day 3')
-    await expect(tabs).toContainText('Microglia')
+    await expect(tabs).toContainText(formatUiDate('2025-12-07'))
+    await expect(tabs).toContainText(formatUiDate('2025-12-05'))
 
     await page.getByTestId('split-toggle').click()
     const splitSelect = page.getByTestId('split-secondary-select')
