@@ -21,7 +21,18 @@ async function boot(
   await page.goto('/')
 }
 
+async function selectCalendarDate(page: Page, isoDate: string) {
+  const target = page.getByTestId(`calendar-day-${isoDate}`)
+  for (let i = 0; i < 14; i += 1) {
+    if (await target.count()) break
+    await page.getByRole('button', { name: /previous month/i }).click()
+  }
+  await expect(target).toBeVisible()
+  await target.click()
+}
+
 async function selectFirstEntry(page: Page) {
+  await selectCalendarDate(page, '2025-12-07')
   const seeded = page.locator('[data-testid="entry-list-item-entry-1"]')
   if (await seeded.count()) {
     await seeded.first().click()
@@ -50,6 +61,14 @@ test.describe('Lab note taking app', () => {
     await expect(prevBtn).toBeEnabled()
     await prevBtn.click()
     await expect(title).not.toHaveText(initial ?? '')
+  })
+
+  test('entry list filters to the selected day', async ({ page }) => {
+    await boot(page, { noFail: '1' })
+    await selectCalendarDate(page, '2025-12-07')
+    const entries = page.locator('[data-testid^="entry-list-item-"]')
+    await expect(entries).toHaveCount(1)
+    await expect(entries.first()).toContainText(/day 3/i)
   })
 
   test('tags can be added and templates reused', async ({ page }) => {
@@ -133,7 +152,7 @@ test.describe('Lab note taking app', () => {
 
   test('table formatting toggles update table styles', async ({ page }) => {
     await boot(page, { noFail: '1' })
-    await page.getByTestId('entry-list-item-entry-1').click()
+    await selectFirstEntry(page)
 
     const table = page.locator('.table-wrap').first()
     await expect(page.getByTestId('table-header-toggle')).toBeVisible()
@@ -178,16 +197,17 @@ test.describe('Lab note taking app', () => {
   test('workspace tabs support split view', async ({ page }) => {
     await boot(page, { noFail: '1' })
     await page.getByTestId('viewer-toggle').click()
-    await selectFirstEntry(page)
-
-    const entryItems = page.locator('[data-testid^="entry-list-item-"]')
-    const entryCount = await entryItems.count()
-    expect(entryCount).toBeGreaterThan(1)
-    await entryItems.nth(1).click()
+    await selectCalendarDate(page, '2025-12-07')
+    await page.getByTestId('entry-list-item-entry-1').click()
+    await selectCalendarDate(page, '2025-12-05')
+    await page.getByTestId('entry-list-item-entry-2').click()
 
     const tabs = page.getByTestId('workspace-tabs')
     await expect(tabs).toBeVisible()
-    await expect(tabs.locator('[data-testid^="workspace-tab-"]')).toHaveCount(2)
+    const tabItems = tabs.locator('[data-testid^="workspace-tab-"]')
+    expect(await tabItems.count()).toBeGreaterThanOrEqual(2)
+    await expect(tabs).toContainText('Day 3')
+    await expect(tabs).toContainText('Microglia')
 
     await page.getByTestId('split-toggle').click()
     const splitSelect = page.getByTestId('split-secondary-select')
@@ -257,5 +277,15 @@ test.describe('Lab note taking app', () => {
     const dialog = page.getByRole('dialog')
     await expect(dialog).toBeVisible()
     await expect(dialog.getByText('Disk cache', { exact: true })).toBeVisible()
+  })
+
+  test('quick capture reuses the day entry', async ({ page }) => {
+    await boot(page, { noFail: '1' })
+    const title = page.locator('.editor-header h1')
+    await expect(title).toBeVisible()
+    const before = await title.textContent()
+    await page.getByTestId('sidebar-quick-capture').click()
+    await expect(page.getByTestId('save-note-btn')).toBeVisible()
+    await expect(title).toHaveText(before ?? '')
   })
 })

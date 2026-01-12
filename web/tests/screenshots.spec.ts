@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test'
+import { test, expect, type Page } from '@playwright/test'
 import fs from 'fs'
 import path from 'path'
 import { fileURLToPath } from 'url'
@@ -7,6 +7,15 @@ test.skip(process.env.GENERATE_SCREENSHOTS !== '1', 'Set GENERATE_SCREENSHOTS=1 
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const outDir = path.join(here, '..', '..', 'screenshots')
+
+async function selectCalendarDate(page: Page, isoDate: string) {
+  const target = page.getByTestId(`calendar-day-${isoDate}`)
+  for (let i = 0; i < 14; i += 1) {
+    if (await target.count()) break
+    await page.getByRole('button', { name: /previous month/i }).click()
+  }
+  await target.click()
+}
 
 test('generate feature screenshots', async ({ page }) => {
   test.setTimeout(120_000)
@@ -29,6 +38,7 @@ test('generate feature screenshots', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 })
   await page.emulateMedia({ reducedMotion: 'reduce' })
   await page.goto('/')
+  await selectCalendarDate(page, '2025-12-07')
   const seeded = page.locator('[data-testid="entry-list-item-entry-1"]')
   if (await seeded.count()) {
     await seeded.first().click()
@@ -50,6 +60,7 @@ test('generate feature screenshots', async ({ page }) => {
   await page.getByTestId('save-note-btn').click()
   await page.screenshot({ path: path.join(outDir, '03-template-entry.png'), fullPage: true })
 
+  await selectCalendarDate(page, '2025-12-07')
   if (await seeded.count()) {
     await seeded.first().click()
   } else {
@@ -68,6 +79,7 @@ test('generate feature screenshots', async ({ page }) => {
   await page.getByTestId('cancel-edit-btn').click()
   await expect(page.getByTestId('edit-note-btn')).toBeVisible()
   await page.getByTestId('editor-tab-note').click()
+  await selectCalendarDate(page, '2025-12-07')
   const seededAgain = page.locator('[data-testid="entry-list-item-entry-1"]')
   if (await seededAgain.count()) {
     await seededAgain.first().click()
@@ -88,6 +100,7 @@ test('generate feature screenshots', async ({ page }) => {
   await page.getByTestId('sync-now-btn').click()
   await expect(statusChip).toContainText('Synced')
   await page.getByTestId('editor-tab-note').click()
+  await selectCalendarDate(page, '2025-12-07')
   const exportEntry = page.locator('[data-testid="entry-list-item-entry-1"]')
   if (await exportEntry.count()) {
     await exportEntry.first().click()

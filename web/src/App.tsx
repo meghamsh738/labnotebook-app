@@ -69,6 +69,49 @@ function mergeTags(...groups: Array<string[] | undefined>) {
   return tags
 }
 
+function isEntryContentEmpty(entry: Entry) {
+  return entry.content.every((block) => {
+    if (block.type === 'divider') return true
+    if (block.type === 'heading' || block.type === 'paragraph' || block.type === 'quote') {
+      return block.text.trim().length === 0
+    }
+    if (block.type === 'checklist') {
+      return block.items.every((item) => item.text.trim().length === 0)
+    }
+    if (block.type === 'list') {
+      return block.items.every((item) => item.text.trim().length === 0)
+    }
+    if (block.type === 'table') {
+      return block.data.every((row) => row.every((cell) => cell.trim().length === 0))
+    }
+    return false
+  })
+}
+
+function shouldReplaceTitle(title: string) {
+  const lowered = title.toLowerCase()
+  return (
+    lowered.startsWith('untitled note') ||
+    lowered.startsWith('today\'s entry') ||
+    lowered.startsWith('daily note') ||
+    lowered.startsWith('daily entry') ||
+    lowered.startsWith('quick capture')
+  )
+}
+
+function isEntryMeaningful(entry: Entry) {
+  if (!isEntryContentEmpty(entry)) return true
+  if (entry.tags.length > 0) return true
+  return !shouldReplaceTitle(entry.title)
+}
+
+function pickDailyEntry(entries: Entry[]) {
+  if (entries.length === 0) return undefined
+  const meaningful = entries.filter(isEntryMeaningful)
+  const source = meaningful.length ? meaningful : entries
+  return [...source].sort((a, b) => getEntryTimestamp(b) - getEntryTimestamp(a))[0]
+}
+
 function monthStartFromIso(isoDate: string) {
   const parts = isoDate.split('-')
   const year = Number(parts[0] ?? new Date().getFullYear())
@@ -760,8 +803,7 @@ function App() {
   const todayBucket = useMemo(() => getDateBucket(new Date()), [])
   const todayEntry = useMemo(() => {
     const matches = entryList.filter((entry) => entry.dateBucket === todayBucket)
-    if (matches.length === 0) return undefined
-    return matches.sort((a, b) => getEntryTimestamp(b) - getEntryTimestamp(a))[0]
+    return pickDailyEntry(matches)
   }, [entryList, todayBucket])
   const [selectedEntryId, setSelectedEntryId] = useState('')
   const [hasUserSelectedEntry, setHasUserSelectedEntry] = useState(false)
@@ -981,12 +1023,10 @@ function App() {
 
   const openEntryForBucket = useCallback(
     (bucket: string, opts?: { autoEdit?: boolean }) => {
-      const matches = entryList
-        .filter((entry) => entry.dateBucket === bucket)
-        .sort((a, b) => getEntryTimestamp(b) - getEntryTimestamp(a))
-
-      if (matches.length > 0) {
-        selectEntry(matches[0].id, { autoEdit: opts?.autoEdit })
+      const matches = entryList.filter((entry) => entry.dateBucket === bucket)
+      const primary = pickDailyEntry(matches)
+      if (primary) {
+        selectEntry(primary.id, { autoEdit: opts?.autoEdit })
         return
       }
 
@@ -994,6 +1034,7 @@ function App() {
       const nowIso = bucketDate.toISOString()
       const entryId = newId('entry-')
       const { content, pinnedRegions } = buildTemplate('blank', entryId, nowIso)
+      const isToday = bucket === getDateBucket(new Date())
       const entry: Entry = {
         id: entryId,
         experimentId: undefined,
@@ -1001,7 +1042,7 @@ function App() {
         createdDatetime: nowIso,
         lastEditedDatetime: nowIso,
         authorId: sampleData.users[1]?.id ?? sampleData.users[0]?.id ?? 'me',
-        title: `Daily note – ${dateOnly.format(bucketDate)}`,
+        title: `${isToday ? 'Today\'s entry' : 'Daily entry'} – ${dateOnly.format(bucketDate)}`,
         dateBucket: bucket,
         content,
         tags: [],
@@ -1027,14 +1068,66 @@ function App() {
     (opts: { title?: string; templateId: EntryTemplateId; quickCapture?: boolean; tags?: string[] }) => {
       const now = new Date()
       const nowIso = now.toISOString()
-      const dateBucket = getDateBucket(now)
+      const targetBucket = selectedDate ?? getDateBucket(now)
+      const matches = entryList.filter((entry) => entry.dateBucket === targetBucket)
+      const primary = pickDailyEntry(matches)
+      if (primary) {
+        const trimmedTitle = opts.title?.trim()
+        const nextTags = opts.tags?.length ? mergeTags(primary.tags, opts.tags) : undefined
+        const shouldApplyTemplate = opts.templateId !== 'blank' && isEntryContentEmpty(primary)
+        const template = shouldApplyTemplate ? buildTemplate(opts.templateId, primary.id, nowIso) : null
+        const updates: Partial<Entry> = {}
+        if (trimmedTitle && shouldReplaceTitle(primary.title)) {
+          updates.title = trimmedTitle
+        }
+        if (nextTags) {
+          updates.tags = nextTags
+        }
+        if (template) {
+          updates.content = template.content
+          updates.pinnedRegions = template.pinnedRegions
+        }
+        if (Object.keys(updates).length > 0) {
+          updates.lastEditedDatetime = nowIso
+          setEntryDrafts((prev) => {
+            const current = prev[primary.id]
+            if (!current) return prev
+            return {
+              ...prev,
+              [primary.id]: {
+                ...current,
+                ...updates,
+                tags: updates.tags ?? current.tags,
+              },
+            }
+          })
+          const blockIds = (updates.content ?? primary.content).map((block) => block.id)
+          setChangeQueue((prev) => [
+            {
+              id: `chg-${nowIso}-${crypto.randomUUID?.() ?? Math.random().toString(36).slice(2)}`,
+              entryId: primary.id,
+              blocks: blockIds,
+              status: 'pending',
+              updatedAt: nowIso,
+              attempts: 0,
+            },
+            ...prev,
+          ])
+        }
+        selectEntry(primary.id, { autoEdit: true })
+        setQuery('')
+        setSelectedTags([])
+        setNewEntryOpen(false)
+        return
+      }
 
       const entryId = newId('entry-')
+      const bucketDate = dateFromBucket(targetBucket)
       const title =
         opts.title?.trim() ||
         (opts.quickCapture
           ? `Quick capture – ${dtFormat.format(now)}`
-          : `Untitled note – ${dateOnly.format(now)}`)
+          : `Untitled note – ${dateOnly.format(bucketDate)}`)
 
       const { content, pinnedRegions } = buildTemplate(opts.templateId, entryId, nowIso)
 
@@ -1046,7 +1139,7 @@ function App() {
         lastEditedDatetime: nowIso,
         authorId: sampleData.users[1]?.id ?? sampleData.users[0]?.id ?? 'me',
         title,
-        dateBucket,
+        dateBucket: targetBucket,
         content,
         tags: mergeTags(opts.tags ?? []),
         searchTerms: [],
@@ -1060,7 +1153,7 @@ function App() {
       setSelectedTags([])
       setNewEntryOpen(false)
     },
-    [selectEntry]
+    [entryList, selectedDate, selectEntry]
   )
 
   const syncRunningRef = useRef(false)
@@ -1747,13 +1840,30 @@ function App() {
     attachmentsForEntry,
   ])
 
+  const dailyEntries = useMemo(() => {
+    const byDate = new Map<string, Entry[]>()
+    filteredEntries.forEach((entry) => {
+      const group = byDate.get(entry.dateBucket) ?? []
+      group.push(entry)
+      byDate.set(entry.dateBucket, group)
+    })
+    return Array.from(byDate.values())
+      .map((entries) => pickDailyEntry(entries))
+      .filter((entry): entry is Entry => !!entry)
+  }, [filteredEntries])
+
+  const listEntries = useMemo(() => {
+    if (!selectedDate) return dailyEntries
+    return dailyEntries.filter((entry) => entry.dateBucket === selectedDate)
+  }, [dailyEntries, selectedDate])
+
   const viewerEntries = useMemo(() => {
-    return [...filteredEntries].sort((a, b) => {
+    return [...dailyEntries].sort((a, b) => {
       const bucketCompare = a.dateBucket.localeCompare(b.dateBucket)
       if (bucketCompare !== 0) return bucketCompare
       return a.createdDatetime.localeCompare(b.createdDatetime)
     })
-  }, [filteredEntries])
+  }, [dailyEntries])
   const viewerIndex = useMemo(
     () => viewerEntries.findIndex((item) => item.id === selectedEntryId),
     [selectedEntryId, viewerEntries]
@@ -1904,19 +2014,19 @@ function App() {
   // Keep selection in sync with filtered list
   useEffect(() => {
     if (!hasUserSelectedEntry) return
-    if (filteredEntries.length === 0) return
-    const stillVisible = filteredEntries.some((e) => e.id === selectedEntryId)
+    if (dailyEntries.length === 0) return
+    const stillVisible = dailyEntries.some((e) => e.id === selectedEntryId)
     if (!stillVisible) {
-      setSelectedEntryId(filteredEntries[0].id)
+      setSelectedEntryId(dailyEntries[0].id)
     }
-  }, [filteredEntries, selectedEntryId, hasUserSelectedEntry])
+  }, [dailyEntries, selectedEntryId, hasUserSelectedEntry])
 
   return (
     <div className="app-bg">
       <div className={`app-shell ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
         <Sidebar
           labs={sampleData.labs}
-          entries={filteredEntries}
+          entries={listEntries}
           availableTags={availableTags}
           storagePath={serverInfo?.dataDir ?? sampleData.labs[0]?.storageConfig.path ?? '—'}
           selectedEntryId={selectedEntryId}
@@ -1941,7 +2051,7 @@ function App() {
           entryDatesWithEntries={entryDatesWithEntries}
           onSelectEntry={(id) => openEntry(id)}
           onNewEntry={() => setNewEntryOpen(true)}
-          onQuickCapture={() => handleCreateEntry({ templateId: 'blank', quickCapture: true })}
+          onQuickCapture={() => openEntryForBucket(todayBucket, { autoEdit: true })}
           onOpenSettings={() => setSettingsOpen(true)}
           collapsed={sidebarCollapsed}
           onToggleCollapsed={() => setSidebarCollapsed((prev) => !prev)}
@@ -1957,7 +2067,7 @@ function App() {
           missingAttachments={missingAttachments}
           onOpenEntry={openEntry}
           onNewEntry={() => setNewEntryOpen(true)}
-          onQuickCapture={() => handleCreateEntry({ templateId: 'blank', quickCapture: true })}
+          onQuickCapture={() => openEntryForBucket(todayBucket, { autoEdit: true })}
           onUpdateEntry={(entryId, content) =>
             setEntryDrafts((prev) => {
               const current = prev[entryId]
@@ -2511,12 +2621,20 @@ function EditorPane({
   const [editorValue, setEditorValue] = useState<Descendant[]>(
     () => blocksToSlate(entry?.content ?? [{ id: 'b-empty', type: 'paragraph', text: '' }])
   )
+  const lastEntryIdRef = useRef<string | null>(null)
 
   useEffect(() => {
     if (!entry) return
-    setIsEditing(false)
-    setEditorValue(blocksToSlate(entry.content))
-  }, [entry])
+    if (lastEntryIdRef.current !== entry.id) {
+      lastEntryIdRef.current = entry.id
+      setIsEditing(false)
+      setEditorValue(blocksToSlate(entry.content))
+      return
+    }
+    if (!isEditing) {
+      setEditorValue(blocksToSlate(entry.content))
+    }
+  }, [entry, isEditing])
 
   useEffect(() => {
     if (!entry) return
@@ -2980,12 +3098,6 @@ function EditorPane({
                     attachmentUrls={attachmentUrls}
                     onUpdateBlock={handleUpdateBlock}
                   />
-                  {block.updatedAt && (
-                    <div className="block-meta muted tiny">
-                      Updated {dtFormat.format(new Date(block.updatedAt))}
-                      {block.updatedBy ? ` · ${block.updatedBy}` : ''}
-                    </div>
-                  )}
                 </div>
               ))}
             </div>
@@ -3410,6 +3522,15 @@ function TagPanel({
     onUpdateEntryMeta(entry.id, { tags: mergeTags(entry.tags, template.tags) })
   }
 
+  const handleUpdateTemplate = (template: TagTemplate) => {
+    if (entry.tags.length === 0) {
+      setTemplateError('Add tags before updating a template.')
+      return
+    }
+    onSaveTemplate({ ...template, tags: mergeTags(entry.tags) })
+    setTemplateError(null)
+  }
+
   const handleSaveTemplate = () => {
     const name = normalizeTag(templateName)
     if (!name) {
@@ -3470,6 +3591,9 @@ function TagPanel({
 
       <div className="template-block">
         <div className="section-title">Templates</div>
+        <div className="muted tiny" style={{ marginBottom: 8 }}>
+          Save tag sets and re-apply them in one click. Use Update to overwrite a template with the current tags.
+        </div>
         {tagTemplates.length === 0 && (
           <div className="muted tiny">No templates yet. Save the current tags to reuse later.</div>
         )}
@@ -3496,6 +3620,15 @@ function TagPanel({
                   data-testid={`template-apply-${template.id}`}
                 >
                   Apply
+                </button>
+                <button
+                  className="ghost"
+                  type="button"
+                  onClick={() => handleUpdateTemplate(template)}
+                  disabled={entry.tags.length === 0}
+                  data-testid={`template-update-${template.id}`}
+                >
+                  Update
                 </button>
                 <button
                   className="ghost"
@@ -5494,6 +5627,9 @@ function NewEntryModal({
                 ))}
               </div>
             )}
+            <div className="muted tiny" style={{ marginTop: 6 }}>
+              Manage templates in the Details tab of any entry.
+            </div>
           </div>
 
           <div className="field">
