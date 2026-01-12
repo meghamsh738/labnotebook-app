@@ -52,6 +52,13 @@ function dateFromBucket(bucket: string): Date {
   return new Date(year || 0, Math.max(0, (month || 1) - 1), Math.max(1, day || 1), 9, 0, 0)
 }
 
+function cloneSlateValue(value: Descendant[]): Descendant[] {
+  if (typeof structuredClone === 'function') {
+    return structuredClone(value)
+  }
+  return JSON.parse(JSON.stringify(value)) as Descendant[]
+}
+
 function normalizeTag(value: string) {
   return value.trim().replace(/\s+/g, ' ')
 }
@@ -2608,11 +2615,21 @@ function EditorPane({
   )
   const lastEntryIdRef = useRef<string | null>(null)
   const skipAutosaveRef = useRef(false)
+  const editorValueRef = useRef(editorValue)
+  const undoStackRef = useRef<Descendant[][]>([])
+  const redoStackRef = useRef<Descendant[][]>([])
+  const isHistoryActionRef = useRef(false)
+
+  useEffect(() => {
+    editorValueRef.current = cloneSlateValue(editorValue)
+  }, [editorValue])
 
   useEffect(() => {
     if (!entry) return
     if (lastEntryIdRef.current !== entry.id) {
       lastEntryIdRef.current = entry.id
+      undoStackRef.current = []
+      redoStackRef.current = []
       skipAutosaveRef.current = true
       setIsEditing(false)
       setEditorValue(blocksToSlate(entry.content))
@@ -2719,6 +2736,64 @@ function EditorPane({
       onEnqueueChange(entry.id, updatedBlocks.map((b) => b.id), timestamp)
     },
     [entry, onUpdateEntry, onEnqueueChange]
+  )
+
+  const applyHistoryValue = useCallback(
+    (next: Descendant[]) => {
+      const working = cloneSlateValue(next)
+      const snapshot = cloneSlateValue(next)
+      isHistoryActionRef.current = true
+      Editor.withoutNormalizing(editor, () => {
+        for (let i = editor.children.length - 1; i >= 0; i -= 1) {
+          Transforms.removeNodes(editor, { at: [i] })
+        }
+        if (working.length > 0) {
+          Transforms.insertNodes(editor, working, { at: [0] })
+        } else {
+          Transforms.insertNodes(editor, [{ type: 'paragraph', children: [{ text: '' }] }], { at: [0] })
+        }
+      })
+      setEditorValue(working)
+      editorValueRef.current = snapshot
+      window.setTimeout(() => {
+        isHistoryActionRef.current = false
+      }, 0)
+    },
+    [editor]
+  )
+
+  const handleUndo = useCallback(() => {
+    const stack = undoStackRef.current
+    if (!stack.length) return
+    const previous = stack.pop()
+    if (!previous) return
+    redoStackRef.current.push(editorValueRef.current)
+    applyHistoryValue(previous)
+  }, [applyHistoryValue])
+
+  const handleRedo = useCallback(() => {
+    const stack = redoStackRef.current
+    if (!stack.length) return
+    const next = stack.pop()
+    if (!next) return
+    undoStackRef.current.push(editorValueRef.current)
+    applyHistoryValue(next)
+  }, [applyHistoryValue])
+
+  const handleEditorChange = useCallback(
+    (value: Descendant[]) => {
+      const hasContentChange = editor.operations.some((op) => op.type !== 'set_selection')
+      if (isEditing && hasContentChange && !isHistoryActionRef.current) {
+        undoStackRef.current.push(editorValueRef.current)
+        if (undoStackRef.current.length > 120) {
+          undoStackRef.current.shift()
+        }
+        redoStackRef.current = []
+      }
+      setEditorValue(value)
+      editorValueRef.current = cloneSlateValue(value)
+    },
+    [editor, isEditing]
   )
 
   const handleTabSwitch = useCallback(
@@ -3131,7 +3206,7 @@ function EditorPane({
                   key={entry.id}
                   editor={editor}
                   initialValue={editorValue}
-                  onChange={setEditorValue}
+                  onChange={handleEditorChange}
                 >
                   <EditorInsertBar
                     entryId={entry.id}
@@ -3165,6 +3240,20 @@ function EditorPane({
                       }
                       if ((event.ctrlKey || event.metaKey) && !event.altKey) {
                         const key = event.key.toLowerCase()
+                        if (key === 'z') {
+                          event.preventDefault()
+                          if (event.shiftKey) {
+                            handleRedo()
+                          } else {
+                            handleUndo()
+                          }
+                          return
+                        }
+                        if (key === 'y') {
+                          event.preventDefault()
+                          handleRedo()
+                          return
+                        }
                         if (key === 'b') {
                           event.preventDefault()
                           toggleMark(editor, 'bold')

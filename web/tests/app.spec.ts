@@ -150,6 +150,18 @@ test.describe('Lab note taking app', () => {
     await expect(page.getByTestId('editor-bold')).toBeVisible()
   })
 
+  test('supports undo with control z', async ({ page }) => {
+    await boot(page, { noFail: '1' })
+    await selectFirstEntry(page)
+    await page.getByTestId('edit-note-btn').click()
+    const editor = page.locator('.slate-editor')
+    await editor.click()
+    await page.keyboard.type('UNDO-CHECK')
+    await expect(editor).toContainText('UNDO-CHECK')
+    await page.keyboard.press('Control+Z')
+    await expect(editor).not.toContainText('UNDO-CHECK')
+  })
+
   test('table formatting toggles update table styles', async ({ page }) => {
     await boot(page, { noFail: '1' })
     await selectFirstEntry(page)
