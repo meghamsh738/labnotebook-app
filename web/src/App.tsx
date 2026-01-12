@@ -2622,13 +2622,18 @@ function EditorPane({
     () => blocksToSlate(entry?.content ?? [{ id: 'b-empty', type: 'paragraph', text: '' }])
   )
   const lastEntryIdRef = useRef<string | null>(null)
+  const skipAutosaveRef = useRef(false)
 
   useEffect(() => {
     if (!entry) return
     if (lastEntryIdRef.current !== entry.id) {
       lastEntryIdRef.current = entry.id
+      skipAutosaveRef.current = true
       setIsEditing(false)
       setEditorValue(blocksToSlate(entry.content))
+      window.setTimeout(() => {
+        skipAutosaveRef.current = false
+      }, 0)
       return
     }
     if (!isEditing) {
@@ -2854,6 +2859,7 @@ function EditorPane({
 
   useEffect(() => {
     if (!entry || !isEditing) return
+    if (skipAutosaveRef.current) return
     const timer = window.setTimeout(() => {
       persistDraft(editorValue)
     }, 900)
