@@ -196,8 +196,27 @@ test.describe('Lab note taking app', () => {
     await ensureEditMode(page)
 
     const editor = page.getByTestId('slate-editor')
-    await editor.locator('p.block-paragraph').first().click({ force: true })
-    await page.keyboard.type('Auto-save download text')
+    await page.evaluate(() => {
+      const root = document.querySelector('[data-testid="slate-editor"]') as HTMLElement | null
+      if (!root) return
+      const block = root.querySelector('p.block-paragraph') as HTMLElement | null
+      if (!block) return
+      root.focus()
+      const textSpan = block.querySelector('[data-slate-node="text"]')
+      const range = document.createRange()
+      if (textSpan) {
+        range.selectNodeContents(textSpan)
+        range.collapse(true)
+      } else {
+        range.selectNodeContents(block)
+        range.collapse(true)
+      }
+      const sel = window.getSelection()
+      if (!sel) return
+      sel.removeAllRanges()
+      sel.addRange(range)
+    })
+    await page.keyboard.insertText('Auto-save download text')
     await expect(editor).toContainText('Auto-save download text')
     await expect(page.getByTestId('entry-save')).toBeVisible()
     const [download] = await Promise.all([

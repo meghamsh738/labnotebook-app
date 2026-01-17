@@ -38,6 +38,16 @@ const SEED_VERSION_KEY = 'labnote.seedVersion'
 const shouldResetSeed = () => {
   if (typeof window === 'undefined') return true
   try {
+    const existingEntries = window.localStorage.getItem('labnote.entries')
+    if (existingEntries) {
+      try {
+        const parsed = JSON.parse(existingEntries) as Record<string, Entry>
+        if (parsed && Object.keys(parsed).length > 0) return false
+      } catch {
+        // If we can't parse existing entries, avoid clearing to prevent data loss.
+        return false
+      }
+    }
     return window.localStorage.getItem(SEED_VERSION_KEY) !== seedVersion
   } catch (err) {
     console.warn('Unable to read seed version', err)
@@ -2198,6 +2208,7 @@ function App() {
             project={project}
             experiment={experiment}
             openEntries={openEntries}
+            allEntries={entryList}
             selectedEntryId={selectedEntryId}
             onSelectEntry={handleSelectEntry}
             onCloseEntryTab={handleCloseEntryTab}
@@ -2760,6 +2771,7 @@ interface EditorPaneProps {
   project?: Project
   experiment?: Experiment
   openEntries: Entry[]
+  allEntries: Entry[]
   selectedEntryId: string
   onSelectEntry: (id: string) => void
   onCloseEntryTab: (id: string) => void
@@ -2798,6 +2810,7 @@ function EditorPane({
   project,
   experiment,
   openEntries,
+  allEntries,
   selectedEntryId,
   onSelectEntry,
   onCloseEntryTab,
@@ -2828,6 +2841,7 @@ function EditorPane({
   const [isEditing, setIsEditing] = useState(false)
   const [activeTab, setActiveTab] = useState<'note' | 'files' | 'details'>('note')
   const [editor] = useState(() => withChecklists(withReact(createEditor() as ReactEditor)))
+  const [tabsViewOpen, setTabsViewOpen] = useState(false)
   const lastEntryIdRef = useRef<string | null>(null)
   const [editorRevision, setEditorRevision] = useState(0)
   const [editorValue, setEditorValue] = useState<Descendant[]>(
@@ -2974,31 +2988,113 @@ function EditorPane({
     <main className="panel editor" onDrop={handleDrop} onDragOver={(e) => e.preventDefault()} onPaste={handlePaste}>
       <div className="editor-header">
         <div className="editor-header-inner">
-          {openEntries.length > 1 && (
-            <div className="entry-tabs" role="tablist" aria-label="Open entries">
-              {openEntries.map((tab) => (
-                <div key={tab.id} className={`entry-tab ${selectedEntryId === tab.id ? 'active' : ''}`}>
-                  <button
-                    type="button"
-                    className="entry-tab-main"
-                    role="tab"
-                    aria-selected={selectedEntryId === tab.id}
-                    onClick={() => onSelectEntry(tab.id)}
-                  >
-                    <span className="tab-title">{tab.title}</span>
-                    <span className="tab-date">{tab.dateBucket}</span>
-                  </button>
-                  <button
-                    type="button"
-                    className="entry-tab-close"
-                    onClick={() => onCloseEntryTab(tab.id)}
-                    aria-label={`Close ${tab.title}`}
-                    disabled={openEntries.length <= 1}
-                  >
-                    ×
-                  </button>
+          <div className="entry-tabs-row">
+            {openEntries.length > 1 && (
+              <div className="entry-tabs" role="tablist" aria-label="Open entries">
+                {openEntries.map((tab) => (
+                  <div key={tab.id} className={`entry-tab ${selectedEntryId === tab.id ? 'active' : ''}`}>
+                    <button
+                      type="button"
+                      className="entry-tab-main"
+                      role="tab"
+                      aria-selected={selectedEntryId === tab.id}
+                      onClick={() => onSelectEntry(tab.id)}
+                    >
+                      <span className="tab-title">{tab.title}</span>
+                      <span className="tab-date">{tab.dateBucket}</span>
+                    </button>
+                    <button
+                      type="button"
+                      className="entry-tab-close"
+                      onClick={() => onCloseEntryTab(tab.id)}
+                      aria-label={`Close ${tab.title}`}
+                      disabled={openEntries.length <= 1}
+                    >
+                      ×
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+            <button
+              className={`pill soft tabs-view-toggle ${tabsViewOpen ? 'active-pill' : ''}`}
+              type="button"
+              onClick={() => setTabsViewOpen((prev) => !prev)}
+              data-testid="tabs-view-toggle"
+              aria-expanded={tabsViewOpen}
+            >
+              Tabs view
+            </button>
+          </div>
+          {tabsViewOpen && (
+            <div className="tabs-view-panel" data-testid="tabs-view">
+              <div className="tabs-view-head">
+                <div>
+                  <div className="section-title">Open tabs</div>
+                  <div className="muted tiny">Showing {openEntries.length} open tab{openEntries.length === 1 ? '' : 's'}.</div>
                 </div>
-              ))}
+                <button
+                  className="pill soft"
+                  type="button"
+                  onClick={() => setTabsViewOpen(false)}
+                >
+                  Close
+                </button>
+              </div>
+              <div className="tabs-view-grid">
+                {openEntries.map((tab) => (
+                  <div key={`panel-${tab.id}`} className={`entry-tab ${selectedEntryId === tab.id ? 'active' : ''}`}>
+                    <button
+                      type="button"
+                      className="entry-tab-main"
+                      onClick={() => onSelectEntry(tab.id)}
+                    >
+                      <span className="tab-title">{tab.title}</span>
+                      <span className="tab-date">{tab.dateBucket}</span>
+                    </button>
+                    <button
+                      type="button"
+                      className="entry-tab-close"
+                      onClick={() => onCloseEntryTab(tab.id)}
+                      aria-label={`Close ${tab.title}`}
+                      disabled={openEntries.length <= 1}
+                    >
+                      ×
+                    </button>
+                  </div>
+                ))}
+                {openEntries.length === 0 && <div className="muted tiny">No open tabs yet.</div>}
+              </div>
+              <div className="tabs-view-head">
+                <div>
+                  <div className="section-title">Browse entries</div>
+                  <div className="muted tiny">Showing {allEntries.length} total entries.</div>
+                </div>
+              </div>
+              <div className="tabs-view-list">
+                {allEntries.length === 0 && <div className="muted tiny">No entries available.</div>}
+                {allEntries.map((entryItem) => (
+                  <button
+                    key={`browse-${entryItem.id}`}
+                    className={`entry-item ${selectedEntryId === entryItem.id ? 'active' : ''}`}
+                    onClick={() => onSelectEntry(entryItem.id)}
+                  >
+                    <div>
+                      <div className="title-sm">{entryItem.title}</div>
+                      <p className="muted tiny">{dateOnly.format(new Date(entryItem.createdDatetime))}</p>
+                    </div>
+                    {entryItem.experimentTags?.[0] ? (
+                      <div className="pill ghost-pill">{entryItem.experimentTags[0]}</div>
+                    ) : entryItem.projectTags?.[0] ? (
+                      <div className="pill ghost-pill">{entryItem.projectTags[0]}</div>
+                    ) : entryItem.tags[0] ? (
+                      <div className="pill ghost-pill">{entryItem.tags[0]}</div>
+                    ) : (
+                      <div className="pill soft">Draft</div>
+                    )}
+                  </button>
+                ))}
+              </div>
             </div>
           )}
           <div className="breadcrumb-row">
