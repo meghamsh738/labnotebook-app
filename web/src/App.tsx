@@ -65,6 +65,13 @@ const monthStartFromIso = (isoDate: string) => {
   return new Date(year, Math.max(0, month), 1)
 }
 
+type ParsedMarkdownEntry = {
+  entry: Entry
+  attachments: Attachment[]
+  projectTitle?: string
+  experimentTitle?: string
+}
+
 const entrySortTimestamp = (entry: Entry) => {
   const candidates = [entry.dateBucket, entry.createdDatetime, entry.lastEditedDatetime]
   for (const value of candidates) {
@@ -73,6 +80,210 @@ const entrySortTimestamp = (entry: Entry) => {
     if (!Number.isNaN(parsed)) return parsed
   }
   return 0
+}
+
+const parseMarkdownLink = (line: string) => {
+  const imageMatch = line.match(/^!\[(.*?)\]\((.*?)\)$/)
+  if (imageMatch) {
+    return { type: 'image' as const, label: imageMatch[1] ?? '', path: imageMatch[2] ?? '' }
+  }
+  const fileMatch = line.match(/^\[(.*?)\]\((.*?)\)$/)
+  if (fileMatch) {
+    return { type: 'file' as const, label: fileMatch[1] ?? '', path: fileMatch[2] ?? '' }
+  }
+  return null
+}
+
+const parseEntryMarkdown = (markdown: string, folderName: string): ParsedMarkdownEntry | null => {
+  const lines = markdown.split(/\r?\n/)
+  let idx = 0
+  let title = ''
+  let createdDatetime = ''
+  let lastEditedDatetime = ''
+  let projectTitle: string | undefined
+  let experimentTitle: string | undefined
+
+  if (lines[idx]?.startsWith('# ')) {
+    title = lines[idx].slice(2).trim()
+    idx += 1
+  }
+
+  while (idx < lines.length && lines[idx].startsWith('- ')) {
+    const meta = lines[idx].slice(2).trim()
+    if (meta.startsWith('Project:')) {
+      projectTitle = meta.replace('Project:', '').trim()
+    } else if (meta.startsWith('Experiment:')) {
+      experimentTitle = meta.replace('Experiment:', '').trim()
+    } else if (meta.startsWith('Created:')) {
+      const parsed = new Date(meta.replace('Created:', '').trim())
+      if (!Number.isNaN(parsed.getTime())) createdDatetime = parsed.toISOString()
+    } else if (meta.startsWith('Last edited:')) {
+      const parsed = new Date(meta.replace('Last edited:', '').trim())
+      if (!Number.isNaN(parsed.getTime())) lastEditedDatetime = parsed.toISOString()
+    }
+    idx += 1
+  }
+
+  while (idx < lines.length && lines[idx].trim() === '') idx += 1
+
+  const dateBucket = folderName.slice(0, 10)
+  const fallbackDate = dateBucket ? `${dateBucket}T12:00:00.000Z` : new Date().toISOString()
+  const created = createdDatetime || fallbackDate
+  const edited = lastEditedDatetime || created
+  const entryTitle = title || dateOnly.format(new Date(created))
+  const entryId = `entry-bundle-${folderName}`
+
+  const blocks: Block[] = []
+  const attachments: Attachment[] = []
+  let paragraph: string[] = []
+
+  const flushParagraph = () => {
+    const text = paragraph.join('\n').trim()
+    if (text) {
+      blocks.push({ id: newId('b-'), type: 'paragraph', text })
+    }
+    paragraph = []
+  }
+
+  const parseTableRow = (line: string) =>
+    line
+      .trim()
+      .replace(/^\|/, '')
+      .replace(/\|$/, '')
+      .split('|')
+      .map((cell) => cell.trim())
+
+  while (idx < lines.length) {
+    const line = lines[idx]
+    const trimmed = line.trim()
+
+    if (!trimmed) {
+      flushParagraph()
+      idx += 1
+      continue
+    }
+
+    if (trimmed === '---') {
+      flushParagraph()
+      blocks.push({ id: newId('b-'), type: 'divider' })
+      idx += 1
+      continue
+    }
+
+    if (trimmed.startsWith('## ')) {
+      flushParagraph()
+      blocks.push({ id: newId('b-'), type: 'heading', level: 2, text: trimmed.slice(3).trim() })
+      idx += 1
+      continue
+    }
+
+    if (trimmed.startsWith('### ')) {
+      flushParagraph()
+      blocks.push({ id: newId('b-'), type: 'heading', level: 3, text: trimmed.slice(4).trim() })
+      idx += 1
+      continue
+    }
+
+    if (trimmed.startsWith('> ')) {
+      flushParagraph()
+      const quoteLines: string[] = []
+      while (idx < lines.length && lines[idx].trim().startsWith('> ')) {
+        quoteLines.push(lines[idx].trim().replace(/^>\s?/, ''))
+        idx += 1
+      }
+      blocks.push({ id: newId('b-'), type: 'quote', text: quoteLines.join('\n') })
+      continue
+    }
+
+    if (trimmed.startsWith('- [')) {
+      flushParagraph()
+      const items: ChecklistItem[] = []
+      while (idx < lines.length && lines[idx].trim().startsWith('- [')) {
+        const itemLine = lines[idx].trim()
+        const done = itemLine.startsWith('- [x]')
+        const text = itemLine.replace(/^- \[[ x]\]\s?/, '').trim()
+        items.push({ id: newId('ci-'), text, done })
+        idx += 1
+      }
+      blocks.push({ id: newId('b-'), type: 'checklist', items })
+      continue
+    }
+
+    if (trimmed.startsWith('|')) {
+      flushParagraph()
+      const tableLines: string[] = []
+      while (idx < lines.length && lines[idx].trim().startsWith('|')) {
+        tableLines.push(lines[idx])
+        idx += 1
+      }
+      let headerRow = false
+      let data: string[][] = []
+      if (tableLines.length >= 2 && tableLines[1].replace(/\s|\|/g, '').includes('---')) {
+        headerRow = true
+        const header = parseTableRow(tableLines[0])
+        const body = tableLines.slice(2).map(parseTableRow)
+        data = [header, ...body]
+      } else {
+        data = tableLines.map(parseTableRow)
+      }
+      const tableBlock: Block = { id: newId('b-'), type: 'table', data, headerRow }
+      blocks.push(tableBlock)
+      if (idx < lines.length && lines[idx].trim().match(/^\*.+\*$/)) {
+        const caption = lines[idx].trim().replace(/^\*/, '').replace(/\*$/, '')
+        if (caption) {
+          tableBlock.caption = caption
+        }
+        idx += 1
+      }
+      continue
+    }
+
+    const link = parseMarkdownLink(trimmed)
+    if (link) {
+      flushParagraph()
+      const path = link.path
+      const filename = path.split('/').filter(Boolean).pop() ?? (link.label || 'file')
+      const attId = `att-import-${folderName}-${attachments.length + 1}`
+      attachments.push({
+        id: attId,
+        entryId,
+        type: link.type,
+        filename: filename,
+        filesize: '—',
+        storagePath: path || filename,
+      })
+      if (link.type === 'image') {
+        blocks.push({ id: newId('b-'), type: 'image', attachmentId: attId, caption: link.label || filename })
+      } else {
+        blocks.push({ id: newId('b-'), type: 'file', attachmentId: attId, label: link.label || filename })
+      }
+      idx += 1
+      continue
+    }
+
+    paragraph.push(line)
+    idx += 1
+  }
+
+  flushParagraph()
+
+  const entry: Entry = {
+    id: entryId,
+    createdDatetime: created,
+    lastEditedDatetime: edited,
+    authorId: sampleData.users[1]?.id ?? sampleData.users[0]?.id ?? 'me',
+    title: entryTitle,
+    dateBucket: dateBucket || created.slice(0, 10),
+    content: blocks.length ? blocks : [{ id: newId('b-'), type: 'paragraph', text: '' }],
+    tags: [],
+    projectTags: [],
+    experimentTags: [],
+    searchTerms: [],
+    linkedFiles: [],
+    pinnedRegions: [],
+  }
+
+  return { entry, attachments, projectTitle, experimentTitle }
 }
 
 type ChangeQueueItem = {
@@ -877,7 +1088,7 @@ const TableEditContext = createContext<{ isEditing: boolean } | null>(null)
 function App() {
   const resetSeed = shouldResetSeed()
   const labStoragePath = sampleData.labs[0]?.storageConfig.path ?? ''
-  const [projects] = useState<Project[]>(() => {
+  const [projects, setProjects] = useState<Project[]>(() => {
     if (typeof window === 'undefined' || resetSeed) return sampleData.projects
     try {
       const saved = window.localStorage.getItem('labnote.projects')
@@ -894,7 +1105,7 @@ function App() {
     }
     return sampleData.projects
   })
-  const [experiments] = useState<Experiment[]>(() => {
+  const [experiments, setExperiments] = useState<Experiment[]>(() => {
     if (typeof window === 'undefined' || resetSeed) return sampleData.experiments
     try {
       const saved = window.localStorage.getItem('labnote.experiments')
@@ -1016,6 +1227,7 @@ function App() {
   const [fsNeedsPermission, setFsNeedsPermission] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const [autoImportAttempted, setAutoImportAttempted] = useState(false)
 
   useEffect(() => {
     if (!selectedEntryId) return
@@ -1058,6 +1270,15 @@ function App() {
     }
     return window.matchMedia?.('(prefers-color-scheme: dark)')?.matches ? 'dark' : 'light'
   })
+  const [diskSyncEnabled, setDiskSyncEnabled] = useState(() => {
+    if (typeof window === 'undefined') return false
+    try {
+      return window.localStorage.getItem('labnote.diskSync') === '1'
+    } catch (err) {
+      console.warn('Unable to read disk sync flag', err)
+      return false
+    }
+  })
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -1095,6 +1316,15 @@ function App() {
       console.warn('Unable to cache theme', err)
     }
   }, [theme])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    try {
+      window.localStorage.setItem('labnote.diskSync', diskSyncEnabled ? '1' : '0')
+    } catch (err) {
+      console.warn('Unable to cache disk sync flag', err)
+    }
+  }, [diskSyncEnabled])
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -1244,6 +1474,7 @@ function App() {
       return { ok: false, message: err instanceof Error ? err.message : 'Write test failed.' }
     }
   }, [])
+
 
   const handleSelectDate = useCallback((date: string | null) => {
     setSelectedDate(date)
@@ -1453,6 +1684,320 @@ function App() {
     }
     return sampleData.attachments
   })
+
+  const applyLegacyData = useCallback(
+    async (
+      parsed: {
+        version?: number
+        projects?: Project[]
+        experiments?: Experiment[]
+        entries?: Record<string, Entry>
+        attachments?: Attachment[]
+      },
+      opts?: { enableDiskSync?: boolean }
+    ): Promise<{ ok: boolean; message: string }> => {
+      const incomingProjects = Array.isArray(parsed.projects) ? parsed.projects : []
+      const incomingExperiments = Array.isArray(parsed.experiments) ? parsed.experiments : []
+      const incomingEntries = parsed.entries ?? {}
+      const incomingAttachments = Array.isArray(parsed.attachments) ? parsed.attachments : []
+      const nowIso = new Date().toISOString()
+
+      const normalizeEntry = (entry: Entry, fallbackId: string): Entry => {
+        const id = entry.id || fallbackId
+        const createdDatetime = entry.createdDatetime || nowIso
+        const lastEditedDatetime = entry.lastEditedDatetime || createdDatetime
+        const dateBucket = entry.dateBucket || createdDatetime.slice(0, 10)
+        const title = entry.title || dateOnly.format(new Date(createdDatetime))
+
+        return applyLockedTemplateHeadings({
+          ...entry,
+          id,
+          createdDatetime,
+          lastEditedDatetime,
+          dateBucket,
+          title,
+          authorId: entry.authorId || sampleData.users[1]?.id || sampleData.users[0]?.id || 'me',
+          content: Array.isArray(entry.content) && entry.content.length > 0
+            ? entry.content
+            : [{ id: newId('b-'), type: 'paragraph', text: '' }],
+          tags: Array.isArray(entry.tags) ? entry.tags : [],
+          projectTags: Array.isArray(entry.projectTags) ? entry.projectTags : [],
+          experimentTags: Array.isArray(entry.experimentTags) ? entry.experimentTags : [],
+          searchTerms: Array.isArray(entry.searchTerms) ? entry.searchTerms : [],
+          linkedFiles: Array.isArray(entry.linkedFiles) ? entry.linkedFiles : [],
+          pinnedRegions: Array.isArray(entry.pinnedRegions) ? entry.pinnedRegions : [],
+        })
+      }
+
+      const normalizedEntries: Record<string, Entry> = {}
+      for (const [id, entry] of Object.entries(incomingEntries)) {
+        if (!entry) continue
+        normalizedEntries[entry.id ?? id] = normalizeEntry(entry as Entry, id)
+      }
+
+      const normalizedAttachments: Attachment[] = incomingAttachments
+        .filter((att) => att && typeof att === 'object')
+        .map((att) => ({
+          id: att.id,
+          entryId: att.entryId,
+          type: att.type ?? 'file',
+          filename: att.filename ?? 'file',
+          filesize: att.filesize ?? '—',
+          storagePath: att.storagePath ?? '',
+          thumbnail: att.thumbnail,
+          linkedRegionId: att.linkedRegionId,
+          tag: att.tag,
+          sampleId: att.sampleId,
+          pinnedOffline: att.pinnedOffline,
+          cachedPath: att.cachedPath,
+        }))
+        .filter((att) => att.id && att.entryId)
+
+      const mergedProjects = incomingProjects.length
+        ? Array.from(new Map([...projects, ...incomingProjects].map((p) => [p.id, p])).values())
+        : projects
+      const mergedExperiments = incomingExperiments.length
+        ? Array.from(new Map([...experiments, ...incomingExperiments].map((e) => [e.id, e])).values())
+        : experiments
+
+      const mergedEntries: Record<string, Entry> = { ...entryDrafts }
+      Object.values(normalizedEntries).forEach((incoming) => {
+        const existing = mergedEntries[incoming.id]
+        if (!existing) {
+          mergedEntries[incoming.id] = incoming
+          return
+        }
+        const existingTime = Date.parse(existing.lastEditedDatetime) || 0
+        const incomingTime = Date.parse(incoming.lastEditedDatetime) || 0
+        mergedEntries[incoming.id] = incomingTime >= existingTime ? incoming : existing
+      })
+
+      const mergedAttachments = (() => {
+        const byId = new Map(attachmentsStore.map((att) => [att.id, att]))
+        normalizedAttachments.forEach((att) => {
+          if (!byId.has(att.id)) byId.set(att.id, att)
+        })
+        return Array.from(byId.values())
+      })()
+
+      setProjects(mergedProjects)
+      setExperiments(mergedExperiments)
+      setEntryDrafts(mergedEntries)
+      setAttachmentsStore(mergedAttachments)
+      setSelectedDate(null)
+      setSelectedProject('all')
+      setSelectedExperiment('all')
+      setActivePane('entries')
+      setQuery('')
+      setSelectedProjectTags([])
+      setSelectedExperimentTags([])
+      setFilterHasImage(false)
+      setFilterHasFile(false)
+
+      const sorted = Object.values(mergedEntries).sort((a, b) => entrySortTimestamp(b) - entrySortTimestamp(a))
+      if (sorted[0]) {
+        setSelectedEntryId(sorted[0].id)
+        setOpenEntryIds([sorted[0].id])
+      }
+
+      await refreshFsState()
+      if (opts?.enableDiskSync ?? false) setDiskSyncEnabled(true)
+
+      return {
+        ok: true,
+        message: `Imported ${Object.keys(normalizedEntries).length} entries and ${normalizedAttachments.length} attachments.`,
+      }
+    },
+    [
+      attachmentsStore,
+      entryDrafts,
+      experiments,
+      projects,
+      refreshFsState,
+    ]
+  )
+
+  const readEntryBundles = useCallback(
+    async (dir: FileSystemDirectoryHandle, existingSignatures: Set<string>) => {
+      const entries: Record<string, Entry> = {}
+      const attachments: Attachment[] = []
+      // @ts-expect-error async iterable support in FS Access API
+      for await (const [name, handle] of dir.entries()) {
+        if (handle.kind !== 'directory') continue
+        if (!/^\d{4}-\d{2}-\d{2}-/.test(name)) continue
+        try {
+          const entryHandle = await handle.getFileHandle('entry.md')
+          const file = await entryHandle.getFile()
+          const parsed = parseEntryMarkdown(await file.text(), name)
+          if (!parsed) continue
+
+          const signature = `${parsed.entry.dateBucket}::${parsed.entry.title.toLowerCase()}`
+          if (existingSignatures.has(signature)) continue
+
+          if (parsed.projectTitle) {
+            const match = projects.find((p) => p.title === parsed.projectTitle)
+            if (match) {
+              parsed.entry.projectId = match.id
+            } else {
+              parsed.entry.projectTags = Array.from(
+                new Set([...(parsed.entry.projectTags ?? []), parsed.projectTitle])
+              )
+            }
+          }
+
+          if (parsed.experimentTitle) {
+            const match = experiments.find((e) => e.title === parsed.experimentTitle)
+            if (match) {
+              parsed.entry.experimentId = match.id
+            } else {
+              parsed.entry.experimentTags = Array.from(
+                new Set([...(parsed.entry.experimentTags ?? []), parsed.experimentTitle])
+              )
+            }
+          }
+
+          entries[parsed.entry.id] = parsed.entry
+          attachments.push(...parsed.attachments)
+          existingSignatures.add(signature)
+        } catch (err) {
+          console.warn('Unable to read entry bundle', name, err)
+        }
+      }
+      return { entries, attachments }
+    },
+    [experiments, projects]
+  )
+
+  const applyLegacyImport = useCallback(
+    async (
+      dir: FileSystemDirectoryHandle,
+      opts?: { enableDiskSync?: boolean }
+    ): Promise<{ ok: boolean; message: string }> => {
+      try {
+        let handle: FileSystemFileHandle
+        try {
+          handle = await dir.getFileHandle('labnote-state.json')
+        } catch {
+          return { ok: false, message: 'labnote-state.json not found in that folder.' }
+        }
+
+        const file = await handle.getFile()
+        const text = await file.text()
+        const parsed = JSON.parse(text) as {
+          version?: number
+          projects?: Project[]
+        experiments?: Experiment[]
+        entries?: Record<string, Entry>
+        attachments?: Attachment[]
+      }
+        const existingSignatures = new Set<string>()
+        Object.values(entryDrafts).forEach((entry) =>
+          existingSignatures.add(`${entry.dateBucket}::${entry.title.toLowerCase()}`)
+        )
+        Object.values(parsed.entries ?? {}).forEach((entry) => {
+          if (!entry) return
+          existingSignatures.add(`${entry.dateBucket}::${entry.title.toLowerCase()}`)
+        })
+
+        const bundleData = await readEntryBundles(dir, existingSignatures)
+        if (Object.keys(bundleData.entries).length) {
+          parsed.entries = { ...bundleData.entries, ...(parsed.entries ?? {}) }
+        }
+        if (bundleData.attachments.length) {
+          parsed.attachments = [...(parsed.attachments ?? []), ...bundleData.attachments]
+        }
+
+        return await applyLegacyData(parsed, { enableDiskSync: opts?.enableDiskSync })
+      } catch (err) {
+        console.warn('Import failed', err)
+        return { ok: false, message: 'Import failed. Check console for details.' }
+      }
+    },
+    [applyLegacyData, entryDrafts, readEntryBundles]
+  )
+
+  const importLegacyState = useCallback(async (): Promise<{ ok: boolean; message: string }> => {
+    if (typeof (window as unknown as DirectoryPickerWindow).showDirectoryPicker !== 'function') {
+      return { ok: false, message: 'Folder picker not supported in this browser. Use “Import from file” instead.' }
+    }
+    const dir = await pickCacheDir()
+    if (!dir) return { ok: false, message: 'No folder selected.' }
+    return applyLegacyImport(dir, { enableDiskSync: true })
+  }, [applyLegacyImport])
+
+  const importLegacyFile = useCallback(async (file: File): Promise<{ ok: boolean; message: string }> => {
+    try {
+      const text = await file.text()
+      const parsed = JSON.parse(text) as {
+        version?: number
+        projects?: Project[]
+        experiments?: Experiment[]
+        entries?: Record<string, Entry>
+        attachments?: Attachment[]
+      }
+      return await applyLegacyData(parsed, { enableDiskSync: false })
+    } catch (err) {
+      console.warn('Import file failed', err)
+      return { ok: false, message: 'Import failed. Ensure you selected labnote-state.json.' }
+    }
+  }, [applyLegacyData])
+
+  const persistDiskState = useCallback(async () => {
+    if (!diskSyncEnabled) return
+    const dir = await getWritableCacheDir()
+    if (!dir) return
+    const payload = {
+      version: 1,
+      projects,
+      experiments,
+      entries: entryDrafts,
+      attachments: attachmentsStore,
+    }
+    await writeBlobToDir(
+      dir,
+      'labnote-state.json',
+      new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json;charset=utf-8' })
+    )
+  }, [attachmentsStore, entryDrafts, experiments, projects, diskSyncEnabled])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const id = window.setTimeout(() => {
+      void persistDiskState()
+    }, 600)
+    return () => window.clearTimeout(id)
+  }, [persistDiskState])
+
+  useEffect(() => {
+    if (autoImportAttempted) return
+    if (typeof window === 'undefined') return
+
+    const hasLocalEntries = !!window.localStorage.getItem('labnote.entries')
+    if (hasLocalEntries) {
+      setAutoImportAttempted(true)
+      return
+    }
+
+    const run = async () => {
+      const dir = await restoreCacheHandle()
+      if (!dir) {
+        setAutoImportAttempted(true)
+        return
+      }
+      const dirWithPerm = dir as FsDirectoryWithPerm
+      if (dirWithPerm.queryPermission) {
+        const perm = await dirWithPerm.queryPermission({ mode: 'read' })
+        if (perm !== 'granted') {
+          setAutoImportAttempted(true)
+          return
+        }
+      }
+      await applyLegacyImport(dir, { enableDiskSync: true })
+      setAutoImportAttempted(true)
+    }
+
+    void run()
+  }, [autoImportAttempted, applyLegacyImport])
 
   // Persist drafts to localStorage for quick offline reloads
   useEffect(() => {
@@ -2296,6 +2841,8 @@ function App() {
           onPickDir={handlePickCacheDir}
           onDisconnect={handleDisconnectCacheDir}
           onValidate={validateDiskCache}
+          onImportLegacy={importLegacyState}
+          onImportLegacyFile={importLegacyFile}
         />
       )}
     </div>
@@ -5594,6 +6141,8 @@ function SettingsModal({
   onPickDir,
   onDisconnect,
   onValidate,
+  onImportLegacy,
+  onImportLegacyFile,
 }: {
   onClose: () => void
   theme: ThemeName
@@ -5608,9 +6157,14 @@ function SettingsModal({
   onPickDir: () => void
   onDisconnect: () => void
   onValidate: () => Promise<{ ok: boolean; message?: string }>
+  onImportLegacy: () => Promise<{ ok: boolean; message: string }>
+  onImportLegacyFile: (file: File) => Promise<{ ok: boolean; message: string }>
 }) {
   const [validating, setValidating] = useState(false)
   const [validation, setValidation] = useState<{ ok: boolean; message?: string } | null>(null)
+  const [importing, setImporting] = useState(false)
+  const [importStatus, setImportStatus] = useState<{ ok: boolean; message: string } | null>(null)
+  const importFileRef = useRef<HTMLInputElement | null>(null)
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -5712,6 +6266,69 @@ function SettingsModal({
           {validation && (
             <div className="muted tiny" style={{ marginTop: 10, color: validation.ok ? 'var(--accent)' : 'var(--danger)' }}>
               {validation.ok ? 'Disk cache looks good.' : `Disk cache error: ${validation.message ?? 'Unknown error'}`}
+            </div>
+          )}
+        </div>
+
+        <div className="meta-card">
+          <div className="settings-row">
+            <div>
+              <div className="title-sm">Import existing notes</div>
+              <div className="muted tiny">Load labnote-state.json from a folder (for example OneDrive).</div>
+            </div>
+          </div>
+
+          <div className="settings-actions" style={{ marginTop: 10 }}>
+            <button
+              className="accent"
+              type="button"
+              data-testid="import-legacy"
+              disabled={importing}
+              onClick={async () => {
+                setImporting(true)
+                try {
+                  const res = await onImportLegacy()
+                  setImportStatus(res)
+                } finally {
+                  setImporting(false)
+                }
+              }}
+            >
+              {importing ? 'Importing…' : 'Import from folder'}
+            </button>
+            <button
+              className="ghost"
+              type="button"
+              data-testid="import-legacy-file"
+              disabled={importing}
+              onClick={() => importFileRef.current?.click()}
+            >
+              Import from file
+            </button>
+            <input
+              ref={importFileRef}
+              type="file"
+              accept="application/json"
+              data-testid="import-legacy-file-input"
+              style={{ display: 'none' }}
+              onChange={async (event) => {
+                const file = event.target.files?.[0]
+                if (!file) return
+                setImporting(true)
+                try {
+                  const res = await onImportLegacyFile(file)
+                  setImportStatus(res)
+                } finally {
+                  setImporting(false)
+                  event.target.value = ''
+                }
+              }}
+            />
+          </div>
+
+          {importStatus && (
+            <div className="muted tiny" style={{ marginTop: 10, color: importStatus.ok ? 'var(--accent)' : 'var(--danger)' }}>
+              {importStatus.message}
             </div>
           )}
         </div>

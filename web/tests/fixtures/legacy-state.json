@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "projects": [],
+  "experiments": [],
+  "entries": {
+    "entry-legacy-1": {
+      "id": "entry-legacy-1",
+      "createdDatetime": "2025-12-05T12:00:00Z",
+      "lastEditedDatetime": "2025-12-06T09:00:00Z",
+      "authorId": "u1",
+      "title": "Legacy note import",
+      "dateBucket": "2025-12-05",
+      "content": [
+        { "id": "b1", "type": "heading", "text": "Objective", "level": 2 },
+        { "id": "b2", "type": "paragraph", "text": "Imported from legacy file." }
+      ],
+      "tags": ["import"],
+      "searchTerms": [],
+      "linkedFiles": [],
+      "pinnedRegions": []
+    }
+  },
+  "attachments": []
+}

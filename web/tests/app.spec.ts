@@ -1,5 +1,9 @@
 import { test, expect, type Page } from '@playwright/test'
 import fs from 'fs'
+import path from 'path'
+import { fileURLToPath } from 'url'
+
+const here = path.dirname(fileURLToPath(import.meta.url))
 
 async function boot(
   page: Page,
@@ -100,7 +104,25 @@ test.describe('Lab note taking app', () => {
       sel.addRange(range)
     }, 'b-context')
     await page.keyboard.type('Start text')
-    await page.keyboard.press('Home')
+    await page.evaluate((blockId) => {
+      const editor = document.querySelector('[data-testid="slate-editor"]') as HTMLElement | null
+      editor?.focus()
+      const block = document.querySelector(`[data-block-id="${blockId}"]`)
+      if (!block) return
+      const textSpan = block.querySelector('[data-slate-node="text"]')
+      const range = document.createRange()
+      if (textSpan) {
+        range.selectNodeContents(textSpan)
+        range.collapse(true)
+      } else {
+        range.selectNodeContents(block)
+        range.collapse(true)
+      }
+      const sel = window.getSelection()
+      if (!sel) return
+      sel.removeAllRanges()
+      sel.addRange(range)
+    }, 'b-context')
     await page.keyboard.press('Backspace')
     await page.keyboard.type('X')
 
@@ -296,6 +318,17 @@ test.describe('Lab note taking app', () => {
     const dialog = page.getByRole('dialog')
     await expect(dialog).toBeVisible()
     await expect(dialog.getByText('Disk cache', { exact: true })).toBeVisible()
+    await expect(dialog.getByTestId('import-legacy')).toBeVisible()
+    await expect(dialog.getByTestId('import-legacy-file')).toBeVisible()
+  })
+
+  test('legacy import from file loads entries', async ({ page }) => {
+    await boot(page, { noFail: '1', stubPicker: true })
+    await page.getByRole('button', { name: 'Settings' }).click()
+    const input = page.getByTestId('import-legacy-file-input')
+    const filePath = path.join(here, 'fixtures', 'legacy-state.json')
+    await input.setInputFiles(filePath)
+    await expect(page.getByTestId('entry-list')).toContainText('Legacy note import')
   })
 
   test('theme selection updates the active theme', async ({ page }) => {
