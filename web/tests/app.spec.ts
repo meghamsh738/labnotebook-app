@@ -20,6 +20,25 @@ async function boot(
   await page.goto('/')
 }
 
+async function ensureEditMode(page: Page) {
+  await page.waitForSelector('[data-testid="entry-save"], button:has-text("Edit")')
+  const saveButton = page.getByTestId('entry-save')
+  if ((await saveButton.count()) === 0) {
+    const editButton = page.getByRole('button', { name: 'Edit' })
+    await editButton.click()
+  }
+  await expect(saveButton).toBeVisible()
+}
+
+async function ensureViewMode(page: Page) {
+  await page.waitForSelector('[data-testid="entry-save"], button:has-text("Edit")')
+  const saveButton = page.getByTestId('entry-save')
+  if (await saveButton.count()) {
+    await page.getByRole('button', { name: 'Cancel' }).click()
+  }
+  await expect(page.getByRole('button', { name: 'Edit' })).toBeVisible()
+}
+
 test.describe('Lab note taking app', () => {
   test('loads baseline UI', async ({ page }) => {
     await boot(page, { noFail: '1' })
@@ -33,7 +52,7 @@ test.describe('Lab note taking app', () => {
   test('today entry opens with the guided template', async ({ page }) => {
     await boot(page, { noFail: '1' })
     await page.getByTestId('today-entry').click()
-    await expect(page.getByRole('button', { name: 'Save' })).toBeVisible()
+    await ensureEditMode(page)
 
     await page.getByRole('button', { name: 'Save' }).click()
     await expect(page.getByRole('heading', { name: 'Context' })).toBeVisible()
@@ -43,6 +62,7 @@ test.describe('Lab note taking app', () => {
   test('guided template prompts clear on input', async ({ page }) => {
     await boot(page, { noFail: '1' })
     await page.getByTestId('today-entry').click()
+    await ensureEditMode(page)
 
     const guideText =
       'What question are you answering today? Include model, conditions, and expected outcome.'
@@ -58,7 +78,7 @@ test.describe('Lab note taking app', () => {
 
   test('context stays editable after backspace at start', async ({ page }) => {
     await boot(page, { noFail: '1' })
-    await page.getByRole('button', { name: 'Edit' }).click()
+    await ensureEditMode(page)
 
     await page.evaluate((blockId) => {
       const editor = document.querySelector('[data-testid="slate-editor"]') as HTMLElement | null
@@ -90,7 +110,7 @@ test.describe('Lab note taking app', () => {
 
   test('context draft persists when toggling tags', async ({ page }) => {
     await boot(page, { noFail: '1' })
-    await page.getByRole('button', { name: 'Edit' }).click()
+    await ensureEditMode(page)
 
     await page.evaluate((blockId) => {
       const editor = document.querySelector('[data-testid="slate-editor"]') as HTMLElement | null
@@ -123,7 +143,7 @@ test.describe('Lab note taking app', () => {
 
   test('tabs switch between note, files, and details in edit mode', async ({ page }) => {
     await boot(page, { noFail: '1' })
-    await page.getByRole('button', { name: 'Edit' }).click()
+    await ensureEditMode(page)
 
     await page.getByRole('tab', { name: /Details/i }).click()
     await expect(page.getByTestId('entry-project-tags')).toBeVisible()
@@ -137,7 +157,7 @@ test.describe('Lab note taking app', () => {
 
   test('checklist text flows horizontally in edit mode', async ({ page }) => {
     await boot(page, { noFail: '1' })
-    await page.getByRole('button', { name: 'Edit' }).click()
+    await ensureEditMode(page)
 
     const firstItem = page.getByTestId('check-item-text').first()
     await expect(firstItem).toBeVisible()
@@ -152,6 +172,7 @@ test.describe('Lab note taking app', () => {
   test('master sync root prefixes file destinations', async ({ page }) => {
     await boot(page, { noFail: '1' })
     await page.getByTestId('today-entry').click()
+    await ensureEditMode(page)
 
     await page.getByRole('tab', { name: /Files/ }).click()
     await page
@@ -172,10 +193,12 @@ test.describe('Lab note taking app', () => {
   test('auto-save downloads when disk cache is unavailable', async ({ page }) => {
     await boot(page, { noFail: '1', stubPicker: true })
     await page.getByTestId('today-entry').click()
+    await ensureEditMode(page)
 
     const editor = page.getByTestId('slate-editor')
     await editor.locator('p.block-paragraph').first().click({ force: true })
     await page.keyboard.type('Auto-save download text')
+    await expect(editor).toContainText('Auto-save download text')
     await expect(page.getByTestId('entry-save')).toBeVisible()
     const [download] = await Promise.all([
       page.waitForEvent('download'),
@@ -188,6 +211,7 @@ test.describe('Lab note taking app', () => {
 
   test('view-mode checklist toggle syncs', async ({ page }) => {
     await boot(page, { noFail: '1' })
+    await ensureViewMode(page)
 
     const firstChecklist = page.locator('.check-row').first()
     await expect(firstChecklist).toBeVisible()
@@ -200,7 +224,6 @@ test.describe('Lab note taking app', () => {
   test('today entry opens in edit mode', async ({ page }) => {
     await boot(page, { noFail: '1' })
 
-    await page.getByTestId('today-entry').click()
     await expect(page.getByRole('button', { name: 'Save' })).toBeVisible()
 
     const editor = page.getByTestId('slate-editor')
@@ -209,6 +232,7 @@ test.describe('Lab note taking app', () => {
 
   test('sync failures can be retried', async ({ page }) => {
     await boot(page, { noFail: '0', failNext: true })
+    await ensureViewMode(page)
 
     const firstChecklist = page.locator('.check-row').first()
     await firstChecklist.locator('input[type="checkbox"]').click()
@@ -289,6 +313,7 @@ test.describe('Lab note taking app', () => {
 
   test('view mode does not accumulate context across entries', async ({ page }) => {
     await boot(page, { noFail: '1' })
+    await ensureViewMode(page)
     const formatter = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
     const todayTitle = formatter.format(new Date())
     const yesterday = new Date()
@@ -309,6 +334,22 @@ test.describe('Lab note taking app', () => {
     await entryList.getByRole('button', { name: new RegExp(yesterdayTitle) }).click()
     await expect(entryView).toContainText('Beta context')
     await expect(entryView).not.toContainText('Alpha context')
+  })
+
+  test('entries list sorts newest first', async ({ page }) => {
+    await boot(page, { noFail: '1' })
+    await page.getByTestId('calendar-clear').click()
+
+    const today = new Date()
+    const yesterday = new Date(today)
+    yesterday.setDate(today.getDate() - 1)
+    const formatter = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+    const todayTitle = formatter.format(today)
+    const yesterdayTitle = formatter.format(yesterday)
+
+    const entryItems = page.getByTestId('entry-list').getByRole('button')
+    await expect(entryItems.nth(0)).toContainText(todayTitle)
+    await expect(entryItems.nth(1)).toContainText(yesterdayTitle)
   })
 
   test('sidebar can be collapsed and expanded', async ({ page }) => {

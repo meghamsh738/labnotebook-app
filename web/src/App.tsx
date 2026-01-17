@@ -55,6 +55,16 @@ const monthStartFromIso = (isoDate: string) => {
   return new Date(year, Math.max(0, month), 1)
 }
 
+const entrySortTimestamp = (entry: Entry) => {
+  const candidates = [entry.dateBucket, entry.createdDatetime, entry.lastEditedDatetime]
+  for (const value of candidates) {
+    if (!value) continue
+    const parsed = Date.parse(value)
+    if (!Number.isNaN(parsed)) return parsed
+  }
+  return 0
+}
+
 type ChangeQueueItem = {
   id: string
   entryId: string
@@ -916,7 +926,18 @@ function App() {
     }
     return sampleData.protocols
   })
-  const entryList = useMemo(() => Object.values(entryDrafts), [entryDrafts])
+  const entryList = useMemo(() => {
+    const entries = Object.values(entryDrafts)
+    return entries.sort((a, b) => {
+      const aTime = entrySortTimestamp(a)
+      const bTime = entrySortTimestamp(b)
+      if (aTime !== bTime) return bTime - aTime
+      const aEdited = Date.parse(a.lastEditedDatetime ?? '') || 0
+      const bEdited = Date.parse(b.lastEditedDatetime ?? '') || 0
+      if (aEdited !== bEdited) return bEdited - aEdited
+      return (a.title ?? '').localeCompare(b.title ?? '')
+    })
+  }, [entryDrafts])
   const todaySeed = useMemo(() => {
     const now = new Date()
     return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
@@ -1316,7 +1337,7 @@ function App() {
 
   useEffect(() => {
     if (dailySeededRef.current) return
-    openDailyEntry(new Date())
+    openDailyEntry(new Date(), { autoEdit: true })
     dailySeededRef.current = true
   }, [openDailyEntry])
 
