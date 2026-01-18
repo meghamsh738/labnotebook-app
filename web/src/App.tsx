@@ -3039,6 +3039,8 @@ function Sidebar({
   onCalendarMonthChange,
 }: SidebarProps) {
   const activeLab = labs[0]
+  const projectLookup = useMemo(() => new Map(projects.map((p) => [p.id, p])), [projects])
+  const experimentLookup = useMemo(() => new Map(experiments.map((e) => [e.id, e])), [experiments])
   const visibleExperiments = useMemo(() => {
     if (selectedProject === 'all') return experiments
     return experiments.filter((ex) => ex.projectId === selectedProject)
@@ -3065,6 +3067,33 @@ function Sidebar({
         ? experimentTagOptions.filter((tag) => tag.toLowerCase().includes(normalizedTagQuery))
         : experimentTagOptions,
     [normalizedTagQuery, experimentTagOptions]
+  )
+
+  const entryDateSet = useMemo(() => new Set(entries.map((entry) => entry.dateBucket)), [entries])
+
+  const getEntryPill = useCallback(
+    (entry: Entry) => {
+      const experimentTitle = entry.experimentId ? experimentLookup.get(entry.experimentId)?.title : undefined
+      const projectTitle = entry.projectId ? projectLookup.get(entry.projectId)?.title : undefined
+
+      if (experimentTitle) {
+        return { label: experimentTitle, className: 'pill ghost-pill' }
+      }
+      if (entry.experimentTags?.[0]) {
+        return { label: entry.experimentTags[0], className: 'pill ghost-pill' }
+      }
+      if (projectTitle) {
+        return { label: projectTitle, className: 'pill ghost-pill' }
+      }
+      if (entry.projectTags?.[0]) {
+        return { label: entry.projectTags[0], className: 'pill ghost-pill' }
+      }
+      if (entry.tags[0]) {
+        return { label: entry.tags[0], className: 'pill ghost-pill' }
+      }
+      return { label: 'Entry', className: 'pill soft' }
+    },
+    [experimentLookup, projectLookup]
   )
 
   const calendarDays = useMemo(() => {
@@ -3264,11 +3293,12 @@ function Sidebar({
                     {calendarDays.map((day) => {
                       const isSelected = selectedDate === day.iso
                       const isToday = todayIso === day.iso
+                      const hasEntry = entryDateSet.has(day.iso)
                       return (
                         <button
                           key={day.iso}
                           type="button"
-                          className={`calendar-day${day.isOutside ? ' outside' : ''}${isSelected ? ' selected' : ''}${isToday ? ' today' : ''}`}
+                          className={`calendar-day${day.isOutside ? ' outside' : ''}${isSelected ? ' selected' : ''}${isToday ? ' today' : ''}${hasEntry ? ' has-entry' : ''}`}
                           onClick={() => {
                             if (isSelected) {
                               onSelectDate(null)
@@ -3277,10 +3307,11 @@ function Sidebar({
                             onSelectDate(day.iso)
                           }}
                           aria-pressed={isSelected}
-                          aria-label={`${day.day} ${calendarLabel}`}
+                          aria-label={`${day.day} ${calendarLabel}${hasEntry ? ' (has entry)' : ''}`}
                           data-testid={`calendar-day-${day.iso}`}
                         >
                           {day.day}
+                          {hasEntry && <span className="calendar-dot" aria-hidden="true" />}
                         </button>
                       )
                     })}
@@ -3312,15 +3343,10 @@ function Sidebar({
                         <div className="title-sm">{e.title}</div>
                         <p className="muted tiny">{dateOnly.format(new Date(e.createdDatetime))}</p>
                       </div>
-                      {e.experimentTags?.[0] ? (
-                        <div className="pill ghost-pill">{e.experimentTags[0]}</div>
-                      ) : e.projectTags?.[0] ? (
-                        <div className="pill ghost-pill">{e.projectTags[0]}</div>
-                      ) : e.tags[0] ? (
-                        <div className="pill ghost-pill">{e.tags[0]}</div>
-                      ) : (
-                        <div className="pill soft">Draft</div>
-                      )}
+                      {(() => {
+                        const pill = getEntryPill(e)
+                        return <div className={pill.className}>{pill.label}</div>
+                      })()}
                     </button>
                   ))}
                 </div>
@@ -3751,7 +3777,7 @@ function EditorPane({
                     ) : entryItem.tags[0] ? (
                       <div className="pill ghost-pill">{entryItem.tags[0]}</div>
                     ) : (
-                      <div className="pill soft">Draft</div>
+                      <div className="pill soft">Entry</div>
                     )}
                   </button>
                 ))}

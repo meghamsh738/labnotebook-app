@@ -471,6 +471,7 @@
 }
 
 .calendar-day {
+  position: relative;
   border-radius: 10px;
   border: 2px solid transparent;
   background: transparent;
@@ -483,6 +484,27 @@
 
 .calendar-day.outside {
   color: var(--calendar-dim);
+}
+
+.calendar-day.has-entry .calendar-dot {
+  position: absolute;
+  left: 50%;
+  bottom: 4px;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  transform: translateX(-50%);
+  background: var(--calendar-accent);
+  box-shadow: 0 0 0 2px rgba(35, 245, 255, 0.18);
+}
+
+.calendar-day.outside.has-entry .calendar-dot {
+  background: rgba(35, 245, 255, 0.5);
+  box-shadow: none;
+}
+
+.calendar-day.selected.has-entry .calendar-dot {
+  background: #eaffff;
 }
 
 .calendar-day.today {
