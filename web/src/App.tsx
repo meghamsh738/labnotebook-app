@@ -516,6 +516,23 @@ const shortEntryId = (entryId: string) => entryId.replace(/^entry-/, '').slice(0
 const entryBundleFolderName = (entry: Entry) => safeFileName(`${entry.dateBucket}-${shortEntryId(entry.id)}`)
 const entryBundleFileBase = (entry: Entry) => safeFileName(`${entry.dateBucket}-${entry.title}`) || 'entry'
 const attachmentExportName = (attachment: Attachment) => `${attachment.id}-${safeFileName(attachment.filename)}`
+const DATE_BUCKET_PATTERN = /^\d{4}-\d{2}-\d{2}$/
+
+const toLocalDateBucket = (value: string) => {
+  const parsed = new Date(value)
+  if (Number.isNaN(parsed.getTime())) return ''
+  return `${parsed.getFullYear()}-${String(parsed.getMonth() + 1).padStart(2, '0')}-${String(parsed.getDate()).padStart(2, '0')}`
+}
+
+const ensureEntryDateBucket = (entry: Entry) => {
+  const createdBucket = toLocalDateBucket(entry.createdDatetime)
+  if (!createdBucket) return entry
+  if (entry.dateBucket === createdBucket) return entry
+  if (!entry.dateBucket || !DATE_BUCKET_PATTERN.test(entry.dateBucket) || entry.dateBucket !== createdBucket) {
+    return { ...entry, dateBucket: createdBucket }
+  }
+  return entry
+}
 
 const normalizeSyncRoot = (value: string) => {
   const trimmed = value.trim()
@@ -1124,18 +1141,20 @@ function App() {
   })
   const [entryDrafts, setEntryDrafts] = useState<Record<string, Entry>>(() => {
     if (typeof window === 'undefined' || resetSeed) {
-      return Object.fromEntries(sampleData.entries.map((e) => [e.id, e]))
+      return Object.fromEntries(sampleData.entries.map((e) => [e.id, ensureEntryDateBucket(e)]))
     }
     try {
       const saved = window.localStorage.getItem('labnote.entries')
       if (saved) {
         const parsed = JSON.parse(saved) as Record<string, Entry>
-        return Object.fromEntries(Object.entries(parsed).map(([id, entry]) => [id, applyLockedTemplateHeadings(entry)]))
+        return Object.fromEntries(
+          Object.entries(parsed).map(([id, entry]) => [id, ensureEntryDateBucket(applyLockedTemplateHeadings(entry))])
+        )
       }
     } catch (err) {
       console.warn('Unable to read cached entries', err)
     }
-    return Object.fromEntries(sampleData.entries.map((e) => [e.id, e]))
+    return Object.fromEntries(sampleData.entries.map((e) => [e.id, ensureEntryDateBucket(e)]))
   })
   const [protocols, setProtocols] = useState<Protocol[]>(() => {
     if (typeof window === 'undefined' || resetSeed) return sampleData.protocols
@@ -1709,7 +1728,7 @@ function App() {
         const dateBucket = entry.dateBucket || createdDatetime.slice(0, 10)
         const title = entry.title || dateOnly.format(new Date(createdDatetime))
 
-        return applyLockedTemplateHeadings({
+        const normalized = applyLockedTemplateHeadings({
           ...entry,
           id,
           createdDatetime,
@@ -1727,6 +1746,7 @@ function App() {
           linkedFiles: Array.isArray(entry.linkedFiles) ? entry.linkedFiles : [],
           pinnedRegions: Array.isArray(entry.pinnedRegions) ? entry.pinnedRegions : [],
         })
+        return ensureEntryDateBucket(normalized)
       }
 
       const normalizedEntries: Record<string, Entry> = {}
