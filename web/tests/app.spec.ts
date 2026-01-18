@@ -103,7 +103,7 @@ test.describe('Lab note taking app', () => {
       sel.removeAllRanges()
       sel.addRange(range)
     }, 'b-context')
-    await page.keyboard.type('Undo me')
+    await page.keyboard.insertText('Undo me')
 
     const editor = page.getByTestId('slate-editor')
     await expect(editor).toContainText('Undo me')
@@ -480,6 +480,17 @@ test.describe('Lab note taking app', () => {
     await expect(page.getByTestId('entry-list').getByRole('button', { name: new RegExp(yesterdayTitle) })).toBeVisible()
     await page.getByTestId(`calendar-day-${todayIso}`).click()
     await expect(page.getByTestId('entry-list').getByRole('button', { name: new RegExp(todayTitle) })).toBeVisible()
+  })
+
+  test('calendar marks days that have entries', async ({ page }) => {
+    await boot(page, { noFail: '1' })
+    const today = new Date()
+    const todayIso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(
+      today.getDate()
+    ).padStart(2, '0')}`
+    const dayButton = page.getByTestId(`calendar-day-${todayIso}`)
+    await expect(dayButton).toHaveClass(/has-entry/)
+    await expect(dayButton.locator('.calendar-dot')).toBeVisible()
   })
 
   test('tag search filters project and experiment tags', async ({ page }) => {

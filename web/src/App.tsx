@@ -2792,6 +2792,7 @@ function App() {
           projects={projects}
           experiments={experiments}
           entries={filteredEntries}
+          allEntries={entryList}
           selectedEntryId={selectedEntryId}
           protocols={filteredProtocols}
           selectedProtocolId={selectedProtocolId}
@@ -2966,6 +2967,7 @@ interface SidebarProps {
   projects: Project[]
   experiments: Experiment[]
   entries: Entry[]
+  allEntries: Entry[]
   selectedEntryId: string
   protocols: Protocol[]
   selectedProtocolId: string
@@ -3005,6 +3007,7 @@ function Sidebar({
   projects,
   experiments,
   entries,
+  allEntries,
   selectedEntryId,
   protocols,
   selectedProtocolId,
@@ -3069,7 +3072,7 @@ function Sidebar({
     [normalizedTagQuery, experimentTagOptions]
   )
 
-  const entryDateSet = useMemo(() => new Set(entries.map((entry) => entry.dateBucket)), [entries])
+  const entryDateSet = useMemo(() => new Set(allEntries.map((entry) => entry.dateBucket)), [allEntries])
 
   const getEntryPill = useCallback(
     (entry: Entry) => {
