@@ -934,6 +934,37 @@
   padding: var(--s-2) 0;
 }
 
+.symbol-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+}
+
+.symbol-row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s-3);
+  padding: 10px 12px;
+  min-height: 40px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  border: 2px solid var(--border);
+}
+
+.symbol-bullet {
+  width: 20px;
+  text-align: center;
+  font-weight: 700;
+  color: var(--text-2);
+  flex: none;
+}
+
+.symbol-item-text {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+}
+
 .check-item-text {
   position: relative;
   flex: 1;

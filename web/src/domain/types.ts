@@ -69,6 +69,7 @@ export type BlockType =
   | 'image'
   | 'file'
   | 'checklist'
+  | 'list'
   | 'quote'
   | 'divider'
 
@@ -141,6 +142,21 @@ export interface ChecklistBlock extends BlockBase {
   items: ChecklistItem[]
 }
 
+export type ListStyle = 'dot' | 'circle' | 'square' | 'dash' | 'arrow'
+
+export interface ListItem {
+  id: string
+  text: string
+  runs?: TextRun[]
+  guide?: string
+}
+
+export interface ListBlock extends BlockBase {
+  type: 'list'
+  items: ListItem[]
+  style?: ListStyle
+}
+
 export interface QuoteBlock extends BlockBase {
   type: 'quote'
   text: string
@@ -159,6 +175,7 @@ export type Block =
   | ImageBlock
   | FileBlock
   | ChecklistBlock
+  | ListBlock
   | QuoteBlock
   | DividerBlock
 

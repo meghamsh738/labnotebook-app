@@ -80,6 +80,54 @@ test.describe('Lab note taking app', () => {
     await expect(guideLocator).toHaveCount(0)
   })
 
+  test('undo and redo restore the latest edit', async ({ page }) => {
+    await boot(page, { noFail: '1' })
+    await ensureEditMode(page)
+
+    await page.evaluate((blockId) => {
+      const editor = document.querySelector('[data-testid="slate-editor"]') as HTMLElement | null
+      editor?.focus()
+      const block = document.querySelector(`[data-block-id="${blockId}"]`)
+      if (!block) return
+      const textSpan = block.querySelector('[data-slate-node="text"]')
+      const range = document.createRange()
+      if (textSpan) {
+        range.selectNodeContents(textSpan)
+        range.collapse(true)
+      } else {
+        range.selectNodeContents(block)
+        range.collapse(true)
+      }
+      const sel = window.getSelection()
+      if (!sel) return
+      sel.removeAllRanges()
+      sel.addRange(range)
+    }, 'b-context')
+    await page.keyboard.type('Undo me')
+
+    const editor = page.getByTestId('slate-editor')
+    await expect(editor).toContainText('Undo me')
+    await expect(page.getByTestId('editor-undo')).toBeEnabled()
+    await page.getByTestId('editor-undo').click()
+    await expect(editor).not.toContainText('Undo me')
+    await expect(page.getByTestId('editor-redo')).toBeEnabled()
+    await page.getByTestId('editor-redo').click()
+    await expect(editor).toContainText('Undo me')
+  })
+
+  test('symbol list inserts a bulleted line', async ({ page }) => {
+    await boot(page, { noFail: '1' })
+    await ensureEditMode(page)
+
+    await page.getByTestId('editor-list-dot').click()
+    const listItem = page.getByTestId('list-item-text').first()
+    await listItem.click({ force: true })
+    await page.keyboard.type('Bullet item')
+
+    await expect(page.getByTestId('list-symbol').first()).toContainText('•')
+    await expect(page.getByTestId('slate-editor')).toContainText('Bullet item')
+  })
+
   test('context stays editable after backspace at start', async ({ page }) => {
     await boot(page, { noFail: '1' })
     await ensureEditMode(page)

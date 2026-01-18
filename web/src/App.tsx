@@ -1,6 +1,7 @@
 import type React from 'react'
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { createEditor, Editor, Element as SlateElement, Node, Path, Range, Text, Transforms } from 'slate'
+import { HistoryEditor, withHistory } from 'slate-history'
 import type { Descendant } from 'slate'
 import { Slate, Editable, withReact, ReactEditor, useSlateStatic } from 'slate-react'
 import { PDFDocument, StandardFonts, rgb, type PDFFont } from 'pdf-lib'
@@ -18,9 +19,11 @@ import type {
   Project,
   Protocol,
   ChecklistItem,
+  ListItem,
   PinnedRegion,
   TextRun,
   ThemeName,
+  ListStyle,
 } from './domain/types'
 
 const dateOnly = new Intl.DateTimeFormat('en-US', {
@@ -57,6 +60,7 @@ const shouldResetSeed = () => {
 
 type EntryTemplateId = 'guided' | 'blank'
 type SyncStatus = 'pending' | 'synced' | 'failed'
+type HistoryReactEditor = ReactEditor & HistoryEditor
 
 const monthStartFromIso = (isoDate: string) => {
   const parts = isoDate.split('-')
@@ -102,6 +106,7 @@ const parseEntryMarkdown = (markdown: string, folderName: string): ParsedMarkdow
   let lastEditedDatetime = ''
   let projectTitle: string | undefined
   let experimentTitle: string | undefined
+  let pendingListStyle: ListStyle | undefined
 
   if (lines[idx]?.startsWith('# ')) {
     title = lines[idx].slice(2).trim()
@@ -163,8 +168,17 @@ const parseEntryMarkdown = (markdown: string, folderName: string): ParsedMarkdow
       continue
     }
 
+    const listStyleMatch = trimmed.match(/^<!--\s*list:([a-z-]+)\s*-->$/i)
+    if (listStyleMatch) {
+      const style = normalizeListStyle(listStyleMatch[1]?.toLowerCase())
+      if (style) pendingListStyle = style
+      idx += 1
+      continue
+    }
+
     if (trimmed === '---') {
       flushParagraph()
+      pendingListStyle = undefined
       blocks.push({ id: newId('b-'), type: 'divider' })
       idx += 1
       continue
@@ -172,6 +186,7 @@ const parseEntryMarkdown = (markdown: string, folderName: string): ParsedMarkdow
 
     if (trimmed.startsWith('## ')) {
       flushParagraph()
+      pendingListStyle = undefined
       blocks.push({ id: newId('b-'), type: 'heading', level: 2, text: trimmed.slice(3).trim() })
       idx += 1
       continue
@@ -179,6 +194,7 @@ const parseEntryMarkdown = (markdown: string, folderName: string): ParsedMarkdow
 
     if (trimmed.startsWith('### ')) {
       flushParagraph()
+      pendingListStyle = undefined
       blocks.push({ id: newId('b-'), type: 'heading', level: 3, text: trimmed.slice(4).trim() })
       idx += 1
       continue
@@ -186,6 +202,7 @@ const parseEntryMarkdown = (markdown: string, folderName: string): ParsedMarkdow
 
     if (trimmed.startsWith('> ')) {
       flushParagraph()
+      pendingListStyle = undefined
       const quoteLines: string[] = []
       while (idx < lines.length && lines[idx].trim().startsWith('> ')) {
         quoteLines.push(lines[idx].trim().replace(/^>\s?/, ''))
@@ -197,6 +214,7 @@ const parseEntryMarkdown = (markdown: string, folderName: string): ParsedMarkdow
 
     if (trimmed.startsWith('- [')) {
       flushParagraph()
+      pendingListStyle = undefined
       const items: ChecklistItem[] = []
       while (idx < lines.length && lines[idx].trim().startsWith('- [')) {
         const itemLine = lines[idx].trim()
@@ -209,8 +227,27 @@ const parseEntryMarkdown = (markdown: string, folderName: string): ParsedMarkdow
       continue
     }
 
+    if (/^[-*+]\s+/.test(trimmed)) {
+      flushParagraph()
+      const items: ListItem[] = []
+      while (idx < lines.length && /^[-*+]\s+/.test(lines[idx].trim()) && !lines[idx].trim().startsWith('- [')) {
+        const itemLine = lines[idx].trim().replace(/^[-*+]\s+/, '').trim()
+        items.push({ id: newId('li-'), text: itemLine })
+        idx += 1
+      }
+      blocks.push({
+        id: newId('b-'),
+        type: 'list',
+        style: pendingListStyle ?? 'dot',
+        items,
+      })
+      pendingListStyle = undefined
+      continue
+    }
+
     if (trimmed.startsWith('|')) {
       flushParagraph()
+      pendingListStyle = undefined
       const tableLines: string[] = []
       while (idx < lines.length && lines[idx].trim().startsWith('|')) {
         tableLines.push(lines[idx])
@@ -241,6 +278,7 @@ const parseEntryMarkdown = (markdown: string, folderName: string): ParsedMarkdow
     const link = parseMarkdownLink(trimmed)
     if (link) {
       flushParagraph()
+      pendingListStyle = undefined
       const path = link.path
       const filename = path.split('/').filter(Boolean).pop() ?? (link.label || 'file')
       const attId = `att-import-${folderName}-${attachments.length + 1}`
@@ -516,6 +554,25 @@ const shortEntryId = (entryId: string) => entryId.replace(/^entry-/, '').slice(0
 const entryBundleFolderName = (entry: Entry) => safeFileName(`${entry.dateBucket}-${shortEntryId(entry.id)}`)
 const entryBundleFileBase = (entry: Entry) => safeFileName(`${entry.dateBucket}-${entry.title}`) || 'entry'
 const attachmentExportName = (attachment: Attachment) => `${attachment.id}-${safeFileName(attachment.filename)}`
+const LIST_STYLE_SYMBOLS: Record<ListStyle, string> = {
+  dot: '•',
+  circle: '◦',
+  square: '▪',
+  dash: '–',
+  arrow: '→',
+}
+const LIST_STYLE_OPTIONS: Array<{ id: ListStyle; label: string; symbol: string }> = [
+  { id: 'dot', label: 'Dot list', symbol: LIST_STYLE_SYMBOLS.dot },
+  { id: 'circle', label: 'Circle list', symbol: LIST_STYLE_SYMBOLS.circle },
+  { id: 'square', label: 'Square list', symbol: LIST_STYLE_SYMBOLS.square },
+  { id: 'dash', label: 'Dash list', symbol: LIST_STYLE_SYMBOLS.dash },
+  { id: 'arrow', label: 'Arrow list', symbol: LIST_STYLE_SYMBOLS.arrow },
+]
+const normalizeListStyle = (value: unknown): ListStyle | undefined => {
+  if (value === 'dot' || value === 'circle' || value === 'square' || value === 'dash' || value === 'arrow') return value
+  return undefined
+}
+const getListSymbol = (style?: ListStyle) => LIST_STYLE_SYMBOLS[style ?? 'dot'] ?? '•'
 const DATE_BUCKET_PATTERN = /^\d{4}-\d{2}-\d{2}$/
 
 const toLocalDateBucket = (value: string) => {
@@ -595,6 +652,8 @@ function blockToSearchText(block: Block): string {
     case 'table':
       return block.data.flat().join(' ')
     case 'checklist':
+      return block.items.map((i) => i.text).join(' ')
+    case 'list':
       return block.items.map((i) => i.text).join(' ')
     case 'image':
       return block.caption ?? ''
@@ -692,6 +751,14 @@ function blocksToMarkdown(blocks: Block[], attachmentsById: Record<string, Attac
             .join('\n')
         )
         break
+      case 'list': {
+        const filtered = block.items.filter((i) => i.text.trim() || !i.guide)
+        if (block.style && block.style !== 'dot') {
+          parts.push(`<!-- list:${block.style} -->`)
+        }
+        parts.push(filtered.map((i) => `- ${escapeMd(i.text)}`).join('\n'))
+        break
+      }
       case 'table':
         parts.push(mdTable(block.data, block.headerRow !== false))
         if (block.caption) parts.push(`*${escapeMd(block.caption)}*`)
@@ -772,6 +839,13 @@ function blocksToHtml(blocks: Block[], attachmentsById: Record<string, Attachmen
             .filter((i) => i.text.trim() || !i.guide)
             .map((i) => `<li><span class="cb">${i.done ? '☑' : '☐'}</span> ${esc(i.text)}</li>`)
             .join('')}</ul>`
+        case 'list': {
+          const symbol = getListSymbol(block.style)
+          return `<ul class="symbol-list">${block.items
+            .filter((i) => i.text.trim() || !i.guide)
+            .map((i) => `<li><span class="symbol">${esc(symbol)}</span> ${esc(i.text)}</li>`)
+            .join('')}</ul>`
+        }
         case 'table':
           return `<div class="table-wrap">${renderTable(block.data, block.headerRow !== false)}${block.caption ? `<div class="caption">${esc(block.caption)}</div>` : ''}</div>`
         case 'image': {
@@ -909,6 +983,14 @@ async function buildEntryPdf(
           .forEach((item) => addParagraph(`[${item.done ? 'x' : ' '}] ${item.text}`, font, 11, 4))
         y -= 6
         break
+      case 'list': {
+        const symbol = getListSymbol(block.style)
+        block.items
+          .filter((item) => item.text.trim() || !item.guide)
+          .forEach((item) => addParagraph(`${symbol} ${item.text}`, font, 11, 4))
+        y -= 6
+        break
+      }
       case 'table':
         block.data.forEach((row) => addParagraph(row.join(' | '), font, 10, 2))
         y -= 6
@@ -1101,6 +1183,7 @@ type EditorAttachmentContextValue = {
 
 const EditorAttachmentContext = createContext<EditorAttachmentContextValue | null>(null)
 const TableEditContext = createContext<{ isEditing: boolean } | null>(null)
+const ListSymbolContext = createContext<string>('•')
 
 function App() {
   const resetSeed = shouldResetSeed()
@@ -1814,6 +1897,18 @@ function App() {
       setFilterHasImage(false)
       setFilterHasFile(false)
 
+      try {
+        window.localStorage.setItem('labnote.entries', JSON.stringify(mergedEntries))
+        window.localStorage.setItem('labnote.attachments', JSON.stringify(mergedAttachments))
+        window.localStorage.setItem('labnote.projects', JSON.stringify(mergedProjects))
+        window.localStorage.setItem('labnote.experiments', JSON.stringify(mergedExperiments))
+        if (opts?.enableDiskSync ?? false) {
+          window.localStorage.setItem('labnote.diskSync', '1')
+        }
+      } catch (err) {
+        console.warn('Unable to persist imported state immediately', err)
+      }
+
       const sorted = Object.values(mergedEntries).sort((a, b) => entrySortTimestamp(b) - entrySortTimestamp(a))
       if (sorted[0]) {
         setSelectedEntryId(sorted[0].id)
@@ -1991,12 +2086,6 @@ function App() {
   useEffect(() => {
     if (autoImportAttempted) return
     if (typeof window === 'undefined') return
-
-    const hasLocalEntries = !!window.localStorage.getItem('labnote.entries')
-    if (hasLocalEntries) {
-      setAutoImportAttempted(true)
-      return
-    }
 
     const run = async () => {
       const dir = await restoreCacheHandle()
@@ -2298,6 +2387,9 @@ function App() {
       ul.checklist { list-style: none; padding-left: 0; }
       ul.checklist li { margin: 6px 0; }
       .cb { display: inline-block; width: 20px; }
+      ul.symbol-list { list-style: none; padding-left: 0; }
+      ul.symbol-list li { margin: 6px 0; display: flex; gap: 8px; }
+      ul.symbol-list .symbol { width: 18px; display: inline-block; text-align: center; font-weight: 600; }
       figure { margin: 12px 0; }
       figure img { max-width: 100%; border-radius: 10px; border: 1px solid #E7E7EA; }
       figcaption { font-size: 12px; color: #5E5E66; margin-top: 6px; }
@@ -3407,7 +3499,9 @@ function EditorPane({
   const [exporting, setExporting] = useState(false)
   const [isEditing, setIsEditing] = useState(false)
   const [activeTab, setActiveTab] = useState<'note' | 'files' | 'details'>('note')
-  const [editor] = useState(() => withChecklists(withReact(createEditor() as ReactEditor)))
+  const [editor] = useState<HistoryReactEditor>(() =>
+    withHistory(withChecklists(withReact(createEditor() as ReactEditor))) as HistoryReactEditor
+  )
   const [tabsViewOpen, setTabsViewOpen] = useState(false)
   const lastEntryIdRef = useRef<string | null>(null)
   const [editorRevision, setEditorRevision] = useState(0)
@@ -3864,6 +3958,20 @@ function EditorPane({
                     onKeyDown={(event) => {
                       if ((event.ctrlKey || event.metaKey) && !event.altKey) {
                         const key = event.key.toLowerCase()
+                        if (key === 'z') {
+                          event.preventDefault()
+                          if (event.shiftKey) {
+                            HistoryEditor.redo(editor)
+                          } else {
+                            HistoryEditor.undo(editor)
+                          }
+                          return
+                        }
+                        if (key === 'y') {
+                          event.preventDefault()
+                          HistoryEditor.redo(editor)
+                          return
+                        }
                         if (key === 'b') {
                           event.preventDefault()
                           toggleMark(editor, 'bold')
@@ -4113,7 +4221,9 @@ function EditorPane({
 function ProtocolPane({ protocol, onUpdateProtocol, onUpdateProtocolMeta }: ProtocolPaneProps) {
   const [isEditing, setIsEditing] = useState(false)
   const [draftTitle, setDraftTitle] = useState(protocol?.title ?? '')
-  const [editor] = useState(() => withChecklists(withReact(createEditor() as ReactEditor)))
+  const [editor] = useState<HistoryReactEditor>(() =>
+    withHistory(withChecklists(withReact(createEditor() as ReactEditor))) as HistoryReactEditor
+  )
   const [editorRevision, setEditorRevision] = useState(0)
   const [editorValue, setEditorValue] = useState<Descendant[]>(
     () => blocksToSlate(protocol?.content ?? [{ id: 'b-empty', type: 'paragraph', text: '' }])
@@ -4273,6 +4383,20 @@ function ProtocolPane({ protocol, onUpdateProtocol, onUpdateProtocolMeta }: Prot
               onKeyDown={(event) => {
                 if ((event.ctrlKey || event.metaKey) && !event.altKey) {
                   const key = event.key.toLowerCase()
+                  if (key === 'z') {
+                    event.preventDefault()
+                    if (event.shiftKey) {
+                      HistoryEditor.redo(editor)
+                    } else {
+                      HistoryEditor.undo(editor)
+                    }
+                    return
+                  }
+                  if (key === 'y') {
+                    event.preventDefault()
+                    HistoryEditor.redo(editor)
+                    return
+                  }
                   if (key === 'b') {
                     event.preventDefault()
                     toggleMark(editor, 'bold')
@@ -4387,6 +4511,10 @@ const renderElement = (props: RenderElementProps) => {
       return <ChecklistElement {...props} />
     case 'check-item':
       return <CheckItemElement {...props} />
+    case 'list':
+      return <ListElement {...props} />
+    case 'list-item':
+      return <ListItemElement {...props} />
     case 'attachment':
       return <AttachmentElement {...props} />
     case 'table': {
@@ -4605,7 +4733,7 @@ function getActiveBlockEntry(editor: ReactEditor): [SlateElement, Path] | null {
   return entry ? (entry as [SlateElement, Path]) : null
 }
 
-const ALIGNABLE_TYPES = new Set(['paragraph', 'heading-two', 'heading-three', 'quote', 'checklist'])
+const ALIGNABLE_TYPES = new Set(['paragraph', 'heading-two', 'heading-three', 'quote', 'checklist', 'list'])
 
 function getBlockStyle(align?: unknown): React.CSSProperties | undefined {
   if (!isTextAlignValue(align)) return undefined
@@ -4713,6 +4841,21 @@ function insertChecklistBlock(editor: ReactEditor) {
     children: [{ type: 'check-item', itemId: newId('ci-'), done: false, children: [{ text: '' }] }],
   }
   Transforms.insertNodes(editor, checklistNode, { at: insertAt })
+  Transforms.select(editor, Editor.start(editor, insertAt.concat(0, 0)))
+  ReactEditor.focus(editor)
+}
+
+function insertListBlock(editor: ReactEditor, style: ListStyle = 'dot') {
+  const entry = getActiveBlockEntry(editor)
+  const insertAt = entry ? Path.next(entry[1]) : [editor.children.length]
+  const blockId = newId('b-')
+  const listNode: Descendant = {
+    type: 'list',
+    blockId,
+    listStyle: style,
+    children: [{ type: 'list-item', itemId: newId('li-'), children: [{ text: '' }] }],
+  }
+  Transforms.insertNodes(editor, listNode, { at: insertAt })
   Transforms.select(editor, Editor.start(editor, insertAt.concat(0, 0)))
   ReactEditor.focus(editor)
 }
@@ -4860,7 +5003,7 @@ function EditorInsertBar({
   onShowTags,
   syncRoot,
 }: {
-  editor: ReactEditor
+  editor: HistoryReactEditor
   revision: number
   entryId: string
   onAddAttachments: (entryId: string, files: File[]) => Promise<Attachment[]>
@@ -4879,6 +5022,8 @@ function EditorInsertBar({
   const activeAlign = getActiveAlign(editor)
   const isSuperscript = isScriptActive(editor, 'superscript')
   const isSubscript = isScriptActive(editor, 'subscript')
+  const canUndo = HistoryEditor.isHistoryEditor(editor) ? editor.history.undos.length > 0 : false
+  const canRedo = HistoryEditor.isHistoryEditor(editor) ? editor.history.redos.length > 0 : false
 
   const insertFromAttachments = useCallback(
     (attachments: Attachment[]) => {
@@ -4906,6 +5051,33 @@ function EditorInsertBar({
   return (
     <>
       <div className="editor-toolbar" contentEditable={false}>
+        <div className="toolbar-group">
+          <button
+            className="pill soft"
+            type="button"
+            disabled={!canUndo}
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => HistoryEditor.undo(editor)}
+            aria-label="Undo"
+            data-testid="editor-undo"
+          >
+            ↶
+          </button>
+          <button
+            className="pill soft"
+            type="button"
+            disabled={!canRedo}
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => HistoryEditor.redo(editor)}
+            aria-label="Redo"
+            data-testid="editor-redo"
+          >
+            ↷
+          </button>
+        </div>
+
+        <div className="toolbar-sep" />
+
         <div className="toolbar-group">
           <label className="toolbar-label">
             Font
@@ -5102,6 +5274,19 @@ function EditorInsertBar({
           <button className="pill soft" type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => insertChecklistBlock(editor)}>
             + Checks
           </button>
+          {LIST_STYLE_OPTIONS.map((option) => (
+            <button
+              key={option.id}
+              className="pill soft"
+              type="button"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => insertListBlock(editor, option.id)}
+              aria-label={option.label}
+              data-testid={`editor-list-${option.id}`}
+            >
+              {option.symbol}
+            </button>
+          ))}
           {onShowTags && (
             <button className="pill soft" type="button" onMouseDown={(e) => e.preventDefault()} onClick={onShowTags}>
               + Tags
@@ -5183,7 +5368,7 @@ function EditorInsertBar({
   )
 }
 
-function ProtocolInsertBar({ editor, revision }: { editor: ReactEditor; revision: number }) {
+function ProtocolInsertBar({ editor, revision }: { editor: HistoryReactEditor; revision: number }) {
   void revision
   const activeFont = getActiveFont(editor)
   const activeFontSize = getActiveFontSize(editor)
@@ -5192,9 +5377,38 @@ function ProtocolInsertBar({ editor, revision }: { editor: ReactEditor; revision
   const activeAlign = getActiveAlign(editor)
   const isSuperscript = isScriptActive(editor, 'superscript')
   const isSubscript = isScriptActive(editor, 'subscript')
+  const canUndo = HistoryEditor.isHistoryEditor(editor) ? editor.history.undos.length > 0 : false
+  const canRedo = HistoryEditor.isHistoryEditor(editor) ? editor.history.redos.length > 0 : false
 
   return (
     <div className="editor-toolbar" contentEditable={false}>
+      <div className="toolbar-group">
+        <button
+          className="pill soft"
+          type="button"
+          disabled={!canUndo}
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={() => HistoryEditor.undo(editor)}
+          aria-label="Undo"
+          data-testid="protocol-undo"
+        >
+          ↶
+        </button>
+        <button
+          className="pill soft"
+          type="button"
+          disabled={!canRedo}
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={() => HistoryEditor.redo(editor)}
+          aria-label="Redo"
+          data-testid="protocol-redo"
+        >
+          ↷
+        </button>
+      </div>
+
+      <div className="toolbar-sep" />
+
       <div className="toolbar-group">
         <label className="toolbar-label">
           Font
@@ -5391,6 +5605,19 @@ function ProtocolInsertBar({ editor, revision }: { editor: ReactEditor; revision
         <button className="pill soft" type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => insertChecklistBlock(editor)}>
           + Checks
         </button>
+        {LIST_STYLE_OPTIONS.map((option) => (
+          <button
+            key={option.id}
+            className="pill soft"
+            type="button"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => insertListBlock(editor, option.id)}
+            aria-label={option.label}
+            data-testid={`protocol-list-${option.id}`}
+          >
+            {option.symbol}
+          </button>
+        ))}
       </div>
 
       <div className="toolbar-sep" />
@@ -5478,6 +5705,69 @@ function CheckItemElement({ element, attributes, children }: RenderElementProps)
         contentEditable={false}
       />
       <span className="check-item-text" data-testid="check-item-text">
+        {showGuide && (
+          <span className="slate-placeholder" contentEditable={false}>
+            {guideText}
+          </span>
+        )}
+        {children}
+      </span>
+    </div>
+  )
+}
+
+function ListElement({ element, attributes, children }: RenderElementProps) {
+  const editor = useSlateStatic()
+  const canAdd = element.locked !== true
+  const style = getBlockStyle((element as { align?: unknown }).align)
+  const listStyle = normalizeListStyle((element as { listStyle?: unknown }).listStyle) ?? 'dot'
+  const symbol = getListSymbol(listStyle)
+
+  return (
+    <ListSymbolContext.Provider value={symbol}>
+      <div className="symbol-list" {...attributes} style={style}>
+        {children}
+        <div className="checklist-actions" contentEditable={false}>
+          <button
+            type="button"
+            className="pill soft"
+            disabled={!canAdd}
+            title={canAdd ? 'Add a new list item' : 'This list is locked'}
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => {
+              if (!canAdd) return
+              const listPath = ReactEditor.findPath(editor, element)
+              const nextIndex = Array.isArray(element.children) ? element.children.length : 0
+              const itemPath = listPath.concat(nextIndex)
+              Transforms.insertNodes(
+                editor,
+                { type: 'list-item', itemId: newId('li-'), children: [{ text: '' }] },
+                { at: itemPath }
+              )
+              Transforms.select(editor, Editor.start(editor, itemPath.concat(0)))
+              ReactEditor.focus(editor)
+            }}
+          >
+            + Item
+          </button>
+          <span className="muted tiny">Tip: press Enter to add a line</span>
+        </div>
+      </div>
+    </ListSymbolContext.Provider>
+  )
+}
+
+function ListItemElement({ element, attributes, children }: RenderElementProps) {
+  const symbol = useContext(ListSymbolContext)
+  const guideText = typeof element.guide === 'string' ? element.guide : ''
+  const showGuide = guideText && Node.string(element) === ''
+
+  return (
+    <div className="symbol-row" {...attributes}>
+      <span className="symbol-bullet" contentEditable={false} data-testid="list-symbol">
+        {symbol}
+      </span>
+      <span className="symbol-item-text" data-testid="list-item-text">
         {showGuide && (
           <span className="slate-placeholder" contentEditable={false}>
             {guideText}
@@ -5783,6 +6073,19 @@ const blocksToSlate = (blocks: Block[]): Descendant[] => {
             children: slateTextChildrenFromRuns(item.runs, item.text),
           })),
         }
+      case 'list':
+        return {
+          type: 'list',
+          blockId: block.id,
+          align: block.align,
+          listStyle: block.style,
+          children: block.items.map((item) => ({
+            type: 'list-item',
+            itemId: item.id,
+            guide: item.guide,
+            children: slateTextChildrenFromRuns(item.runs, item.text),
+          })),
+        }
       case 'divider':
         return { type: 'divider', blockId: block.id, meta: block, children: [{ text: '' }] }
       case 'table':
@@ -5855,6 +6158,21 @@ const slateToBlocks = (nodes: Descendant[]): Block[] => {
               guide: typeof child.guide === 'string' ? child.guide : undefined,
             })),
         }
+      case 'list':
+        return {
+          id: ensureId(blockId),
+          type: 'list',
+          align,
+          style: normalizeListStyle((node as { listStyle?: unknown }).listStyle) ?? 'dot',
+          items: (node.children as unknown as Descendant[])
+            .filter((child): child is SlateElement => SlateElement.isElement(child))
+            .map((child) => ({
+              id: typeof child.itemId === 'string' ? child.itemId : newId('li-'),
+              text: Node.string(child),
+              runs: runsFromSlateChildren(child.children as unknown as Descendant[]),
+              guide: typeof child.guide === 'string' ? child.guide : undefined,
+            })),
+        }
       case 'divider':
       case 'attachment':
       case 'readonly':
@@ -5914,6 +6232,20 @@ function BlockRenderer({ block, attachments, attachmentUrls, onUpdateBlock }: Bl
                   : undefined
               }
             />
+          ))}
+        </div>
+      )
+    }
+    case 'list': {
+      const visibleItems = block.items.filter((item) => item.text.trim() || !item.guide)
+      const symbol = getListSymbol(block.style)
+      return (
+        <div className="symbol-list" style={style}>
+          {visibleItems.map((item) => (
+            <div key={item.id} className="symbol-row">
+              <span className="symbol-bullet">{symbol}</span>
+              <span className="symbol-item-text">{renderTextRuns(item.runs, item.text)}</span>
+            </div>
           ))}
         </div>
       )
