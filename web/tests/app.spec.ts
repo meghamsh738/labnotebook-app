@@ -128,6 +128,13 @@ test.describe('Lab note taking app', () => {
     await expect(page.getByTestId('slate-editor')).toContainText('Bullet item')
   })
 
+  test('camera input is available for mobile capture', async ({ page }) => {
+    await boot(page, { noFail: '1' })
+    await ensureEditMode(page)
+    const cameraInput = page.getByTestId('camera-input')
+    await expect(cameraInput).toHaveAttribute('capture', 'environment')
+  })
+
   test('context stays editable after backspace at start', async ({ page }) => {
     await boot(page, { noFail: '1' })
     await ensureEditMode(page)

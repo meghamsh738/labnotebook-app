@@ -5041,6 +5041,7 @@ function EditorInsertBar({
   syncRoot: string
 }) {
   const imgRef = useRef<HTMLInputElement | null>(null)
+  const cameraRef = useRef<HTMLInputElement | null>(null)
   const fileRef = useRef<HTMLInputElement | null>(null)
   const [destOpen, setDestOpen] = useState(false)
   void revision
@@ -5343,6 +5344,9 @@ function EditorInsertBar({
           <button className="pill soft" type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => imgRef.current?.click()}>
             + Image
           </button>
+          <button className="pill soft" type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => cameraRef.current?.click()}>
+            + Camera
+          </button>
           <button className="pill soft" type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => insertTableBlock(editor, [['Sample', 'Value']])}>
             + Table
           </button>
@@ -5363,6 +5367,18 @@ function EditorInsertBar({
         type="file"
         accept="image/*"
         multiple
+        style={{ display: 'none' }}
+        onChange={(e) => {
+          void pickAndInsert(e.target.files)
+          e.currentTarget.value = ''
+        }}
+      />
+      <input
+        ref={cameraRef}
+        type="file"
+        accept="image/*"
+        capture="environment"
+        data-testid="camera-input"
         style={{ display: 'none' }}
         onChange={(e) => {
           void pickAndInsert(e.target.files)
