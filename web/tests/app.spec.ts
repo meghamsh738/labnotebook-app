@@ -63,6 +63,27 @@ test.describe('Lab note taking app', () => {
     await expect(page.getByRole('heading', { name: 'Setup' })).toBeVisible()
   })
 
+  test('can add a missed entry from the calendar', async ({ page }) => {
+    await boot(page, { noFail: '1' })
+
+    const targetIso = await page.evaluate(() => {
+      const buttons = Array.from(document.querySelectorAll<HTMLButtonElement>('[data-testid^="calendar-day-"]'))
+      const candidate = buttons.find((btn) => !btn.classList.contains('has-entry') && !btn.classList.contains('outside'))
+      if (!candidate) return null
+      const testId = candidate.getAttribute('data-testid') ?? ''
+      return testId.replace('calendar-day-', '')
+    })
+
+    if (!targetIso) throw new Error('No available calendar day without entry.')
+
+    await page.getByTestId(`calendar-day-${targetIso}`).click()
+    const createButton = page.getByTestId('calendar-create-entry')
+    await expect(createButton).toBeVisible()
+    await createButton.click()
+    await ensureEditMode(page)
+    await expect(page.getByTestId('entry-date-bucket')).toHaveText(targetIso)
+  })
+
   test('guided template prompts clear on input', async ({ page }) => {
     await boot(page, { noFail: '1' })
     await page.getByTestId('today-entry').click()

@@ -54,6 +54,12 @@ test('generate feature screenshots', async ({ page }) => {
   await expect(page.getByRole('heading', { name: /neuroimmunology lab/i })).toBeVisible()
   await page.screenshot({ path: path.join(outDir, '01-dashboard.png'), fullPage: true })
 
+  await page.getByTestId('tabs-view-toggle').click()
+  const tabsView = page.getByTestId('tabs-view')
+  await expect(tabsView).toBeVisible()
+  await page.screenshot({ path: path.join(outDir, '06-tabs-view.png'), fullPage: true })
+  await page.getByTestId('tabs-view-close').click()
+
   await page.getByTestId('today-entry').click()
   await expect(page.getByRole('button', { name: 'Save' })).toBeVisible()
   await page.screenshot({ path: path.join(outDir, '02-edit-mode.png'), fullPage: true })

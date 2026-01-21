@@ -69,6 +69,15 @@ const monthStartFromIso = (isoDate: string) => {
   return new Date(year, Math.max(0, month), 1)
 }
 
+const dateFromBucket = (bucket: string) => {
+  const [yearStr, monthStr, dayStr] = bucket.split('-')
+  const year = Number(yearStr)
+  const month = Number(monthStr)
+  const day = Number(dayStr)
+  if (!year || !month || !day) return new Date()
+  return new Date(year, month - 1, day, 12, 0, 0, 0)
+}
+
 type ParsedMarkdownEntry = {
   entry: Entry
   attachments: Attachment[]
@@ -664,6 +673,19 @@ function blockToSearchText(block: Block): string {
     default:
       return ''
   }
+}
+
+const entryPreviewLines = (entry: Entry, maxLines = 3) => {
+  const lines: string[] = []
+  for (const block of entry.content) {
+    const text = blockToSearchText(block).replace(/\s+/g, ' ').trim()
+    if (!text) continue
+    const clipped = text.length > 90 ? `${text.slice(0, 90)}...` : text
+    lines.push(clipped)
+    if (lines.length >= maxLines) break
+  }
+  if (lines.length === 0) lines.push('No notes yet.')
+  return lines
 }
 
 function isAbortError(err: unknown): boolean {
@@ -1672,6 +1694,14 @@ function App() {
       if (opts?.autoEdit) setAutoEditEntryId(entry.id)
     },
     [defaultProjectIdForEntry, entryList, handleSelectDate, selectedExperiment]
+  )
+
+  const handleCreateEntryForDate = useCallback(
+    (dateBucket: string) => {
+      if (!dateBucket) return
+      openDailyEntry(dateFromBucket(dateBucket), { autoEdit: true })
+    },
+    [openDailyEntry]
   )
 
   const handleOpenToday = useCallback(() => {
@@ -2834,6 +2864,7 @@ function App() {
           onToggleCollapsed={() => setSidebarCollapsed((prev) => !prev)}
           selectedDate={selectedDate}
           onSelectDate={handleSelectDate}
+          onCreateEntryForDate={handleCreateEntryForDate}
           calendarMonth={calendarMonth}
           onCalendarMonthChange={setCalendarMonth}
         />
@@ -2998,6 +3029,7 @@ interface SidebarProps {
   onToggleCollapsed: () => void
   selectedDate: string | null
   onSelectDate: (date: string | null) => void
+  onCreateEntryForDate: (dateBucket: string) => void
   calendarMonth: Date
   onCalendarMonthChange: (next: Date) => void
 }
@@ -3038,6 +3070,7 @@ function Sidebar({
   onToggleCollapsed,
   selectedDate,
   onSelectDate,
+  onCreateEntryForDate,
   calendarMonth,
   onCalendarMonthChange,
 }: SidebarProps) {
@@ -3073,6 +3106,8 @@ function Sidebar({
   )
 
   const entryDateSet = useMemo(() => new Set(allEntries.map((entry) => entry.dateBucket)), [allEntries])
+  const selectedDateHasEntry = selectedDate ? entryDateSet.has(selectedDate) : false
+  const selectedDateLabel = selectedDate ? dateOnly.format(dateFromBucket(selectedDate)) : ''
 
   const getEntryPill = useCallback(
     (entry: Entry) => {
@@ -3319,6 +3354,20 @@ function Sidebar({
                       )
                     })}
                   </div>
+                  {selectedDate && !selectedDateHasEntry && (
+                    <div className="calendar-create">
+                      <div className="muted tiny">No entry for {selectedDateLabel} yet.</div>
+                      <button
+                        className="accent"
+                        type="button"
+                        onClick={() => onCreateEntryForDate(selectedDate)}
+                        data-testid="calendar-create-entry"
+                      >
+                        <span className="icon">✚</span>
+                        Add entry for {selectedDateLabel}
+                      </button>
+                    </div>
+                  )}
                 </div>
               </section>
 
@@ -3727,32 +3776,54 @@ function EditorPane({
                   className="pill soft"
                   type="button"
                   onClick={() => setTabsViewOpen(false)}
+                  data-testid="tabs-view-close"
                 >
                   Close
                 </button>
               </div>
-              <div className="tabs-view-grid">
-                {openEntries.map((tab) => (
-                  <div key={`panel-${tab.id}`} className={`entry-tab ${selectedEntryId === tab.id ? 'active' : ''}`}>
-                    <button
-                      type="button"
-                      className="entry-tab-main"
-                      onClick={() => onSelectEntry(tab.id)}
+              <div className="tabs-view-slide-grid">
+                {openEntries.map((tab, index) => {
+                  const previewLines = entryPreviewLines(tab, 3)
+                  return (
+                    <div
+                      key={`panel-${tab.id}`}
+                      className={`tabs-view-slide ${selectedEntryId === tab.id ? 'active' : ''}`}
+                      data-testid={`tabs-view-slide-${tab.id}`}
                     >
-                      <span className="tab-title">{tab.title}</span>
-                      <span className="tab-date">{tab.dateBucket}</span>
-                    </button>
-                    <button
-                      type="button"
-                      className="entry-tab-close"
-                      onClick={() => onCloseEntryTab(tab.id)}
-                      aria-label={`Close ${tab.title}`}
-                      disabled={openEntries.length <= 1}
-                    >
-                      ×
-                    </button>
-                  </div>
-                ))}
+                      <button
+                        type="button"
+                        className="tabs-view-slide-main"
+                        onClick={() => onSelectEntry(tab.id)}
+                        aria-pressed={selectedEntryId === tab.id}
+                      >
+                        <div className="tabs-view-slide-header">
+                          <span className="tabs-view-slide-title">{tab.title}</span>
+                          <span className="tabs-view-slide-date">{tab.dateBucket}</span>
+                        </div>
+                        <div className="tabs-view-slide-body">
+                          {previewLines.map((line, lineIdx) => (
+                            <div key={`${tab.id}-line-${lineIdx}`} className="tabs-view-slide-line">
+                              <span className="tabs-view-slide-text">{line}</span>
+                            </div>
+                          ))}
+                        </div>
+                        <div className="tabs-view-slide-footer">
+                          <span>Slide {index + 1}</span>
+                          {selectedEntryId === tab.id && <span className="tabs-view-slide-active">Active</span>}
+                        </div>
+                      </button>
+                      <button
+                        type="button"
+                        className="tabs-view-slide-close"
+                        onClick={() => onCloseEntryTab(tab.id)}
+                        aria-label={`Close ${tab.title}`}
+                        disabled={openEntries.length <= 1}
+                      >
+                        ×
+                      </button>
+                    </div>
+                  )
+                })}
                 {openEntries.length === 0 && <div className="muted tiny">No open tabs yet.</div>}
               </div>
               <div className="tabs-view-head">
@@ -3792,7 +3863,7 @@ function EditorPane({
               <span>{project?.title ?? 'Project'}</span>
               <span>/</span>
               <span>{experiment?.title ?? 'General note'}</span>
-              <span className="pill soft">{entry.dateBucket}</span>
+              <span className="pill soft" data-testid="entry-date-bucket">{entry.dateBucket}</span>
               <span className={`status-chip ${syncing || hasWork ? 'warning' : 'success'}`}>
                 {syncing ? 'Syncing…' : failedCount ? `${failedCount} failed` : pendingCount ? `${pendingCount} pending` : 'Synced'}
               </span>
