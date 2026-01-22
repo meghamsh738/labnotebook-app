@@ -3789,6 +3789,7 @@ function EditorPane({
                       key={`panel-${tab.id}`}
                       className={`tabs-view-slide ${selectedEntryId === tab.id ? 'active' : ''}`}
                       data-testid={`tabs-view-slide-${tab.id}`}
+                      style={{ '--stagger': index } as React.CSSProperties}
                     >
                       <button
                         type="button"
@@ -3949,16 +3950,35 @@ function EditorPane({
             <h1>{entry.title}</h1>
             {experiment?.protocolRef && <span className="pill">{experiment.protocolRef}</span>}
           </div>
-          <div className="tag-row">
-            {(entry.projectTags ?? []).map((tag) => (
-              <span key={`project-${tag}`} className="pill soft">#{tag}</span>
-            ))}
-            {(entry.experimentTags ?? []).map((tag) => (
-              <span key={`experiment-${tag}`} className="pill ghost-pill">#{tag}</span>
-            ))}
-            {!entry.projectTags?.length && !entry.experimentTags?.length && (
-              <span className="muted tiny">No tags yet.</span>
-            )}
+          <div className="tag-editor" data-testid="entry-tags-inline">
+            <TagPicker
+              variant="inline"
+              label="Project tags"
+              options={projectTagOptions}
+              selected={entry.projectTags ?? []}
+              onToggle={(tag) => {
+                const next = new Set(entry.projectTags ?? [])
+                if (next.has(tag)) next.delete(tag)
+                else next.add(tag)
+                onUpdateEntryMeta(entry.id, { projectTags: Array.from(next) })
+              }}
+              onAdd={onAddProjectTagOption}
+              testId="entry-project-tags-inline"
+            />
+            <TagPicker
+              variant="inline"
+              label="Experiment tags"
+              options={experimentTagOptions}
+              selected={entry.experimentTags ?? []}
+              onToggle={(tag) => {
+                const next = new Set(entry.experimentTags ?? [])
+                if (next.has(tag)) next.delete(tag)
+                else next.add(tag)
+                onUpdateEntryMeta(entry.id, { experimentTags: Array.from(next) })
+              }}
+              onAdd={onAddExperimentTagOption}
+              testId="entry-experiment-tags-inline"
+            />
           </div>
           <div className="editor-tabs" role="tablist">
             <button
@@ -5077,6 +5097,7 @@ function FileDestinationModal({
           <button
             className="accent"
             type="button"
+            data-testid="file-destination-add"
             onClick={() => {
               const cleaned = path.trim()
               if (!cleaned) {
@@ -6449,6 +6470,7 @@ function TagPicker({
   onToggle,
   onAdd,
   testId,
+  variant = 'default',
 }: {
   label: string
   options: string[]
@@ -6456,8 +6478,10 @@ function TagPicker({
   onToggle: (tag: string) => void
   onAdd?: (tag: string) => void
   testId?: string
+  variant?: 'default' | 'inline'
 }) {
   const [draft, setDraft] = useState('')
+  const showMeta = variant !== 'inline' || selected.length > 0
 
   const handleAdd = () => {
     if (!onAdd) return
@@ -6469,10 +6493,15 @@ function TagPicker({
   }
 
   return (
-    <div className="tag-picker">
+    <div className={`tag-picker ${variant === 'inline' ? 'inline' : ''}`}>
       <div className="tag-picker-head">
         <div className="title-sm">{label}</div>
-        {selected.length ? <span className="pill soft">{selected.length} selected</span> : <span className="muted tiny">No tags yet</span>}
+        {showMeta &&
+          (selected.length ? (
+            <span className="pill soft">{selected.length} selected</span>
+          ) : (
+            <span className="muted tiny">No tags yet</span>
+          ))}
       </div>
       <div className="chip-row" data-testid={testId}>
         {options.map((tag) => (
@@ -6481,6 +6510,8 @@ function TagPicker({
             type="button"
             className={`pill soft ${selected.includes(tag) ? 'active-pill' : ''}`}
             onClick={() => onToggle(tag)}
+            data-selected={selected.includes(tag)}
+            data-tag={tag}
           >
             {tag}
           </button>

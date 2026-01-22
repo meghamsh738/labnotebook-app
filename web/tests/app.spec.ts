@@ -43,6 +43,50 @@ async function ensureViewMode(page: Page) {
   await expect(page.getByRole('button', { name: 'Edit' })).toBeVisible()
 }
 
+async function focusBlockById(page: Page, blockId: string) {
+  await page.evaluate((id) => {
+    const editor = document.querySelector('[data-testid="slate-editor"]') as HTMLElement | null
+    editor?.focus()
+    const block = document.querySelector(`[data-block-id="${id}"]`)
+    if (!block) return
+    const textSpan = block.querySelector('[data-slate-node="text"]')
+    const range = document.createRange()
+    if (textSpan) {
+      range.selectNodeContents(textSpan)
+      range.collapse(true)
+    } else {
+      range.selectNodeContents(block)
+      range.collapse(true)
+    }
+    const sel = window.getSelection()
+    if (!sel) return
+    sel.removeAllRanges()
+    sel.addRange(range)
+  }, blockId)
+}
+
+async function focusTestIdText(page: Page, testId: string) {
+  await page.evaluate((id) => {
+    const target = document.querySelector(`[data-testid="${id}"]`)
+    if (!target) return
+    const textSpan = target.querySelector('[data-slate-node="text"]')
+    const range = document.createRange()
+    if (textSpan) {
+      range.selectNodeContents(textSpan)
+      range.collapse(true)
+    } else {
+      range.selectNodeContents(target)
+      range.collapse(true)
+    }
+    const sel = window.getSelection()
+    if (!sel) return
+    sel.removeAllRanges()
+    sel.addRange(range)
+    const editor = document.querySelector('[data-testid="slate-editor"]') as HTMLElement | null
+    editor?.focus()
+  }, testId)
+}
+
 test.describe('Lab note taking app', () => {
   test('loads baseline UI', async ({ page }) => {
     await boot(page, { noFail: '1' })
@@ -94,8 +138,7 @@ test.describe('Lab note taking app', () => {
     const guideLocator = page.getByText(guideText)
     await expect(guideLocator).toBeVisible()
 
-    const editor = page.getByTestId('slate-editor')
-    await editor.locator('p.block-paragraph').first().click({ force: true })
+    await focusBlockById(page, 'b-context')
     await page.keyboard.type('Testing placeholder clearing')
 
     await expect(guideLocator).toHaveCount(0)
@@ -141,8 +184,7 @@ test.describe('Lab note taking app', () => {
     await ensureEditMode(page)
 
     await page.getByTestId('editor-list-dot').click()
-    const listItem = page.getByTestId('list-item-text').first()
-    await listItem.click({ force: true })
+    await focusTestIdText(page, 'list-item-text')
     await page.keyboard.type('Bullet item')
 
     await expect(page.getByTestId('list-symbol').first()).toContainText('•')
@@ -239,6 +281,23 @@ test.describe('Lab note taking app', () => {
     await expect(editor).toContainText('Tag-safe draft')
   })
 
+  test('inline tag editor syncs with details tags', async ({ page }) => {
+    await boot(page, { noFail: '1' })
+
+    const inlineTags = page.getByTestId('entry-project-tags-inline')
+    const targetTag = inlineTags.locator('button[data-selected="false"]').first()
+    const tagLabel = (await targetTag.textContent())?.trim()
+    if (!tagLabel) throw new Error('No unselected tag found in inline tags.')
+
+    const tagButton = inlineTags.getByRole('button', { name: tagLabel })
+    await tagButton.click()
+    await expect(tagButton).toHaveAttribute('data-selected', 'true')
+
+    await page.getByRole('tab', { name: /details/i }).click()
+    const detailsTag = page.getByTestId('entry-project-tags').getByRole('button', { name: tagLabel })
+    await expect(detailsTag).toHaveAttribute('data-selected', 'true')
+  })
+
   test('tabs switch between note, files, and details in edit mode', async ({ page }) => {
     await boot(page, { noFail: '1' })
     await ensureEditMode(page)
@@ -280,7 +339,7 @@ test.describe('Lab note taking app', () => {
     await page.getByRole('tab', { name: /Note/ }).click()
     await page.getByRole('button', { name: '+ File destination' }).click()
     await page.getByTestId('file-destination-path').fill('run1.csv')
-    await page.getByRole('button', { name: 'Add' }).click()
+    await page.getByTestId('file-destination-add').click()
 
     await page.getByRole('tab', { name: /Files/ }).click()
     await expect(

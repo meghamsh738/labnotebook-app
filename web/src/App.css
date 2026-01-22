@@ -34,10 +34,14 @@
 .ghost,
 .accent,
 .pill,
+.tag-picker.inline,
+.tag-add-row input,
 .entry-item,
 .template-card,
 .field input,
-.field select {
+.field select,
+.tabs-view-slide-main,
+.tabs-view-slide-close {
   transition:
     background-color var(--t) var(--ease-out),
     border-color var(--t) var(--ease-out),
@@ -723,11 +727,12 @@
   box-shadow: 0 0 0 2px var(--focus);
 }
 
-.tag-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--s-2);
-  align-items: center;
+.tag-editor {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: var(--s-3);
+  align-items: start;
+  margin-top: var(--s-2);
 }
 
 .editor-tabs {
@@ -798,6 +803,15 @@
   box-shadow: var(--shadow-1);
   aspect-ratio: 4 / 3;
   min-height: 180px;
+}
+
+.tabs-view-slide-main:hover {
+  transform: translateY(-3px);
+  box-shadow: var(--shadow-2);
+}
+
+.tabs-view-slide-main:active {
+  transform: translateY(-1px);
 }
 
 .tabs-view-slide-main::before {
@@ -895,6 +909,11 @@
   display: grid;
   place-items: center;
   cursor: pointer;
+}
+
+.tabs-view-slide-close:hover:not(:disabled) {
+  border-color: var(--border-2);
+  color: var(--text);
 }
 
 .tabs-view-slide-close:disabled {
@@ -1529,6 +1548,40 @@
   gap: var(--s-2);
 }
 
+.tag-picker.inline {
+  border: 2px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--s-3);
+  background: var(--surface-2);
+}
+
+.tag-picker.inline .tag-picker-head .title-sm {
+  font-size: var(--fs-12);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+
+.tag-picker.inline .chip-row {
+  max-height: 96px;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.tag-picker.inline .tag-add-row {
+  flex-wrap: wrap;
+}
+
+.tag-picker.inline .tag-add-row input {
+  min-height: 34px;
+  font-size: var(--fs-12);
+}
+
+.tag-picker.inline .tag-add-row .ghost {
+  min-height: 34px;
+  padding: 8px 12px;
+}
+
 .tag-picker-head {
   display: flex;
   align-items: center;
@@ -1825,6 +1878,16 @@
   background: var(--preview-accent, var(--accent));
 }
 
+@keyframes fadeRise {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes slideCard {
+  from { opacity: 0; transform: translateY(10px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
 @keyframes overlayFadeIn {
   from { opacity: 0; }
   to { opacity: 1; }
@@ -1840,6 +1903,19 @@
   to { opacity: 1; transform: translateX(0); }
 }
 
+@media (prefers-reduced-motion: no-preference) {
+  .editor-header,
+  .tab-panel,
+  .tabs-view-panel {
+    animation: fadeRise var(--t-slow) var(--ease-out) both;
+  }
+
+  .tabs-view-slide {
+    animation: slideCard var(--t) var(--ease-out) both;
+    animation-delay: calc(var(--stagger, 0) * 40ms);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .panel,
   .search-box,
@@ -1847,17 +1923,24 @@
   .ghost,
   .accent,
   .pill,
+  .tag-add-row input,
   .entry-item,
   .template-card,
   .field input,
-  .field select {
+  .field select,
+  .tabs-view-slide-main,
+  .tabs-view-slide-close {
     transition: none;
   }
 
   .modal-overlay,
   .drawer-overlay,
   .modal,
-  .drawer {
+  .drawer,
+  .editor-header,
+  .tab-panel,
+  .tabs-view-panel,
+  .tabs-view-slide {
     animation: none;
   }
 }
