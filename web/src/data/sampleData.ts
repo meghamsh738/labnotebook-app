@@ -107,7 +107,7 @@ const attachments: Attachment[] = [
     filesize: '420 KB',
     storagePath: '/attachments/tnf_lps_timecourse.png',
     thumbnail:
-      'https://images.unsplash.com/photo-1506126613408-eca07ce68773?auto=format&fit=crop&w=800&q=60',
+      'sample/tnf_lps_timecourse.svg',
     tag: 'Results',
     pinnedOffline: true,
     cachedPath: '/lab-cache/tnf_lps_timecourse.png',
@@ -130,7 +130,7 @@ const attachments: Attachment[] = [
     filesize: '3.6 MB',
     storagePath: '/labshare/data/2025-12-07/gel_scan_day3.tif',
     thumbnail:
-      'https://images.unsplash.com/photo-1582719478250-c89cae4dc85b?auto=format&fit=crop&w=800&q=60',
+      'sample/gel_scan_day3.svg',
     tag: 'Gel',
     pinnedOffline: true,
     cachedPath: '/lab-cache/gel_scan_day3.tif',

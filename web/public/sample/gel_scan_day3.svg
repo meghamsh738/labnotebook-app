@@ -1,0 +1,74 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="800" viewBox="0 0 1200 800" role="img" aria-label="Sample attachment thumbnail: gel scan">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#F6F2EA" />
+      <stop offset="100%" stop-color="#FFF7EC" />
+    </linearGradient>
+    <linearGradient id="gel" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#15151A" stop-opacity="0.92" />
+      <stop offset="100%" stop-color="#15151A" stop-opacity="0.82" />
+    </linearGradient>
+  </defs>
+
+  <rect x="0" y="0" width="1200" height="800" fill="url(#bg)" />
+
+  <rect x="78" y="78" width="1044" height="644" rx="22" fill="#FFFFFF" stroke="#15151A" stroke-width="10" />
+
+  <g transform="translate(140 150)">
+    <text x="0" y="0" font-family="Space Grotesk, Segoe UI, system-ui, sans-serif" font-size="44" font-weight="700" fill="#111113">
+      Gel Scan · Day 3
+    </text>
+    <text x="0" y="46" font-family="Space Mono, ui-monospace, monospace" font-size="20" font-weight="700" letter-spacing="0.12em" fill="#575762">
+      SAMPLE THUMBNAIL · OFFLINE
+    </text>
+  </g>
+
+  <g transform="translate(170 260)">
+    <rect x="0" y="0" width="860" height="432" rx="16" fill="url(#gel)" stroke="#15151A" stroke-width="8" />
+
+    <!-- lanes -->
+    <g transform="translate(54 50)">
+      <g fill="#FFFFFF" opacity="0.75">
+        <rect x="0" y="40" width="80" height="10" rx="5" />
+        <rect x="0" y="120" width="72" height="10" rx="5" />
+        <rect x="0" y="200" width="76" height="10" rx="5" />
+        <rect x="0" y="300" width="68" height="10" rx="5" />
+      </g>
+      <g transform="translate(130 0)" fill="#FFFFFF" opacity="0.62">
+        <rect x="0" y="70" width="76" height="10" rx="5" />
+        <rect x="0" y="170" width="64" height="10" rx="5" />
+        <rect x="0" y="260" width="72" height="10" rx="5" />
+      </g>
+      <g transform="translate(260 0)" fill="#FFFFFF" opacity="0.7">
+        <rect x="0" y="88" width="72" height="10" rx="5" />
+        <rect x="0" y="150" width="76" height="10" rx="5" />
+        <rect x="0" y="240" width="60" height="10" rx="5" />
+        <rect x="0" y="320" width="70" height="10" rx="5" />
+      </g>
+      <g transform="translate(390 0)" fill="#FFFFFF" opacity="0.58">
+        <rect x="0" y="110" width="68" height="10" rx="5" />
+        <rect x="0" y="210" width="74" height="10" rx="5" />
+        <rect x="0" y="290" width="62" height="10" rx="5" />
+      </g>
+      <g transform="translate(520 0)" fill="#FFFFFF" opacity="0.66">
+        <rect x="0" y="60" width="74" height="10" rx="5" />
+        <rect x="0" y="140" width="68" height="10" rx="5" />
+        <rect x="0" y="230" width="76" height="10" rx="5" />
+        <rect x="0" y="320" width="60" height="10" rx="5" />
+      </g>
+      <g transform="translate(650 0)" fill="#FFFFFF" opacity="0.6">
+        <rect x="0" y="92" width="70" height="10" rx="5" />
+        <rect x="0" y="180" width="74" height="10" rx="5" />
+        <rect x="0" y="270" width="66" height="10" rx="5" />
+      </g>
+    </g>
+  </g>
+
+  <g transform="translate(170 710)">
+    <rect x="0" y="0" width="860" height="48" rx="14" fill="#F7C97A" stroke="#15151A" stroke-width="8" />
+    <text x="24" y="34" font-family="Space Mono, ui-monospace, monospace" font-size="18" font-weight="700" letter-spacing="0.12em" fill="#111113">
+      GEL IMAGE PREVIEW (LOCAL)
+    </text>
+  </g>
+</svg>
+

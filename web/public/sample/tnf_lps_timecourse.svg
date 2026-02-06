@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="800" viewBox="0 0 1200 800" role="img" aria-label="Sample attachment thumbnail: TNF + LPS timecourse plot">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#FFF7EC" />
+      <stop offset="100%" stop-color="#F6F2EA" />
+    </linearGradient>
+    <pattern id="grid" width="48" height="48" patternUnits="userSpaceOnUse">
+      <path d="M 48 0 L 0 0 0 48" fill="none" stroke="#15151A" stroke-opacity="0.08" stroke-width="2" />
+    </pattern>
+  </defs>
+
+  <rect x="0" y="0" width="1200" height="800" fill="url(#bg)" />
+  <rect x="0" y="0" width="1200" height="800" fill="url(#grid)" />
+
+  <rect x="78" y="78" width="1044" height="644" rx="22" fill="#FFFFFF" stroke="#15151A" stroke-width="10" />
+
+  <g transform="translate(140 150)">
+    <text x="0" y="0" font-family="Space Grotesk, Segoe UI, system-ui, sans-serif" font-size="44" font-weight="700" fill="#111113">
+      TNF + LPS Timecourse
+    </text>
+    <text x="0" y="46" font-family="Space Mono, ui-monospace, monospace" font-size="20" font-weight="700" letter-spacing="0.12em" fill="#575762">
+      SAMPLE THUMBNAIL · OFFLINE
+    </text>
+  </g>
+
+  <g transform="translate(170 260)">
+    <rect x="0" y="0" width="860" height="390" rx="16" fill="#FFF7EC" stroke="#15151A" stroke-width="8" />
+    <g transform="translate(54 46)" stroke="#15151A" stroke-width="5" stroke-linecap="round" fill="none" opacity="0.9">
+      <path d="M0 290 L140 240 L260 180 L390 140 L520 160 L640 230 L760 260" />
+      <path d="M0 260 L140 210 L260 170 L390 120 L520 130 L640 190 L760 220" opacity="0.55" />
+    </g>
+    <g transform="translate(54 46)" fill="#15151A" opacity="0.85">
+      <circle cx="0" cy="290" r="9" />
+      <circle cx="140" cy="240" r="9" />
+      <circle cx="260" cy="180" r="9" />
+      <circle cx="390" cy="140" r="9" />
+      <circle cx="520" cy="160" r="9" />
+      <circle cx="640" cy="230" r="9" />
+      <circle cx="760" cy="260" r="9" />
+    </g>
+  </g>
+
+  <g transform="translate(170 674)">
+    <rect x="0" y="0" width="860" height="48" rx="14" fill="#A7B6FF" stroke="#15151A" stroke-width="8" />
+    <text x="24" y="34" font-family="Space Mono, ui-monospace, monospace" font-size="18" font-weight="700" letter-spacing="0.12em" fill="#111113">
+      ATTACHMENT PREVIEW (LOCAL)
+    </text>
+  </g>
+</svg>
+
