@@ -1,14 +1,10 @@
 import { test, expect, type Page } from '@playwright/test'
-import fs from 'fs'
-import path from 'path'
-import { fileURLToPath } from 'url'
-
-const here = path.dirname(fileURLToPath(import.meta.url))
 
 async function boot(
   page: Page,
   opts?: { noFail?: '0' | '1'; failNext?: boolean; stubPicker?: boolean }
 ) {
+  await page.request.post('/api/reset')
   await page.addInitScript((o) => {
     window.localStorage.clear()
     ;(window as unknown as { __labnoteMockSync?: { noFail?: boolean; failNext?: boolean } }).__labnoteMockSync = {
@@ -21,403 +17,253 @@ async function boot(
       ;(window as unknown as { showDirectoryPicker?: unknown }).showDirectoryPicker = undefined
     }
   }, opts ?? { noFail: '1' })
+  await page.emulateMedia({ reducedMotion: 'reduce' })
   await page.goto('/')
 }
 
-async function ensureEditMode(page: Page) {
-  await page.waitForSelector('[data-testid="entry-save"], button:has-text("Edit")')
-  const saveButton = page.getByTestId('entry-save')
-  if ((await saveButton.count()) === 0) {
-    const editButton = page.getByRole('button', { name: 'Edit' })
-    await editButton.click()
+async function selectCalendarDate(page: Page, isoDate: string) {
+  const target = page.getByTestId(`calendar-day-${isoDate}`)
+  for (let i = 0; i < 14; i += 1) {
+    if (await target.count()) break
+    await page.getByRole('button', { name: /previous month/i }).click()
   }
-  await expect(saveButton).toBeVisible()
+  await expect(target).toBeVisible()
+  await target.click()
 }
 
-async function ensureViewMode(page: Page) {
-  await page.waitForSelector('[data-testid="entry-save"], button:has-text("Edit")')
-  const saveButton = page.getByTestId('entry-save')
-  if (await saveButton.count()) {
-    await page.getByRole('button', { name: 'Cancel' }).click()
+async function selectFirstEntry(page: Page) {
+  await selectCalendarDate(page, '2025-12-07')
+  const seeded = page.locator('[data-testid="entry-list-item-entry-1"]')
+  if (await seeded.count()) {
+    await seeded.first().click()
+    return
   }
-  await expect(page.getByRole('button', { name: 'Edit' })).toBeVisible()
+  await page.locator('[data-testid^="entry-list-item-"]').first().click()
 }
 
-async function focusBlockById(page: Page, blockId: string) {
-  await page.evaluate((id) => {
-    const editor = document.querySelector('[data-testid="slate-editor"]') as HTMLElement | null
-    editor?.focus()
-    const block = document.querySelector(`[data-block-id="${id}"]`)
-    if (!block) return
-    const textSpan = block.querySelector('[data-slate-node="text"]')
-    const range = document.createRange()
-    if (textSpan) {
-      range.selectNodeContents(textSpan)
-      range.collapse(true)
-    } else {
-      range.selectNodeContents(block)
-      range.collapse(true)
-    }
-    const sel = window.getSelection()
-    if (!sel) return
-    sel.removeAllRanges()
-    sel.addRange(range)
-  }, blockId)
-}
-
-async function focusTestIdText(page: Page, testId: string) {
-  await page.evaluate((id) => {
-    const target = document.querySelector(`[data-testid="${id}"]`)
-    if (!target) return
-    const textSpan = target.querySelector('[data-slate-node="text"]')
-    const range = document.createRange()
-    if (textSpan) {
-      range.selectNodeContents(textSpan)
-      range.collapse(true)
-    } else {
-      range.selectNodeContents(target)
-      range.collapse(true)
-    }
-    const sel = window.getSelection()
-    if (!sel) return
-    sel.removeAllRanges()
-    sel.addRange(range)
-    const editor = document.querySelector('[data-testid="slate-editor"]') as HTMLElement | null
-    editor?.focus()
-  }, testId)
-}
+const dateFormatter = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+const formatUiDate = (isoDate: string) => dateFormatter.format(new Date(`${isoDate}T12:00:00`))
 
 test.describe('Lab note taking app', () => {
   test('loads baseline UI', async ({ page }) => {
     await boot(page, { noFail: '1' })
-    await expect(page.getByRole('heading', { name: /neuroimmunology lab/i })).toBeVisible()
-    await expect(page.getByRole('button', { name: /today's entry/i })).toBeVisible()
-    await expect(page.getByPlaceholder('Search notes, samples, files')).toBeVisible()
-    await expect(page.getByTestId('sidebar-toggle')).toBeVisible()
-    await expect(page.getByTestId('calendar')).toBeVisible()
+    await expect(page.getByRole('heading', { name: /lab notebook/i })).toBeVisible()
+    await expect(page.getByTestId('sidebar-today-entry')).toBeVisible()
+    await expect(page.getByPlaceholder('Search notes, samples, files')).toHaveCount(0)
+    await expect(page.getByTestId('viewer-bar')).toBeVisible()
   })
 
-  test('today entry opens with the guided template', async ({ page }) => {
+  test('viewer mode navigates by date order', async ({ page }) => {
     await boot(page, { noFail: '1' })
-    await page.getByTestId('today-entry').click()
-    await ensureEditMode(page)
+    const title = page.locator('.editor-header h1')
+    await expect(title).toBeVisible()
+    const initial = await title.textContent()
 
-    await page.getByRole('button', { name: 'Save' }).click()
-    await expect(page.getByRole('heading', { name: 'Context' })).toBeVisible()
-    await expect(page.getByRole('heading', { name: 'Setup' })).toBeVisible()
+    const prevBtn = page.getByTestId('viewer-prev')
+    await expect(prevBtn).toBeEnabled()
+    await prevBtn.click()
+    await expect(title).not.toHaveText(initial ?? '')
   })
 
-  test('can add a missed entry from the calendar', async ({ page }) => {
+  test('keeps header close to view tabs', async ({ page }) => {
     await boot(page, { noFail: '1' })
+    await selectFirstEntry(page)
 
-    const targetIso = await page.evaluate(() => {
-      const buttons = Array.from(document.querySelectorAll<HTMLButtonElement>('[data-testid^="calendar-day-"]'))
-      const candidate = buttons.find((btn) => !btn.classList.contains('has-entry') && !btn.classList.contains('outside'))
-      if (!candidate) return null
-      const testId = candidate.getAttribute('data-testid') ?? ''
-      return testId.replace('calendar-day-', '')
+    const editor = page.locator('.editor')
+    await editor.evaluate((node) => {
+      node.scrollTop = 0
     })
 
-    if (!targetIso) throw new Error('No available calendar day without entry.')
+    const tab = page.getByTestId('editor-tab-note')
+    const header = page.locator('.editor-header')
+    await expect(tab).toBeVisible()
+    await expect(header).toBeVisible()
 
-    await page.getByTestId(`calendar-day-${targetIso}`).click()
-    const createButton = page.getByTestId('calendar-create-entry')
-    await expect(createButton).toBeVisible()
-    await createButton.click()
-    await ensureEditMode(page)
-    await expect(page.getByTestId('entry-date-bucket')).toHaveText(targetIso)
+    const tabBox = await tab.boundingBox()
+    const headerBox = await header.boundingBox()
+    expect(tabBox).not.toBeNull()
+    expect(headerBox).not.toBeNull()
+    const gap = (headerBox?.y ?? 0) - ((tabBox?.y ?? 0) + (tabBox?.height ?? 0))
+    expect(gap).toBeLessThan(48)
   })
 
-  test('guided template prompts clear on input', async ({ page }) => {
+  test('entry list filters to the selected day', async ({ page }) => {
     await boot(page, { noFail: '1' })
-    await page.getByTestId('today-entry').click()
-    await ensureEditMode(page)
-
-    const guideText =
-      'What question are you answering today? Include model, conditions, and expected outcome.'
-    const guideLocator = page.getByText(guideText)
-    await expect(guideLocator).toBeVisible()
-
-    await focusBlockById(page, 'b-context')
-    await page.keyboard.type('Testing placeholder clearing')
-
-    await expect(guideLocator).toHaveCount(0)
+    await selectCalendarDate(page, '2025-12-07')
+    const entries = page.locator('[data-testid^="entry-list-item-"]')
+    await expect(entries).toHaveCount(1)
+    await expect(entries.first()).toContainText(formatUiDate('2025-12-07'))
   })
 
-  test('undo and redo restore the latest edit', async ({ page }) => {
+  test('tags can be added and templates reused', async ({ page }) => {
     await boot(page, { noFail: '1' })
-    await ensureEditMode(page)
+    await selectFirstEntry(page)
+    await page.getByTestId('editor-tab-details').click()
 
-    await page.evaluate((blockId) => {
-      const editor = document.querySelector('[data-testid="slate-editor"]') as HTMLElement | null
-      editor?.focus()
-      const block = document.querySelector(`[data-block-id="${blockId}"]`)
-      if (!block) return
-      const textSpan = block.querySelector('[data-slate-node="text"]')
-      const range = document.createRange()
-      if (textSpan) {
-        range.selectNodeContents(textSpan)
-        range.collapse(true)
-      } else {
-        range.selectNodeContents(block)
-        range.collapse(true)
-      }
-      const sel = window.getSelection()
-      if (!sel) return
-      sel.removeAllRanges()
-      sel.addRange(range)
-    }, 'b-context')
-    await page.keyboard.insertText('Undo me')
+    const tagBlocks = page.locator('.tag-panel-block')
+    const currentTags = tagBlocks.nth(0).locator('.chip-row')
+    await page.getByTestId('tag-input').fill('E2E tag')
+    await page.getByTestId('tag-add-btn').click()
+    await expect(currentTags.getByText('E2E tag', { exact: true })).toBeVisible()
 
-    const editor = page.getByTestId('slate-editor')
-    await expect(editor).toContainText('Undo me')
-    await expect(page.getByTestId('editor-undo')).toBeEnabled()
-    await page.getByTestId('editor-undo').click()
-    await expect(editor).not.toContainText('Undo me')
-    await expect(page.getByTestId('editor-redo')).toBeEnabled()
-    await page.getByTestId('editor-redo').click()
-    await expect(editor).toContainText('Undo me')
+    await page.getByPlaceholder('Template name').fill('E2E template')
+    await page.getByTestId('template-save-btn').click()
+    const templateButton = page.locator('.template-list .pill', { hasText: 'E2E template' })
+    await expect(templateButton).toBeVisible()
+
+    await page.getByTestId('tag-input').fill('Extra tag')
+    await page.getByTestId('tag-add-btn').click()
+    await expect(currentTags.getByText('Extra tag', { exact: true })).toBeVisible()
+
+    await templateButton.click()
+    await expect(currentTags.getByText('E2E template', { exact: true })).toBeVisible()
+    await expect(currentTags.getByText('E2E tag', { exact: true })).not.toBeVisible()
+    await expect(currentTags.getByText('Extra tag', { exact: true })).not.toBeVisible()
   })
 
-  test('symbol list inserts a bulleted line', async ({ page }) => {
+  test('today entry button opens edit mode', async ({ page }) => {
     await boot(page, { noFail: '1' })
-    await ensureEditMode(page)
-
-    await page.getByTestId('editor-list-dot').click()
-    await focusTestIdText(page, 'list-item-text')
-    await page.keyboard.type('Bullet item')
-
-    await expect(page.getByTestId('list-symbol').first()).toContainText('•')
-    await expect(page.getByTestId('slate-editor')).toContainText('Bullet item')
+    await page.getByTestId('sidebar-today-entry').click()
+    await expect(page.getByTestId('save-note-btn')).toBeVisible()
   })
 
-  test('camera input is available for mobile capture', async ({ page }) => {
+  test('shows capture photo option on landing', async ({ page }) => {
     await boot(page, { noFail: '1' })
-    await ensureEditMode(page)
-    const cameraInput = page.getByTestId('camera-input')
-    await expect(cameraInput).toHaveAttribute('capture', 'environment')
+    await selectFirstEntry(page)
+    await page.getByTestId('edit-note-btn').click()
+    await expect(page.getByTestId('editor-camera-input')).toHaveAttribute('accept', 'image/*')
+    await expect(page.getByTestId('editor-camera-input')).toHaveAttribute('capture', 'environment')
   })
 
-  test('context stays editable after backspace at start', async ({ page }) => {
+  test('shared upload defaults on when server is available', async ({ page }) => {
     await boot(page, { noFail: '1' })
-    await ensureEditMode(page)
-
-    await page.evaluate((blockId) => {
-      const editor = document.querySelector('[data-testid="slate-editor"]') as HTMLElement | null
-      editor?.focus()
-      const block = document.querySelector(`[data-block-id="${blockId}"]`)
-      if (!block) return
-      const textSpan = block.querySelector('[data-slate-node="text"]')
-      const range = document.createRange()
-      if (textSpan) {
-        range.selectNodeContents(textSpan)
-        range.collapse(true)
-      } else {
-        range.selectNodeContents(block)
-        range.collapse(true)
-      }
-      const sel = window.getSelection()
-      if (!sel) return
-      sel.removeAllRanges()
-      sel.addRange(range)
-    }, 'b-context')
-    await page.keyboard.type('Start text')
-    await page.evaluate((blockId) => {
-      const editor = document.querySelector('[data-testid="slate-editor"]') as HTMLElement | null
-      editor?.focus()
-      const block = document.querySelector(`[data-block-id="${blockId}"]`)
-      if (!block) return
-      const textSpan = block.querySelector('[data-slate-node="text"]')
-      const range = document.createRange()
-      if (textSpan) {
-        range.selectNodeContents(textSpan)
-        range.collapse(true)
-      } else {
-        range.selectNodeContents(block)
-        range.collapse(true)
-      }
-      const sel = window.getSelection()
-      if (!sel) return
-      sel.removeAllRanges()
-      sel.addRange(range)
-    }, 'b-context')
-    await page.keyboard.press('Backspace')
-    await page.keyboard.type('X')
-
-    const editor = page.getByTestId('slate-editor')
-    await expect(editor).toContainText('XStart text')
+    await selectFirstEntry(page)
+    await page.getByTestId('edit-note-btn').click()
+    const toggle = page.getByTestId('upload-shared-toggle')
+    await expect(toggle).toBeVisible()
+    await expect(toggle).toBeEnabled()
+    await expect(toggle).toHaveClass(/active-pill/)
   })
 
-  test('context draft persists when toggling tags', async ({ page }) => {
+  test('editor toolbar exposes rich text controls', async ({ page }) => {
     await boot(page, { noFail: '1' })
-    await ensureEditMode(page)
-
-    await page.evaluate((blockId) => {
-      const editor = document.querySelector('[data-testid="slate-editor"]') as HTMLElement | null
-      editor?.focus()
-      const block = document.querySelector(`[data-block-id="${blockId}"]`)
-      if (!block) return
-      const textSpan = block.querySelector('[data-slate-node="text"]')
-      const range = document.createRange()
-      if (textSpan) {
-        range.selectNodeContents(textSpan)
-        range.collapse(true)
-      } else {
-        range.selectNodeContents(block)
-        range.collapse(true)
-      }
-      const sel = window.getSelection()
-      if (!sel) return
-      sel.removeAllRanges()
-      sel.addRange(range)
-    }, 'b-context')
-    await page.keyboard.type('Tag-safe draft')
-
-    await page.getByRole('tab', { name: /Details/i }).click()
-    await page.getByTestId('entry-project-tags').locator('button').first().click()
-
-    await page.getByRole('tab', { name: /Note/i }).click()
-    const editor = page.getByTestId('slate-editor')
-    await expect(editor).toContainText('Tag-safe draft')
+    await selectFirstEntry(page)
+    await page.getByTestId('edit-note-btn').click()
+    await expect(page.getByTestId('editor-font-select')).toBeVisible()
+    await expect(page.getByTestId('editor-font-size')).toBeVisible()
+    await expect(page.getByTestId('editor-font-color')).toBeVisible()
+    await expect(page.getByTestId('editor-highlight-color')).toBeVisible()
+    await expect(page.getByTestId('editor-highlight-clear')).toBeVisible()
+    await expect(page.getByTestId('editor-superscript')).toBeVisible()
+    await expect(page.getByTestId('editor-subscript')).toBeVisible()
+    await expect(page.getByTestId('editor-list-bulleted')).toBeVisible()
+    await expect(page.getByTestId('editor-align-center')).toBeVisible()
+    await expect(page.getByTestId('editor-indent')).toBeVisible()
+    await expect(page.getByTestId('editor-outdent')).toBeVisible()
+    await expect(page.getByTestId('editor-bold')).toBeVisible()
   })
 
-  test('inline tag editor syncs with details tags', async ({ page }) => {
+  test('supports undo with control z', async ({ page }) => {
     await boot(page, { noFail: '1' })
-
-    const inlineTags = page.getByTestId('entry-project-tags-inline')
-    const targetTag = inlineTags.locator('button[data-selected="false"]').first()
-    const tagLabel = (await targetTag.textContent())?.trim()
-    if (!tagLabel) throw new Error('No unselected tag found in inline tags.')
-
-    const tagButton = inlineTags.getByRole('button', { name: tagLabel })
-    await tagButton.click()
-    await expect(tagButton).toHaveAttribute('data-selected', 'true')
-
-    await page.getByRole('tab', { name: /details/i }).click()
-    const detailsTag = page.getByTestId('entry-project-tags').getByRole('button', { name: tagLabel })
-    await expect(detailsTag).toHaveAttribute('data-selected', 'true')
+    await selectFirstEntry(page)
+    await page.getByTestId('edit-note-btn').click()
+    const editor = page.locator('.slate-editor')
+    await editor.click()
+    await page.keyboard.type('UNDO-CHECK')
+    await expect(editor).toContainText('UNDO-CHECK')
+    await page.keyboard.press('Control+Z')
+    await expect(editor).not.toContainText('UNDO-CHECK')
   })
 
-  test('tabs switch between note, files, and details in edit mode', async ({ page }) => {
+  test('table formatting toggles update table styles', async ({ page }) => {
     await boot(page, { noFail: '1' })
-    await ensureEditMode(page)
+    await selectFirstEntry(page)
 
-    await page.getByRole('tab', { name: /Details/i }).click()
-    await expect(page.getByTestId('entry-project-tags')).toBeVisible()
+    const table = page.locator('.table-wrap').first()
+    await expect(page.getByTestId('table-header-toggle')).toBeVisible()
+    await expect(table.locator('td.th')).toHaveCount(3)
 
-    await page.getByRole('tab', { name: /Files/i }).click()
-    await expect(page.getByTestId('master-sync-input-files')).toBeVisible()
+    await page.getByTestId('table-header-toggle').click()
+    await expect(table.locator('td.th')).toHaveCount(0)
 
-    await page.getByRole('tab', { name: /Note/i }).click()
-    await expect(page.getByTestId('slate-editor')).toBeVisible()
+    await page.getByTestId('table-striped-toggle').click()
+    await expect(table).toHaveClass(/table-striped/)
+
+    await page.getByTestId('table-compact-toggle').click()
+    await expect(table).toHaveClass(/table-compact/)
   })
 
-  test('checklist text flows horizontally in edit mode', async ({ page }) => {
+  test('mobile sync check panel shows server info', async ({ page }) => {
     await boot(page, { noFail: '1' })
-    await ensureEditMode(page)
-
-    const firstItem = page.getByTestId('check-item-text').first()
-    await expect(firstItem).toBeVisible()
-    const box = await firstItem.boundingBox()
-    expect(box).not.toBeNull()
-    if (box) {
-      expect(box.width).toBeGreaterThan(120)
-      expect(box.width).toBeGreaterThan(box.height)
-    }
+    await selectFirstEntry(page)
+    await page.getByTestId('editor-tab-details').click()
+    const panel = page.getByTestId('mobile-sync-check')
+    await expect(panel).toBeVisible()
+    await expect(panel).toContainText('Server URL')
+    await expect(panel).toContainText('Shared upload')
   })
 
-  test('master sync root prefixes file destinations', async ({ page }) => {
+  test('persists entries after local storage reset', async ({ page }) => {
     await boot(page, { noFail: '1' })
-    await page.getByTestId('today-entry').click()
-    await ensureEditMode(page)
+    await selectCalendarDate(page, '2025-12-09')
+    await page.getByTestId('edit-note-btn').click()
+    await page.getByTestId('save-note-btn').click()
+    await expect(page.getByRole('heading', { name: formatUiDate('2025-12-09') })).toBeVisible()
 
-    await page.getByRole('tab', { name: /Files/ }).click()
-    await page
-      .getByTestId('master-sync-input-files')
-      .fill('C:\\OneDrive - Trinity College Dublin\\Lab notebook')
+    await page.waitForTimeout(600)
+    await page.evaluate(() => window.localStorage.clear())
+    await page.reload()
 
-    await page.getByRole('tab', { name: /Note/ }).click()
-    await page.getByRole('button', { name: '+ File destination' }).click()
-    await page.getByTestId('file-destination-path').fill('run1.csv')
-    await page.getByTestId('file-destination-add').click()
-
-    await page.getByRole('tab', { name: /Files/ }).click()
-    await expect(
-      page.getByText('C:\\OneDrive - Trinity College Dublin\\Lab notebook\\run1.csv')
-    ).toBeVisible()
+    await selectCalendarDate(page, '2025-12-09')
+    await expect(page.getByRole('heading', { name: formatUiDate('2025-12-09') })).toBeVisible()
   })
 
-  test('auto-save downloads when disk cache is unavailable', async ({ page }) => {
-    await boot(page, { noFail: '1', stubPicker: true })
-    await page.getByTestId('today-entry').click()
-    await ensureEditMode(page)
+  test('workspace tabs support split view', async ({ page }) => {
+    await boot(page, { noFail: '1' })
+    await page.getByTestId('viewer-toggle').click()
+    await selectCalendarDate(page, '2025-12-07')
+    await page.getByTestId('entry-list-item-entry-1').click()
+    await selectCalendarDate(page, '2025-12-05')
+    await page.getByTestId('entry-list-item-entry-2').click()
 
-    const editor = page.getByTestId('slate-editor')
-    await page.evaluate(() => {
-      const root = document.querySelector('[data-testid="slate-editor"]') as HTMLElement | null
-      if (!root) return
-      const block = root.querySelector('p.block-paragraph') as HTMLElement | null
-      if (!block) return
-      root.focus()
-      const textSpan = block.querySelector('[data-slate-node="text"]')
-      const range = document.createRange()
-      if (textSpan) {
-        range.selectNodeContents(textSpan)
-        range.collapse(true)
-      } else {
-        range.selectNodeContents(block)
-        range.collapse(true)
-      }
-      const sel = window.getSelection()
-      if (!sel) return
-      sel.removeAllRanges()
-      sel.addRange(range)
-    })
-    await page.keyboard.insertText('Auto-save download text')
-    await expect(editor).toContainText('Auto-save download text')
-    await expect(page.getByTestId('entry-save')).toBeVisible()
-    const [download] = await Promise.all([
-      page.waitForEvent('download'),
-      page.getByTestId('entry-save').click(),
-    ])
-    const path = await download.path()
-    const buffer = fs.readFileSync(path as string)
-    expect(buffer.toString('utf8')).toContain('Auto-save download text')
+    const tabs = page.getByTestId('workspace-tabs')
+    await expect(tabs).toBeVisible()
+    const tabItems = tabs.locator('[data-testid^="workspace-tab-"]')
+    expect(await tabItems.count()).toBeGreaterThanOrEqual(2)
+    await expect(tabs).toContainText(formatUiDate('2025-12-07'))
+    await expect(tabs).toContainText(formatUiDate('2025-12-05'))
+
+    await page.getByTestId('split-toggle').click()
+    const splitSelect = page.getByTestId('split-secondary-select')
+    await expect(splitSelect).toBeVisible()
+    await expect(splitSelect).not.toHaveValue('')
+    await expect(page.getByTestId('split-secondary-panel')).toBeVisible()
   })
 
   test('view-mode checklist toggle syncs', async ({ page }) => {
     await boot(page, { noFail: '1' })
-    await ensureViewMode(page)
+    await selectFirstEntry(page)
 
-    const firstChecklist = page.locator('.check-row').first()
+    const firstChecklist = page.getByRole('checkbox').first()
     await expect(firstChecklist).toBeVisible()
-    await firstChecklist.locator('input[type="checkbox"]').click()
+    await firstChecklist.click()
 
-    const statusChip = page.locator('.breadcrumbs .status-chip')
+    const statusChip = page.getByTestId('sync-status-chip')
     await expect(statusChip).toContainText('Synced')
-  })
-
-  test('today entry opens in edit mode', async ({ page }) => {
-    await boot(page, { noFail: '1' })
-
-    await expect(page.getByRole('button', { name: 'Save' })).toBeVisible()
-
-    const editor = page.getByTestId('slate-editor')
-    await expect(editor).toHaveAttribute('contenteditable', 'true')
   })
 
   test('sync failures can be retried', async ({ page }) => {
     await boot(page, { noFail: '0', failNext: true })
-    await ensureViewMode(page)
+    await selectFirstEntry(page)
 
-    const firstChecklist = page.locator('.check-row').first()
-    await firstChecklist.locator('input[type="checkbox"]').click()
+    const firstChecklist = page.getByRole('checkbox').first()
+    await firstChecklist.click()
 
-    const statusChip = page.locator('.breadcrumbs .status-chip')
+    const statusChip = page.getByTestId('sync-status-chip')
     await expect(statusChip).toContainText(/failed/i)
 
-    await expect(page.getByTestId('sync-action')).toHaveText(/retry failed/i)
-    await page.getByTestId('sync-action').click()
+    await page.getByTestId('editor-tab-details').click()
+    await page.getByTestId('sync-now-btn').click()
     await expect(statusChip).toContainText('Synced')
   })
 
@@ -429,9 +275,10 @@ test.describe('Lab note taking app', () => {
     })
 
     await boot(page, { noFail: '1', stubPicker: true })
+    await selectFirstEntry(page)
     const [download] = await Promise.all([
       page.waitForEvent('download'),
-      page.getByTestId('export-md').click(),
+      page.getByTestId('export-md-btn').click(),
     ])
     expect(download.suggestedFilename().endsWith('.md')).toBeTruthy()
     await expect.poll(() => dialogText).toContain('manifest')
@@ -439,9 +286,10 @@ test.describe('Lab note taking app', () => {
 
   test('export pdf opens printable page', async ({ page }) => {
     await boot(page, { noFail: '1' })
+    await selectFirstEntry(page)
     const [popup] = await Promise.all([
       page.waitForEvent('popup'),
-      page.getByTestId('export-pdf').click(),
+      page.getByTestId('export-pdf-btn').click(),
     ])
     await popup.waitForLoadState('domcontentloaded')
     await expect(popup.locator('text=Print / Save to PDF')).toBeVisible()
@@ -453,162 +301,15 @@ test.describe('Lab note taking app', () => {
     const dialog = page.getByRole('dialog')
     await expect(dialog).toBeVisible()
     await expect(dialog.getByText('Disk cache', { exact: true })).toBeVisible()
-    await expect(dialog.getByTestId('import-legacy')).toBeVisible()
-    await expect(dialog.getByTestId('import-legacy-file')).toBeVisible()
   })
 
-  test('legacy import from file loads entries', async ({ page }) => {
-    await boot(page, { noFail: '1', stubPicker: true })
-    await page.getByRole('button', { name: 'Settings' }).click()
-    const input = page.getByTestId('import-legacy-file-input')
-    const filePath = path.join(here, 'fixtures', 'legacy-state.json')
-    await input.setInputFiles(filePath)
-    await expect(page.getByTestId('entry-list')).toContainText('Legacy note import')
-  })
-
-  test('theme selection updates the active theme', async ({ page }) => {
-    await boot(page, { noFail: '1', stubPicker: true })
-    await page.getByRole('button', { name: 'Settings' }).click()
-    const neoBrutal = page.getByTestId('theme-option-neo-brutal')
-    await neoBrutal.click()
-    await expect(neoBrutal).toHaveClass(/active/)
-    await expect.poll(async () => page.evaluate(() => document.documentElement.getAttribute('data-theme'))).toBe(
-      'neo-brutal'
-    )
-    await expect.poll(async () => page.evaluate(() => window.localStorage.getItem('labnote.theme'))).toBe(
-      'neo-brutal'
-    )
-  })
-
-  test('protocols can be created and searched', async ({ page }) => {
+  test('today entry button reuses the day entry', async ({ page }) => {
     await boot(page, { noFail: '1' })
-    await page.getByRole('tab', { name: 'Protocols' }).click()
-    await page.getByTestId('new-protocol').click()
-    await page.getByLabel('Title').fill('Microscopy SOP')
-    await page.getByRole('button', { name: 'Create protocol' }).click()
-
-    await page.getByRole('button', { name: 'Edit' }).click()
-    await page.getByTestId('protocol-editor').locator('p.block-paragraph').first().click({ force: true })
-    await page.keyboard.type('Laser settings and exposure notes.')
-    await page.getByRole('button', { name: 'Save' }).click()
-    await expect(page.getByTestId('protocol-view')).toContainText('Laser settings and exposure notes.')
-
-    await page.getByPlaceholder('Search protocols').fill('Laser settings')
-    const protocolList = page.getByTestId('protocol-list')
-    await expect(protocolList.getByText('Microscopy SOP')).toBeVisible()
-  })
-
-  test('view mode does not accumulate context across entries', async ({ page }) => {
-    await boot(page, { noFail: '1' })
-    await ensureViewMode(page)
-    const formatter = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
-    const todayTitle = formatter.format(new Date())
-    const yesterday = new Date()
-    yesterday.setDate(yesterday.getDate() - 1)
-    const yesterdayTitle = formatter.format(yesterday)
-
-    await page.getByTestId('calendar-clear').click()
-    const entryView = page.getByTestId('entry-view')
-    const entryList = page.getByTestId('entry-list')
-    await entryList.getByRole('button', { name: new RegExp(yesterdayTitle) }).click()
-    await expect(entryView).toContainText('Beta context')
-    await expect(entryView).not.toContainText('Alpha context')
-
-    await entryList.getByRole('button', { name: new RegExp(todayTitle) }).click()
-    await expect(entryView).toContainText('Alpha context')
-    await expect(entryView).not.toContainText('Beta context')
-
-    await entryList.getByRole('button', { name: new RegExp(yesterdayTitle) }).click()
-    await expect(entryView).toContainText('Beta context')
-    await expect(entryView).not.toContainText('Alpha context')
-  })
-
-  test('entries list sorts newest first', async ({ page }) => {
-    await boot(page, { noFail: '1' })
-    await page.getByTestId('calendar-clear').click()
-
-    const today = new Date()
-    const yesterday = new Date(today)
-    yesterday.setDate(today.getDate() - 1)
-    const formatter = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
-    const todayTitle = formatter.format(today)
-    const yesterdayTitle = formatter.format(yesterday)
-
-    const entryItems = page.getByTestId('entry-list').getByRole('button')
-    await expect(entryItems.nth(0)).toContainText(todayTitle)
-    await expect(entryItems.nth(1)).toContainText(yesterdayTitle)
-  })
-
-  test('sidebar can be collapsed and expanded', async ({ page }) => {
-    await boot(page, { noFail: '1' })
-    const toggle = page.getByTestId('sidebar-toggle')
-    await toggle.click()
-    await expect(page.locator('.sidebar')).toHaveClass(/collapsed/)
-    await toggle.click()
-    await expect(page.locator('.sidebar')).not.toHaveClass(/collapsed/)
-  })
-
-  test('calendar filters entries by date', async ({ page }) => {
-    await boot(page, { noFail: '1' })
-    const today = new Date()
-    const todayIso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(
-      today.getDate()
-    ).padStart(2, '0')}`
-    const yesterday = new Date(today)
-    yesterday.setDate(today.getDate() - 1)
-    const yesterdayIso = `${yesterday.getFullYear()}-${String(yesterday.getMonth() + 1).padStart(2, '0')}-${String(
-      yesterday.getDate()
-    ).padStart(2, '0')}`
-    const formatter = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
-    const todayTitle = formatter.format(today)
-    const yesterdayTitle = formatter.format(yesterday)
-
-    await page.getByTestId(`calendar-day-${yesterdayIso}`).click()
-    await expect(page.getByTestId('entry-list').getByRole('button', { name: new RegExp(yesterdayTitle) })).toBeVisible()
-    await page.getByTestId(`calendar-day-${todayIso}`).click()
-    await expect(page.getByTestId('entry-list').getByRole('button', { name: new RegExp(todayTitle) })).toBeVisible()
-  })
-
-  test('calendar marks days that have entries', async ({ page }) => {
-    await boot(page, { noFail: '1' })
-    const today = new Date()
-    const todayIso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(
-      today.getDate()
-    ).padStart(2, '0')}`
-    const dayButton = page.getByTestId(`calendar-day-${todayIso}`)
-    await expect(dayButton).toHaveClass(/has-entry/)
-    await expect(dayButton.locator('.calendar-dot')).toBeVisible()
-  })
-
-  test('tag search filters project and experiment tags', async ({ page }) => {
-    await boot(page, { noFail: '1' })
-    await page.getByRole('button', { name: 'More' }).click()
-
-    await page.getByTestId('tag-search').fill('gen')
-
-    const projectList = page.getByTestId('project-tag-list')
-    await expect(projectList.getByText('No tags found.')).toBeVisible()
-
-    const experimentList = page.getByTestId('experiment-tag-list')
-    await expect(experimentList.getByRole('button', { name: 'Genotyping' })).toBeVisible()
-    await expect(experimentList.getByRole('button', { name: 'FACS' })).toHaveCount(0)
-  })
-
-  test('entries can be deleted', async ({ page }) => {
-    await boot(page, { noFail: '1' })
-    const formatter = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
-    const yesterday = new Date()
-    yesterday.setDate(yesterday.getDate() - 1)
-    const yesterdayTitle = formatter.format(yesterday)
-
-    await page.getByTestId('calendar-clear').click()
-    await page.getByTestId('entry-list').getByRole('button', { name: new RegExp(yesterdayTitle) }).click()
-    await page.getByRole('tab', { name: /details/i }).click()
-
-    page.once('dialog', (dialog) => dialog.accept())
-    await page.getByTestId('delete-entry').click()
-
-    await expect(page.getByRole('heading', { name: new RegExp(yesterdayTitle) })).toHaveCount(0)
-    await expect(page.getByRole('button', { name: new RegExp(yesterdayTitle) })).toHaveCount(0)
+    const title = page.locator('.editor-header h1')
+    await expect(title).toBeVisible()
+    const before = await title.textContent()
+    await page.getByTestId('sidebar-today-entry').click()
+    await expect(page.getByTestId('save-note-btn')).toBeVisible()
+    await expect(title).toHaveText(before ?? '')
   })
 })

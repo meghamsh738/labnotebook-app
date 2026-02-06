@@ -1,0 +1,19 @@
+{
+  "id": "labnotebook",
+  "name": "Lab Notebook",
+  "repoName": "lab note taking app",
+  "type": "static",
+  "frontend": {
+    "kind": "vite-react",
+    "root": "web",
+    "buildOutput": ".labnote-dist/web"
+  },
+  "storage": {
+    "label": "Lab Notebook"
+  },
+  "signature": {
+    "madeBy": "Meghamsh Teja Konda",
+    "contactEmail": "meghamshteja555@gmail.com"
+  }
+}
+

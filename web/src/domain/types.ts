@@ -1,9 +1,7 @@
 export type Role = 'PI' | 'student' | 'tech' | 'guest'
 
-export type ThemeName = 'light' | 'dark' | 'neo-brutal' | 'sage'
-
 export interface UserSettings {
-  theme: ThemeName
+  theme: 'light' | 'dark'
   defaultLabId?: string
   defaultProjectId?: string
 }
@@ -52,16 +50,6 @@ export interface Experiment {
   defaultRawDataPath?: string
 }
 
-export interface Protocol {
-  id: string
-  title: string
-  createdDatetime: string
-  lastEditedDatetime: string
-  content: Block[]
-  tags: string[]
-  searchTerms: string[]
-}
-
 export type BlockType =
   | 'heading'
   | 'paragraph'
@@ -81,7 +69,7 @@ export interface TextRun {
   superscript?: boolean
   subscript?: boolean
   font?: 'body' | 'display' | 'mono'
-  fontSize?: 12 | 14 | 16 | 18 | 20 | 24 | 28
+  fontSize?: number
   color?: string
   highlight?: string
 }
@@ -93,6 +81,7 @@ export interface BlockBase {
   updatedBy?: string
   locked?: boolean
   align?: 'left' | 'center' | 'right' | 'justify'
+  indent?: number
 }
 
 export interface HeadingBlock extends BlockBase {
@@ -106,14 +95,15 @@ export interface ParagraphBlock extends BlockBase {
   type: 'paragraph'
   text: string
   runs?: TextRun[]
-  guide?: string
 }
 
 export interface TableBlock extends BlockBase {
   type: 'table'
   data: string[][]
   caption?: string
-  headerRow?: boolean
+  header?: boolean
+  striped?: boolean
+  compact?: boolean
 }
 
 export interface ImageBlock extends BlockBase {
@@ -134,7 +124,13 @@ export interface ChecklistItem {
   done: boolean
   timerMinutes?: number
   runs?: TextRun[]
-  guide?: string
+}
+
+export interface ListItem {
+  id: string
+  text: string
+  runs?: TextRun[]
+  children?: ListItem[]
 }
 
 export interface ChecklistBlock extends BlockBase {
@@ -142,26 +138,16 @@ export interface ChecklistBlock extends BlockBase {
   items: ChecklistItem[]
 }
 
-export type ListStyle = 'dot' | 'circle' | 'square' | 'dash' | 'arrow'
-
-export interface ListItem {
-  id: string
-  text: string
-  runs?: TextRun[]
-  guide?: string
-}
-
 export interface ListBlock extends BlockBase {
   type: 'list'
+  ordered?: boolean
   items: ListItem[]
-  style?: ListStyle
 }
 
 export interface QuoteBlock extends BlockBase {
   type: 'quote'
   text: string
   runs?: TextRun[]
-  guide?: string
 }
 
 export interface DividerBlock extends BlockBase {
@@ -212,15 +198,11 @@ export interface Entry {
   authorId: string
   title: string
   dateBucket: string
-  isDaily?: boolean
   content: Block[]
   tags: string[]
-  projectTags?: string[]
-  experimentTags?: string[]
   searchTerms: string[]
   linkedFiles: string[]
   pinnedRegions: PinnedRegion[]
-  syncPath?: string
 }
 
 export interface SearchIndexItem {

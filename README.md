@@ -1,26 +1,33 @@
 # Lab Note Taking App
 
-Offline-first lab notebook prototype built with React + TypeScript (Vite). Guided daily templates, calendar-driven entries, experiment/project tags, editable tables, file destinations + a master sync folder, plus Markdown/PDF export with an offline-first sync queue.
+Offline-first lab notebook prototype built with React + TypeScript (Vite). Simple 2-pane UI: browse/filter entries on the left, write notes on the right. Add structure as needed (headers, checklists, Aim/Experiment/Results), attach files/images or store file destinations (paths), and export an experiment as Markdown or printable PDF.
+
+Typography refresh (neo-brutalist display + mono labels) updated Dec 25, 2025.
+
+Part of **Easylab Suite**: when bundled, it launches from the suite desktop launcher as the **Lab Notebook** module.
+
+License: All Rights Reserved. See `LICENSE`.
 
 ## Screenshots
 
-| Dashboard | Edit mode | Settings |
+| Dashboard | Details | Edit mode |
 | --- | --- | --- |
-| ![Dashboard](screenshots/01-dashboard.png) | ![Edit mode](screenshots/02-edit-mode.png) | ![Settings](screenshots/03-settings.png) |
+| ![Dashboard](screenshots/01-dashboard.png) | ![Details](screenshots/02-details.png) | ![Edit mode](screenshots/03-edit-mode.png) |
 
-| Sync queue (failed) | Export PDF |
-| --- | --- |
-| ![Sync failed](screenshots/04-sync-failed.png) | ![Export PDF](screenshots/05-export-pdf.png) |
+| Settings | Sync failed | Export PDF |
+| --- | --- | --- |
+| ![Settings](screenshots/04-settings.png) | ![Sync failed](screenshots/05-sync-failed.png) | ![Export PDF](screenshots/06-export-pdf.png) |
+
+| Mobile landing |
+| --- |
+| ![Mobile landing](screenshots/08-mobile-landing.png) |
 
 ## Features
 
-- **Guided daily templates**: start each day with a single guided lab notebook entry and block tools.
-- **Calendar navigation**: default to today; jump to older dates to view that day’s entry.
-- **Tags + filters**: experiment and project tags with presets, plus add-more support.
-- **Master sync folder**: global sync destination with file destination insertion blocks.
-- **Editable tables**: paste from Excel/CSV, toggle header rows, add/remove rows/columns.
-- **Themes**: switch between Studio, Night, Neo Brutal, and Sage looks.
-- **Protocols library**: reusable protocol entries with the same editor and search.
+- **Simple layout**: browse entries + filter by project/experiment on the left; editor stays focused.
+- **Template notes**: “Experiment note” template starts with Aim / Experiment / Results sections.
+- **Insert bar**: add headers, checklists, Aim/Experiment/Results, images/files, and “file destinations” (paths).
+- **Details drawer**: pinned regions, attachments, and sync queue live under “Details” to keep the editor clean.
 - **Offline-first sync queue**: per-block change queue with `pending / synced / failed`, retry and clear controls.
 - **Attachments + cache**: drag/drop/paste attachments with IndexedDB storage, plus optional disk cache via the File System Access API.
 - **Export**: Markdown bundle (note + `manifest.json` + attachments paths) and printable PDF export.
@@ -50,7 +57,7 @@ npx playwright install
 
 ### WSL + mounted drive note
 
-If you work from a mounted Windows drive path like `/mnt/d/...`, `npm install` can fail with `EPERM`/`chmod` errors due to Windows filesystem semantics. The simplest fix is to move the repo into the Linux filesystem (for example `~/projects/...`) before installing.
+If you work from a mounted Windows drive path like `/mnt/<drive>/...`, `npm install` can fail with `EPERM`/`chmod` errors due to Windows filesystem semantics. The simplest fix is to move the repo into the Linux filesystem (for example `~/projects/...`) before installing.
 
 If you must keep the repo on a mounted drive, one workaround is to install dependencies in the Linux filesystem and symlink `web/node_modules` (this path is gitignored):
 
@@ -59,7 +66,7 @@ mkdir -p ~/.labnote-modules
 cd ~/.labnote-modules
 npm init -y
 npm install
-ln -s ~/.labnote-modules/node_modules "/mnt/d/coding projects/lab note taking app/web/node_modules"
+ln -s ~/.labnote-modules/node_modules "/mnt/<drive>/coding-projects/lab-note-taking-app/web/node_modules"
 ```
 
 ## Tests
@@ -384,7 +391,7 @@ Optionally:
 
 * Add a “Default raw data path” per experiment:
 
-  * e.g., `/labserver/TNF_project/2024-10-14/`.
+  * e.g., `/fileserver/labshare/2024-10-14/`.
   * App can auto-append filenames to construct full paths.
 
 ---
@@ -516,7 +523,7 @@ A first clickable shell lives in `web/` using Vite + React + TypeScript.
 **Run it**
 
 ```bash
-cd "${PWD}/web"  # /mnt/d/coding projects/lab note taking app/web
+cd "${PWD}/web"  # /mnt/<drive>/coding-projects/lab-note-taking-app/web
 npm install       # once
 npm run dev -- --host
 ```
@@ -540,7 +547,6 @@ Next build steps you could take:
 5) Add sync queue + conflict diffing per block (`updated_at`, `updated_by`).
 
 ### Prototype features just added
-- Start-day modal shows on every launch to create or jump to today’s entry.
 - Client-side search/filter (Ctrl/Cmd+K) across entry titles, tags, content, attachments, pinned region summaries.
 - Project and tag chips to narrow the entry list; empty states handled.
 - Second sample entry to show filtering.
@@ -553,9 +559,3 @@ Next build steps you could take:
 - Missing cached files show a warning; image attachments display cached previews.
 - Filesystem cache (if the browser supports File System Access) is attempted first; otherwise files fall back to IndexedDB blobs.
 - Mock sync indicator shows pending changes; a “Sync now” button clears the queue (placeholder for real sync).
-- Calendar defaults to today, shows older entries by date, and does not persist filters between sessions.
-- Quick capture reuses today’s entry when one already exists.
-- Master sync folder (global) replaces per-entry overrides; file destination blocks reference it.
-- Experiment + project tag sets with presets and add-more support.
-- Editable tables with header-row toggle and add/remove row/column controls.
-- Neo-brutalist styling pass with sticky header actions, icons, and full-width layout.

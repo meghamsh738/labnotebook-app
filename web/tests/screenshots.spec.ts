@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test'
+import { test, expect, type Page } from '@playwright/test'
 import fs from 'fs'
 import path from 'path'
 import { fileURLToPath } from 'url'
@@ -7,30 +7,26 @@ test.skip(process.env.GENERATE_SCREENSHOTS !== '1', 'Set GENERATE_SCREENSHOTS=1 
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const outDir = path.join(here, '..', '..', 'screenshots')
+const dateFormatter = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+const formatUiDate = (isoDate: string) => dateFormatter.format(new Date(`${isoDate}T12:00:00`))
+
+async function selectCalendarDate(page: Page, isoDate: string) {
+  const target = page.getByTestId(`calendar-day-${isoDate}`)
+  for (let i = 0; i < 14; i += 1) {
+    if (await target.count()) break
+    await page.getByRole('button', { name: /previous month/i }).click()
+  }
+  await target.click()
+}
 
 test('generate feature screenshots', async ({ page }) => {
   test.setTimeout(120_000)
 
   fs.mkdirSync(outDir, { recursive: true })
 
+  await page.request.post('/api/reset')
   await page.addInitScript(() => {
     window.localStorage.clear()
-    const fixed = new Date('2026-01-02T10:00:00.000Z')
-    const OriginalDate = Date
-    // @ts-expect-error override global Date for stable screenshots
-    window.Date = class extends OriginalDate {
-      constructor(...args) {
-        if (args.length === 0) {
-          super(fixed.getTime())
-        } else {
-          // @ts-expect-error spread args into Date constructor
-          super(...args)
-        }
-      }
-      static now() {
-        return fixed.getTime()
-      }
-    }
     window.localStorage.setItem('labnote.mockSync.noFail', '1')
     ;(window as unknown as { showDirectoryPicker?: unknown }).showDirectoryPicker = undefined
     ;(window as unknown as { __labnoteMockSync?: { noFail?: boolean; failNext?: boolean } }).__labnoteMockSync = {
@@ -42,53 +38,98 @@ test('generate feature screenshots', async ({ page }) => {
   page.on('dialog', (d) => d.dismiss())
 
   await page.setViewportSize({ width: 1440, height: 900 })
+  await page.emulateMedia({ reducedMotion: 'reduce' })
   await page.goto('/')
-  await page.addStyleTag({
-    content: `
-      *, *::before, *::after {
-        transition: none !important;
-        animation: none !important;
-      }
-    `,
-  })
-  await expect(page.getByRole('heading', { name: /neuroimmunology lab/i })).toBeVisible()
+  await selectCalendarDate(page, '2025-12-07')
+  const seeded = page.locator('[data-testid="entry-list-item-entry-1"]')
+  if (await seeded.count()) {
+    await seeded.first().click()
+  } else {
+    await page.locator('[data-testid^="entry-list-item-"]').first().click()
+  }
+  await expect(page.getByRole('heading', { name: formatUiDate('2025-12-07') })).toBeVisible()
   await page.screenshot({ path: path.join(outDir, '01-dashboard.png'), fullPage: true })
 
-  await page.getByTestId('tabs-view-toggle').click()
-  const tabsView = page.getByTestId('tabs-view')
-  await expect(tabsView).toBeVisible()
-  await page.screenshot({ path: path.join(outDir, '06-tabs-view.png'), fullPage: true })
-  await page.getByTestId('tabs-view-close').click()
+  await page.getByTestId('editor-tab-details').click()
+  await page.screenshot({ path: path.join(outDir, '02-details.png'), fullPage: true })
+  await page.getByTestId('editor-tab-note').click()
 
-  await page.getByTestId('today-entry').click()
-  await expect(page.getByRole('button', { name: 'Save' })).toBeVisible()
-  await page.screenshot({ path: path.join(outDir, '02-edit-mode.png'), fullPage: true })
+  await selectCalendarDate(page, '2025-12-07')
+  if (await seeded.count()) {
+    await seeded.first().click()
+  } else {
+    await page.locator('[data-testid^="entry-list-item-"]').first().click()
+  }
+  await page.getByTestId('edit-note-btn').click()
+  await expect(page.getByTestId('save-note-btn')).toBeVisible()
+  await page.screenshot({ path: path.join(outDir, '03-edit-mode.png'), fullPage: true })
 
   await page.getByRole('button', { name: 'Settings' }).click()
   const settingsDialog = page.getByRole('dialog')
   await expect(settingsDialog).toBeVisible()
-  await page.screenshot({ path: path.join(outDir, '03-settings.png') })
-  await settingsDialog.getByRole('button', { name: 'Close' }).click()
+  await page.screenshot({ path: path.join(outDir, '04-settings.png') })
+  await settingsDialog.getByRole('button', { name: 'Close', exact: true }).click()
 
-  await page.getByRole('button', { name: 'Cancel' }).click()
-  await expect(page.getByRole('button', { name: 'Edit' })).toBeVisible()
-  const statusChip = page.locator('.breadcrumbs .status-chip')
+  await page.getByTestId('cancel-edit-btn').click()
+  await expect(page.getByTestId('edit-note-btn')).toBeVisible()
+  await page.getByTestId('editor-tab-note').click()
+  await selectCalendarDate(page, '2025-12-07')
+  const seededAgain = page.locator('[data-testid="entry-list-item-entry-1"]')
+  if (await seededAgain.count()) {
+    await seededAgain.first().click()
+  } else {
+    await page.locator('[data-testid^="entry-list-item-"]').first().click()
+  }
+  const statusChip = page.getByTestId('sync-status-chip')
   await expect(statusChip).toContainText('Synced')
   await page.context().setOffline(true)
-  await page.locator('.check-row input[type="checkbox"]').first().click()
+  await page.getByRole('checkbox').first().click()
   await expect(statusChip).toContainText(/failed/i)
-  await expect(page.getByTestId('sync-action')).toHaveText(/retry failed/i)
-  await page.screenshot({ path: path.join(outDir, '04-sync-failed.png'), fullPage: true })
+
+  await page.getByTestId('editor-tab-details').click()
+  await expect(page.getByText('Sync queue')).toBeVisible()
+  await page.getByText('Sync queue').scrollIntoViewIfNeeded()
+  await page.screenshot({ path: path.join(outDir, '05-sync-failed.png'), fullPage: true })
   await page.context().setOffline(false)
-  await page.getByTestId('sync-action').click()
+  await page.getByTestId('sync-now-btn').click()
   await expect(statusChip).toContainText('Synced')
+  await page.getByTestId('editor-tab-note').click()
+  await selectCalendarDate(page, '2025-12-07')
+  const exportEntry = page.locator('[data-testid="entry-list-item-entry-1"]')
+  if (await exportEntry.count()) {
+    await exportEntry.first().click()
+  } else {
+    await page.locator('[data-testid^="entry-list-item-"]').first().click()
+  }
+  const exportPdf = page.getByTestId('export-pdf-btn')
+  await expect(exportPdf).toBeEnabled()
 
   const [popup] = await Promise.all([
     page.waitForEvent('popup'),
-    page.getByTestId('export-pdf').click(),
+    exportPdf.click(),
   ])
   await expect(popup.locator('text=Print / Save to PDF')).toBeVisible()
   await popup.setViewportSize({ width: 1100, height: 780 })
-  await popup.screenshot({ path: path.join(outDir, '05-export-pdf.png'), fullPage: true })
+  await popup.screenshot({ path: path.join(outDir, '06-export-pdf.png'), fullPage: true })
   await popup.close()
+})
+
+test('mobile landing', async ({ page }) => {
+  await page.request.post('/api/reset')
+  await page.addInitScript(() => {
+    window.localStorage.clear()
+    window.localStorage.setItem('labnote.mockSync.noFail', '1')
+    ;(window as unknown as { showDirectoryPicker?: unknown }).showDirectoryPicker = undefined
+    ;(window as unknown as { __labnoteMockSync?: { noFail?: boolean; failNext?: boolean } }).__labnoteMockSync = {
+      noFail: true,
+      failNext: false,
+    }
+  })
+
+  page.on('dialog', (d) => d.dismiss())
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.emulateMedia({ reducedMotion: 'reduce' })
+  await page.goto('/')
+  await expect(page.getByTestId('viewer-bar')).toBeVisible()
+  await page.screenshot({ path: path.join(outDir, '08-mobile-landing.png'), fullPage: true })
 })
