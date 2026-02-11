@@ -7,6 +7,7 @@ import type { RenderElementProps, RenderLeafProps } from 'slate-react'
 import { type LucideIcon, ArrowLeft, ArrowRight, Calendar, Columns2, Files, Info, NotebookPen, Pin, PinOff, X } from 'lucide-react'
 import { cacheFile, getCachedFile } from './idb'
 import { writeFileToCache, restoreCacheHandle, ensureCacheDir, pickCacheDir, clearCacheHandle } from './fileCache'
+import { GuidedTutorial, type TutorialStep } from './GuidedTutorial'
 import './App.css'
 import {
   sampleData,
@@ -2417,6 +2418,36 @@ function EditorPane({
     { id: 'files', label: attachments.length ? `Files (${attachments.length})` : 'Files', icon: Files },
     { id: 'details', label: 'Details', icon: Info },
   ]
+  const tutorialSteps: TutorialStep[] = useMemo(
+    () => [
+      {
+        selector: '[data-testid="editor-tab-note"]',
+        title: 'Start in Note',
+        description: 'Use the Note tab to capture your experiment details and narrative.',
+      },
+      {
+        selector: '[data-testid="editor-tab-files"]',
+        title: 'Attach Files',
+        description: 'Switch to Files to pin images, instrument exports, and supporting documents.',
+      },
+      {
+        selector: '[data-testid="sync-status-chip"]',
+        title: 'Track Sync Status',
+        description: 'Watch this status chip to confirm whether changes are synced, pending, or failed.',
+      },
+      {
+        selector: '[data-testid="export-md-btn"]',
+        title: 'Export Markdown Bundle',
+        description: 'Use Export MD to generate the note package for versioning and sharing.',
+      },
+      {
+        selector: '[data-testid="export-pdf-btn"]',
+        title: 'Export Final PDF',
+        description: 'Use Export PDF for printable records once your entry is finalized.',
+      },
+    ],
+    []
+  )
 
   const todayDate = todayEntry ? new Date(todayEntry.createdDatetime) : new Date()
   const todayTitle = todayEntry ? getEntryDisplayTitle(todayEntry) : dateOnly.format(todayDate)
@@ -3156,6 +3187,14 @@ function EditorPane({
               {syncing ? 'Syncing…' : failedCount ? `${failedCount} failed` : pendingCount ? `${pendingCount} pending` : 'Synced'}
             </span>
             <div className="spacer" />
+            <GuidedTutorial
+              steps={tutorialSteps}
+              startLabel="Tutorial"
+              onStart={() => {
+                onTabChange('note')
+                setIsEditing(false)
+              }}
+            />
             <button
               className="ghost"
               disabled={exporting}
