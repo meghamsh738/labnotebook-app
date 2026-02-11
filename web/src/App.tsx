@@ -2422,28 +2422,70 @@ function EditorPane({
     () => [
       {
         selector: '[data-testid="editor-tab-note"]',
-        title: 'Start in Note',
-        description: 'Use the Note tab to capture your experiment details and narrative.',
+        title: 'Note tab',
+        description: 'Primary writing area for daily experiment notes.',
+        details: [
+          'Use this for protocol steps, observations, and decisions.',
+        ],
+      },
+      {
+        selector: '[data-testid="edit-note-btn"]',
+        title: 'Enter edit mode',
+        description: 'Click Edit note to switch from read view to rich editor mode.',
+        details: [
+          'Autosave is active while editing.',
+          'Use Save note to finalize current draft state immediately.',
+        ],
+      },
+      {
+        selector: '[data-testid="editor-font-select"]',
+        title: 'Formatting toolbar',
+        description: 'Set font, size, color, highlight, alignment, and lists from the toolbar.',
+      },
+      {
+        selector: '[data-testid="editor-bold"]',
+        title: 'Text emphasis controls',
+        description: 'Use bold/italic/underline/superscript/subscript for structured scientific notation.',
       },
       {
         selector: '[data-testid="editor-tab-files"]',
-        title: 'Attach Files',
-        description: 'Switch to Files to pin images, instrument exports, and supporting documents.',
+        title: 'Files tab',
+        description: 'View and manage note attachments (images, exports, and supporting files).',
+      },
+      {
+        selector: '[data-testid="editor-tab-details"]',
+        title: 'Details tab',
+        description: 'Manage tags, metadata, sync queue status, and mobile/shared upload settings.',
+      },
+      {
+        selector: '[data-testid="tag-input"]',
+        title: 'Tags',
+        description: 'Add searchable tags for project, assay, cohort, or condition grouping.',
+      },
+      {
+        selector: '[data-testid="sync-now-btn"]',
+        title: 'Sync actions',
+        description: 'Use Sync now / Retry failed from Details when you need immediate sync control.',
       },
       {
         selector: '[data-testid="sync-status-chip"]',
-        title: 'Track Sync Status',
-        description: 'Watch this status chip to confirm whether changes are synced, pending, or failed.',
+        title: 'Sync status chip',
+        description: 'Shows current state: synced, pending, syncing, or failed items.',
+      },
+      {
+        selector: '[data-testid="save-note-btn"]',
+        title: 'Save note',
+        description: 'Explicitly saves edits and exits edit mode.',
       },
       {
         selector: '[data-testid="export-md-btn"]',
-        title: 'Export Markdown Bundle',
-        description: 'Use Export MD to generate the note package for versioning and sharing.',
+        title: 'Export MD',
+        description: 'Exports a markdown package suitable for version tracking and sharing.',
       },
       {
         selector: '[data-testid="export-pdf-btn"]',
-        title: 'Export Final PDF',
-        description: 'Use Export PDF for printable records once your entry is finalized.',
+        title: 'Export PDF (final step)',
+        description: 'Generate a print-ready final report once note, files, and tags are complete.',
       },
     ],
     []
