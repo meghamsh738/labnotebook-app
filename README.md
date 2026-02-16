@@ -48,6 +48,25 @@ Open the dev server URL Vite prints (usually `http://localhost:5173`).
 
 Alternative: on Windows, double-click `run-dev.cmd`.
 
+### Tailscale + one-time mobile pairing
+
+Use this when you want the same notebook in your phone browser with shared sync/uploads.
+
+1. Start the app with host binding enabled:
+   ```bash
+   npm run dev -- --host 0.0.0.0 --port 4173 --strictPort
+   ```
+2. On your desktop, open the app and go to an entry `Details` tab.
+3. In `Mobile sync check`, click `Generate one-time pair code`.
+4. Connect your phone to the same Tailscale tailnet, then open the desktop host URL shown in `Mobile sync check`.
+5. Enter the one-time code on mobile (or open the generated pair link). The code is single-use and expires automatically.
+6. After pairing, mobile gets the same app functionality (editing, sync queue, shared uploads, camera capture).
+
+Notes:
+- Pair codes are one-time and time-limited.
+- Shared server endpoints require a paired session token.
+- Use `Unpair this device` in the same panel to revoke the current device session.
+
 ### Playwright browsers (for tests/screenshots)
 
 ```bash

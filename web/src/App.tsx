@@ -157,6 +157,14 @@ type LabnoteServerState = {
 
 const SERVER_STATE_URL = '/api/state'
 const SERVER_INFO_URL = '/api/info'
+const PAIR_BOOTSTRAP_URL = '/api/pair/bootstrap'
+const PAIR_CODE_URL = '/api/pair/code'
+const PAIR_REDEEM_URL = '/api/pair/redeem'
+const PAIR_LOGOUT_URL = '/api/pair/logout'
+const SESSION_STORAGE_KEY = 'labnote.sessionToken'
+const PAIR_QUERY_PARAM = 'pair'
+
+type SessionRole = 'owner' | 'member'
 
 type LabnoteServerInfo = {
   ok?: boolean
@@ -167,6 +175,37 @@ type LabnoteServerInfo = {
   stateUpdatedAt?: string
   serverTime?: string
   hostname?: string
+  serverOrigin?: string
+  pairingRequired?: boolean
+  paired?: boolean
+  pairCanGenerate?: boolean
+  pairOwnerMissing?: boolean
+  pairCodeActive?: boolean
+  pairCodeExpiresAt?: string
+  sessionRole?: SessionRole
+  sessionDeviceName?: string
+  tailscaleHost?: string
+}
+
+type ServerStateFetchResult = {
+  state: LabnoteServerState | null
+  reachable: boolean
+  unauthorized: boolean
+}
+
+type PairSessionResult = {
+  ok?: boolean
+  sessionToken?: string
+  role?: SessionRole
+  error?: string
+}
+
+type PairCodeCreateResult = {
+  ok?: boolean
+  code?: string
+  expiresAt?: string
+  ttlSeconds?: number
+  error?: string
 }
 
 const TAG_TEMPLATE_KEY = 'labnote.tagTemplates'
@@ -223,26 +262,84 @@ function readFileAsDataUrl(file: File): Promise<string> {
   })
 }
 
-async function fetchServerState(): Promise<LabnoteServerState | null> {
-  try {
-    const res = await fetch(SERVER_STATE_URL, { headers: { Accept: 'application/json' } })
-    if (!res.ok) return null
-    const data = (await res.json()) as Partial<LabnoteServerState>
-    return {
-      version: typeof data.version === 'number' ? data.version : 1,
-      projects: Array.isArray(data.projects) ? data.projects : [],
-      experiments: Array.isArray(data.experiments) ? data.experiments : [],
-      entries: toEntryRecord(data.entries),
-      attachments: Array.isArray(data.attachments) ? data.attachments : [],
-    }
-  } catch {
-    return null
+function buildSessionHeaders(
+  token?: string,
+  initial?: HeadersInit
+): HeadersInit {
+  const headers = new Headers(initial)
+  if (token) {
+    headers.set('x-labnote-session', token)
+  }
+  return headers
+}
+
+function readStoredSessionToken(): string {
+  if (typeof window === 'undefined') return ''
+  return window.localStorage.getItem(SESSION_STORAGE_KEY) ?? ''
+}
+
+function writeStoredSessionToken(token: string) {
+  if (typeof window === 'undefined') return
+  if (token) {
+    window.localStorage.setItem(SESSION_STORAGE_KEY, token)
+  } else {
+    window.localStorage.removeItem(SESSION_STORAGE_KEY)
   }
 }
 
-async function fetchServerInfo(): Promise<LabnoteServerInfo | null> {
+function defaultDeviceName(): string {
+  if (typeof navigator === 'undefined') return 'Lab device'
+  const base = navigator.platform || navigator.userAgent || 'Lab device'
+  const compact = base.trim().replace(/\s+/g, ' ')
+  return compact.slice(0, 80) || 'Lab device'
+}
+
+function readPairCodeFromUrl(): string {
+  if (typeof window === 'undefined') return ''
+  const params = new URLSearchParams(window.location.search)
+  return (params.get(PAIR_QUERY_PARAM) ?? '').trim()
+}
+
+function clearPairCodeFromUrl() {
+  if (typeof window === 'undefined') return
+  const url = new URL(window.location.href)
+  if (!url.searchParams.has(PAIR_QUERY_PARAM)) return
+  url.searchParams.delete(PAIR_QUERY_PARAM)
+  const next = `${url.pathname}${url.search}${url.hash}`
+  window.history.replaceState({}, '', next)
+}
+
+async function fetchServerState(sessionToken?: string): Promise<ServerStateFetchResult> {
   try {
-    const res = await fetch(SERVER_INFO_URL, { headers: { Accept: 'application/json' } })
+    const res = await fetch(SERVER_STATE_URL, {
+      headers: buildSessionHeaders(sessionToken, { Accept: 'application/json' }),
+    })
+    if (res.status === 401 || res.status === 403) {
+      return { state: null, reachable: true, unauthorized: true }
+    }
+    if (!res.ok) return { state: null, reachable: true, unauthorized: false }
+    const data = (await res.json()) as Partial<LabnoteServerState>
+    return {
+      reachable: true,
+      unauthorized: false,
+      state: {
+        version: typeof data.version === 'number' ? data.version : 1,
+        projects: Array.isArray(data.projects) ? data.projects : [],
+        experiments: Array.isArray(data.experiments) ? data.experiments : [],
+        entries: toEntryRecord(data.entries),
+        attachments: Array.isArray(data.attachments) ? data.attachments : [],
+      },
+    }
+  } catch {
+    return { state: null, reachable: false, unauthorized: false }
+  }
+}
+
+async function fetchServerInfo(sessionToken?: string): Promise<LabnoteServerInfo | null> {
+  try {
+    const res = await fetch(SERVER_INFO_URL, {
+      headers: buildSessionHeaders(sessionToken, { Accept: 'application/json' }),
+    })
     if (!res.ok) return null
     const data = (await res.json()) as LabnoteServerInfo
     if (!data || typeof data !== 'object') return null
@@ -252,11 +349,65 @@ async function fetchServerInfo(): Promise<LabnoteServerInfo | null> {
   }
 }
 
-async function patchServerState(partial: Partial<LabnoteServerState>) {
+async function bootstrapPairSession(deviceName: string): Promise<PairSessionResult | null> {
+  try {
+    const res = await fetch(PAIR_BOOTSTRAP_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ deviceName }),
+    })
+    if (!res.ok) return null
+    return (await res.json()) as PairSessionResult
+  } catch {
+    return null
+  }
+}
+
+async function createPairCode(sessionToken: string, ttlSeconds = 300): Promise<PairCodeCreateResult | null> {
+  try {
+    const res = await fetch(PAIR_CODE_URL, {
+      method: 'POST',
+      headers: buildSessionHeaders(sessionToken, { 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ ttlSeconds }),
+    })
+    if (!res.ok) return null
+    return (await res.json()) as PairCodeCreateResult
+  } catch {
+    return null
+  }
+}
+
+async function redeemPairCode(code: string, deviceName: string): Promise<PairSessionResult | null> {
+  try {
+    const res = await fetch(PAIR_REDEEM_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code, deviceName }),
+    })
+    if (!res.ok) return null
+    return (await res.json()) as PairSessionResult
+  } catch {
+    return null
+  }
+}
+
+async function logoutPairSession(sessionToken: string): Promise<boolean> {
+  try {
+    const res = await fetch(PAIR_LOGOUT_URL, {
+      method: 'POST',
+      headers: buildSessionHeaders(sessionToken),
+    })
+    return res.ok
+  } catch {
+    return false
+  }
+}
+
+async function patchServerState(partial: Partial<LabnoteServerState>, sessionToken?: string) {
   try {
     const res = await fetch(SERVER_STATE_URL, {
       method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
+      headers: buildSessionHeaders(sessionToken, { 'Content-Type': 'application/json' }),
       body: JSON.stringify(partial),
     })
     return res.ok
@@ -266,14 +417,14 @@ async function patchServerState(partial: Partial<LabnoteServerState>) {
   }
 }
 
-async function uploadImageToServer(file: File): Promise<{ url: string } | null> {
+async function uploadImageToServer(file: File, sessionToken?: string): Promise<{ url: string } | null> {
   if (!file.type.startsWith('image/')) return null
   try {
     const dataUrl = await readFileAsDataUrl(file)
     if (!dataUrl.startsWith('data:')) return null
     const res = await fetch('/api/upload', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: buildSessionHeaders(sessionToken, { 'Content-Type': 'application/json' }),
       body: JSON.stringify({ filename: file.name, type: file.type, dataUrl }),
     })
     if (!res.ok) return null
@@ -790,6 +941,11 @@ function App() {
   const [serverAvailable, setServerAvailable] = useState(false)
   const [serverHydrated, setServerHydrated] = useState(false)
   const [serverInfo, setServerInfo] = useState<LabnoteServerInfo | null>(null)
+  const [sessionToken, setSessionToken] = useState(() => readStoredSessionToken())
+  const [pairCodeInput, setPairCodeInput] = useState('')
+  const [pairingBusy, setPairingBusy] = useState(false)
+  const [pairingMessage, setPairingMessage] = useState<string | null>(null)
+  const [generatedPairCode, setGeneratedPairCode] = useState<{ code: string; expiresAt: string } | null>(null)
   const [lastServerSync, setLastServerSync] = useState<string | null>(null)
   const [uploadShared, setUploadShared] = useState(() => {
     if (typeof window === 'undefined') return true
@@ -828,6 +984,9 @@ function App() {
     if (typeof window === 'undefined') return
     window.localStorage.setItem('labnote.uploadShared', uploadShared ? '1' : '0')
   }, [uploadShared])
+  useEffect(() => {
+    writeStoredSessionToken(sessionToken)
+  }, [sessionToken])
   useEffect(() => {
     if (typeof window === 'undefined') return
     const id = window.setTimeout(() => {
@@ -1185,20 +1344,82 @@ function App() {
     return sampleData.attachments
   })
 
+  const refreshServerInfo = useCallback(
+    async (tokenOverride?: string) => {
+      const token = tokenOverride ?? sessionToken
+      const info = await fetchServerInfo(token || undefined)
+      setServerInfo(info)
+      return info
+    },
+    [sessionToken]
+  )
+
   useEffect(() => {
     if (typeof window === 'undefined') return
     let cancelled = false
 
     const load = async () => {
-      const state = await fetchServerState()
+      let activeToken = sessionToken
+      let info = await fetchServerInfo(activeToken || undefined)
       if (cancelled) return
 
-      if (state) {
-        setServerAvailable(true)
-        setEntryDrafts((local) => mergeEntries(state.entries, local))
-        setAttachmentsStore((local) => mergeById(state.attachments, local))
-      } else {
+      if (!info) {
         setServerAvailable(false)
+        setServerInfo(null)
+        setServerHydrated(true)
+        return
+      }
+
+      setServerAvailable(true)
+      setServerInfo(info)
+
+      if (info.pairingRequired && !info.paired && info.pairOwnerMissing && !activeToken) {
+        const bootstrapped = await bootstrapPairSession('Primary desktop')
+        if (cancelled) return
+        if (bootstrapped?.sessionToken) {
+          activeToken = bootstrapped.sessionToken
+          setSessionToken(bootstrapped.sessionToken)
+          const nextInfo = await fetchServerInfo(activeToken)
+          if (cancelled) return
+          if (nextInfo) {
+            info = nextInfo
+            setServerInfo(nextInfo)
+          }
+          setPairingMessage('Primary device paired. Generate a one-time code for mobile.')
+        }
+      }
+
+      if (info.pairingRequired && !info.paired) {
+        const codeFromUrl = readPairCodeFromUrl()
+        if (codeFromUrl) {
+          const redeemed = await redeemPairCode(codeFromUrl, defaultDeviceName())
+          if (cancelled) return
+          if (redeemed?.sessionToken) {
+            clearPairCodeFromUrl()
+            activeToken = redeemed.sessionToken
+            setSessionToken(redeemed.sessionToken)
+            const nextInfo = await fetchServerInfo(activeToken)
+            if (cancelled) return
+            if (nextInfo) {
+              info = nextInfo
+              setServerInfo(nextInfo)
+            }
+            setPairingMessage('Device paired successfully.')
+          }
+        }
+      }
+
+      if (!info.pairingRequired || info.paired) {
+        const stateResult = await fetchServerState(activeToken || undefined)
+        if (cancelled) return
+        if (stateResult.state) {
+          const serverState = stateResult.state
+          setEntryDrafts((local) => mergeEntries(serverState.entries, local))
+          setAttachmentsStore((local) => mergeById(serverState.attachments, local))
+        }
+        if (!stateResult.reachable) {
+          setServerAvailable(false)
+        }
       }
 
       setServerHydrated(true)
@@ -1208,21 +1429,60 @@ function App() {
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [sessionToken])
 
-  const refreshServerInfo = useCallback(async () => {
-    if (!serverAvailable) {
-      setServerInfo(null)
+  const handleGeneratePairCode = useCallback(async () => {
+    if (!sessionToken) {
+      setPairingMessage('Pair this device first before generating mobile codes.')
       return
     }
-    const info = await fetchServerInfo()
-    setServerInfo(info)
-  }, [serverAvailable])
+    setPairingBusy(true)
+    setPairingMessage(null)
+    const created = await createPairCode(sessionToken, 300)
+    if (!created?.code || !created.expiresAt) {
+      setPairingMessage('Unable to generate pair code.')
+      setPairingBusy(false)
+      return
+    }
+    setGeneratedPairCode({ code: created.code, expiresAt: created.expiresAt })
+    setPairingMessage('One-time pair code generated. It expires automatically.')
+    await refreshServerInfo(sessionToken)
+    setPairingBusy(false)
+  }, [refreshServerInfo, sessionToken])
 
-  useEffect(() => {
-    if (!serverHydrated) return
-    void refreshServerInfo()
-  }, [refreshServerInfo, serverHydrated])
+  const handleRedeemPairCode = useCallback(async () => {
+    const code = pairCodeInput.trim()
+    if (!code) {
+      setPairingMessage('Enter a one-time pair code.')
+      return
+    }
+    setPairingBusy(true)
+    setPairingMessage(null)
+    const redeemed = await redeemPairCode(code, defaultDeviceName())
+    if (!redeemed?.sessionToken) {
+      setPairingMessage('Pair code is invalid or expired.')
+      setPairingBusy(false)
+      return
+    }
+    setSessionToken(redeemed.sessionToken)
+    setPairCodeInput('')
+    setGeneratedPairCode(null)
+    setPairingMessage('Device paired. Shared sync is now available.')
+    setPairingBusy(false)
+  }, [pairCodeInput])
+
+  const handleUnpairDevice = useCallback(async () => {
+    if (!sessionToken) return
+    setPairingBusy(true)
+    const ok = await logoutPairSession(sessionToken)
+    setSessionToken('')
+    setGeneratedPairCode(null)
+    setPairingMessage(ok ? 'This device was unpaired.' : 'Unable to contact server to unpair this device.')
+    await refreshServerInfo('')
+    setPairingBusy(false)
+  }, [refreshServerInfo, sessionToken])
+
+  const hasServerSession = !serverInfo?.pairingRequired || Boolean(serverInfo?.paired)
 
   // Persist drafts to localStorage for quick offline reloads
   useEffect(() => {
@@ -1251,7 +1511,7 @@ function App() {
 
   useEffect(() => {
     if (typeof window === 'undefined') return
-    if (!serverHydrated || !serverAvailable) return
+    if (!serverHydrated || !serverAvailable || !hasServerSession) return
     const id = window.setTimeout(() => {
       void (async () => {
         const ok = await patchServerState({
@@ -1259,15 +1519,15 @@ function App() {
           experiments: [],
           entries: entryDrafts,
           attachments: attachmentsStore,
-        })
+        }, sessionToken || undefined)
         if (ok) {
           setLastServerSync(new Date().toISOString())
-          void refreshServerInfo()
+          void refreshServerInfo(sessionToken || undefined)
         }
       })()
     }, 400)
     return () => window.clearTimeout(id)
-  }, [attachmentsStore, entryDrafts, refreshServerInfo, serverAvailable, serverHydrated])
+  }, [attachmentsStore, entryDrafts, hasServerSession, refreshServerInfo, serverAvailable, serverHydrated, sessionToken])
 
   const attachmentsForEntry = useCallback(
     (entryId: string) => attachmentsStore.filter((a) => a.entryId === entryId),
@@ -1279,7 +1539,7 @@ function App() {
       if (!files.length) return []
 
       const saved: Attachment[] = []
-      const shouldUpload = uploadShared && serverAvailable
+      const shouldUpload = uploadShared && serverAvailable && hasServerSession
 
       for (const file of files) {
         const id = `att-${crypto.randomUUID?.() ?? Math.random().toString(36).slice(2)}`
@@ -1303,7 +1563,7 @@ function App() {
         let thumbnail = type === 'image' ? URL.createObjectURL(file) : undefined
 
         if (shouldUpload && type === 'image') {
-          const uploaded = await uploadImageToServer(file)
+          const uploaded = await uploadImageToServer(file, sessionToken || undefined)
           if (uploaded?.url) {
             storagePath = uploaded.url
             thumbnail = uploaded.url
@@ -1341,7 +1601,7 @@ function App() {
 
       return saved
     },
-    [serverAvailable, uploadShared]
+    [hasServerSession, serverAvailable, sessionToken, uploadShared]
   )
 
   const addFileDestination = useCallback((entryId: string, val: { path: string; label?: string }): Attachment => {
@@ -1970,6 +2230,14 @@ function App() {
           serverAvailable={serverAvailable}
           serverHydrated={serverHydrated}
           serverInfo={serverInfo}
+          pairCodeInput={pairCodeInput}
+          onPairCodeInputChange={setPairCodeInput}
+          onRedeemPairCode={handleRedeemPairCode}
+          onGeneratePairCode={handleGeneratePairCode}
+          generatedPairCode={generatedPairCode}
+          pairingBusy={pairingBusy}
+          pairingMessage={pairingMessage}
+          onUnpairDevice={handleUnpairDevice}
           lastServerSync={lastServerSync}
           viewerMode={viewerMode}
           onToggleViewerMode={() => setViewerMode((prev) => !prev)}
@@ -2262,6 +2530,14 @@ interface EditorPaneProps {
   serverAvailable: boolean
   serverHydrated: boolean
   serverInfo: LabnoteServerInfo | null
+  pairCodeInput: string
+  onPairCodeInputChange: (value: string) => void
+  onRedeemPairCode: () => void
+  onGeneratePairCode: () => void
+  generatedPairCode: { code: string; expiresAt: string } | null
+  pairingBusy: boolean
+  pairingMessage: string | null
+  onUnpairDevice: () => void
   lastServerSync: string | null
   viewerMode: boolean
   onToggleViewerMode: () => void
@@ -2314,6 +2590,14 @@ function EditorPane({
   serverAvailable,
   serverHydrated,
   serverInfo,
+  pairCodeInput,
+  onPairCodeInputChange,
+  onRedeemPairCode,
+  onGeneratePairCode,
+  generatedPairCode,
+  pairingBusy,
+  pairingMessage,
+  onUnpairDevice,
   lastServerSync,
   viewerMode,
   onToggleViewerMode,
@@ -3124,6 +3408,14 @@ function EditorPane({
             serverAvailable={serverAvailable}
             serverHydrated={serverHydrated}
             serverInfo={serverInfo}
+            pairCodeInput={pairCodeInput}
+            onPairCodeInputChange={onPairCodeInputChange}
+            onRedeemPairCode={onRedeemPairCode}
+            onGeneratePairCode={onGeneratePairCode}
+            generatedPairCode={generatedPairCode}
+            pairingBusy={pairingBusy}
+            pairingMessage={pairingMessage}
+            onUnpairDevice={onUnpairDevice}
             lastServerSync={lastServerSync}
             uploadShared={uploadShared}
           />
@@ -3328,6 +3620,14 @@ interface MetaPanelProps {
   serverAvailable: boolean
   serverHydrated: boolean
   serverInfo: LabnoteServerInfo | null
+  pairCodeInput: string
+  onPairCodeInputChange: (value: string) => void
+  onRedeemPairCode: () => void
+  onGeneratePairCode: () => void
+  generatedPairCode: { code: string; expiresAt: string } | null
+  pairingBusy: boolean
+  pairingMessage: string | null
+  onUnpairDevice: () => void
   lastServerSync: string | null
   uploadShared: boolean
 }
@@ -3490,17 +3790,37 @@ function MetaPanelContent({
   serverAvailable,
   serverHydrated,
   serverInfo,
+  pairCodeInput,
+  onPairCodeInputChange,
+  onRedeemPairCode,
+  onGeneratePairCode,
+  generatedPairCode,
+  pairingBusy,
+  pairingMessage,
+  onUnpairDevice,
   lastServerSync,
   uploadShared,
 }: MetaPanelProps) {
   const pinned = entry?.pinnedRegions ?? []
-  const serverOrigin = typeof window === 'undefined' ? '' : window.location.origin
+  const serverOrigin = serverInfo?.serverOrigin ?? (typeof window === 'undefined' ? '' : window.location.origin)
   const formatMaybeDate = (value?: string | null) => {
     if (!value) return '—'
     const parsed = new Date(value)
     return Number.isNaN(parsed.getTime()) ? value : dtFormat.format(parsed)
   }
-  const serverStatus = !serverHydrated ? 'Checking…' : serverAvailable ? 'Reachable' : 'Offline'
+  const pairingRequired = serverInfo?.pairingRequired !== false
+  const paired = !pairingRequired || Boolean(serverInfo?.paired)
+  const canGeneratePairCode = Boolean(serverInfo?.pairCanGenerate)
+  const pairLink = generatedPairCode?.code
+    ? `${serverOrigin.replace(/\/$/, '')}/?${PAIR_QUERY_PARAM}=${encodeURIComponent(generatedPairCode.code)}`
+    : ''
+  const serverStatus = !serverHydrated
+    ? 'Checking…'
+    : !serverAvailable
+      ? 'Offline'
+      : paired
+        ? 'Reachable'
+        : 'Pair required'
 
   return (
     <>
@@ -3619,11 +3939,27 @@ function MetaPanelContent({
             <span className="title-sm">{serverOrigin || '—'}</span>
           </div>
           <div className="sync-row">
+            <span className="muted tiny">Pairing</span>
+            <span className={`status-chip ${paired ? 'success' : 'warning'}`}>
+              {paired ? 'Paired' : 'Code required'}
+            </span>
+          </div>
+          <div className="sync-row">
+            <span className="muted tiny">Session role</span>
+            <span className="muted tiny">{serverInfo?.sessionRole ?? '—'}</span>
+          </div>
+          <div className="sync-row">
             <span className="muted tiny">Shared upload</span>
-            <span className={`pill soft ${uploadShared && serverAvailable ? 'active-pill' : ''}`}>
+            <span className={`pill soft ${uploadShared && serverAvailable && paired ? 'active-pill' : ''}`}>
               {uploadShared ? 'On' : 'Off'}
             </span>
           </div>
+          {serverInfo?.tailscaleHost && (
+            <div className="sync-row">
+              <span className="muted tiny">Tailscale host</span>
+              <span className="muted tiny">{serverInfo.tailscaleHost}</span>
+            </div>
+          )}
           <div className="sync-row">
             <span className="muted tiny">Last sync (this client)</span>
             <span className="muted tiny">{formatMaybeDate(lastServerSync)}</span>
@@ -3640,9 +3976,83 @@ function MetaPanelContent({
             <span className="muted tiny">Data folder</span>
             <span className="muted tiny">{serverInfo?.dataDir ?? '—'}</span>
           </div>
+          {pairingRequired && (
+            <div className="pair-section" data-testid="pairing-controls">
+              {canGeneratePairCode && (
+                <div className="pair-row">
+                  <button
+                    className="ghost"
+                    type="button"
+                    onClick={onGeneratePairCode}
+                    disabled={pairingBusy}
+                    data-testid="pair-code-generate"
+                  >
+                    Generate one-time pair code
+                  </button>
+                  {generatedPairCode && (
+                    <div className="pair-code-box" data-testid="pair-code-display">
+                      {generatedPairCode.code}
+                    </div>
+                  )}
+                  {generatedPairCode && (
+                    <div className="muted tiny">
+                      Expires {formatMaybeDate(generatedPairCode.expiresAt)}
+                    </div>
+                  )}
+                  {pairLink && (
+                    <div className="pair-link-wrap">
+                      <div className="muted tiny">Pair link</div>
+                      <a className="pair-link" href={pairLink}>{pairLink}</a>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {!paired && (
+                <div className="pair-row">
+                  <label htmlFor="pair-code-input" className="muted tiny">Enter one-time pair code</label>
+                  <div className="field-row">
+                    <input
+                      id="pair-code-input"
+                      value={pairCodeInput}
+                      onChange={(e) => onPairCodeInputChange(e.target.value)}
+                      placeholder="6-digit code"
+                      autoComplete="one-time-code"
+                      data-testid="pair-code-input"
+                    />
+                    <button
+                      className="accent"
+                      type="button"
+                      onClick={onRedeemPairCode}
+                      disabled={pairingBusy}
+                      data-testid="pair-code-submit"
+                    >
+                      Pair device
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {paired && (
+                <div className="pair-row">
+                  <button
+                    className="ghost"
+                    type="button"
+                    onClick={onUnpairDevice}
+                    disabled={pairingBusy}
+                    data-testid="pair-code-unpair"
+                  >
+                    Unpair this device
+                  </button>
+                </div>
+              )}
+
+              {pairingMessage && <div className="muted tiny">{pairingMessage}</div>}
+            </div>
+          )}
         </div>
         <div className="muted tiny">
-          Open this URL on mobile to connect to the same server instance.
+          Open this URL over Tailscale on mobile, then use a one-time pair code to unlock shared sync.
         </div>
       </section>
 

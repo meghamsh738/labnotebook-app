@@ -7,6 +7,7 @@ export default defineConfig({
   testDir: './tests',
   fullyParallel: false,
   workers: 1,
+  retries: process.env.CI ? 2 : 0,
   reporter: [['list']],
   timeout: 30_000,
   expect: { timeout: 10_000 },
@@ -29,8 +30,14 @@ export default defineConfig({
   },
   projects: [
     {
-      name: 'chromium',
+      name: 'desktop-chromium',
       use: { ...devices['Desktop Chrome'] },
+      testIgnore: /mobile-pair\.spec\.ts/,
+    },
+    {
+      name: 'mobile-chromium',
+      use: { ...devices['Pixel 7'] },
+      testMatch: /mobile-pair\.spec\.ts/,
     },
   ],
 })

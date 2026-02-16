@@ -203,6 +203,16 @@ test.describe('Lab note taking app', () => {
     await expect(panel).toContainText('Shared upload')
   })
 
+  test('desktop owner can generate one-time pair code', async ({ page }) => {
+    await boot(page, { noFail: '1' })
+    await selectFirstEntry(page)
+    await page.getByTestId('editor-tab-details').click()
+    const panel = page.getByTestId('mobile-sync-check')
+    await expect(panel).toContainText('Paired')
+    await page.getByTestId('pair-code-generate').click()
+    await expect(page.getByTestId('pair-code-display')).toContainText(/^\d{6}$/)
+  })
+
   test('persists entries after local storage reset', async ({ page }) => {
     await boot(page, { noFail: '1' })
     await selectCalendarDate(page, '2025-12-09')

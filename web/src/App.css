@@ -1521,6 +1521,47 @@ textarea:focus-visible {
   }
 }
 
+.pair-section {
+  margin-top: 8px;
+  border-top: 1px dashed var(--border);
+  padding-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.pair-row {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.pair-code-box {
+  font-family: var(--font-mono);
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  padding: 10px 12px;
+  width: fit-content;
+}
+
+.pair-link-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.pair-link {
+  color: var(--accent);
+  word-break: break-word;
+  text-decoration: underline;
+}
+
 .signature {
   margin-top: auto;
   display: flex;
