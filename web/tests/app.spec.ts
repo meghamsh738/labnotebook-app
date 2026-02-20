@@ -20,6 +20,8 @@ async function boot(
     stubPicker?: boolean
     setupComplete?: boolean
     appPaths?: typeof defaultPaths
+    entries?: Record<string, unknown>
+    attachments?: unknown[]
   }
 ) {
   const initOpts = { noFail: '1', setupComplete: true, ...opts }
@@ -39,6 +41,12 @@ async function boot(
       window.localStorage.setItem('labnote.setupComplete', '1')
       window.localStorage.setItem('labnote.appPaths', JSON.stringify(paths))
       window.localStorage.setItem('labnote.masterSyncPath', paths.syncRoot)
+    }
+    if (o?.entries) {
+      window.localStorage.setItem('labnote.entries', JSON.stringify(o.entries))
+    }
+    if (o?.attachments) {
+      window.localStorage.setItem('labnote.attachments', JSON.stringify(o.attachments))
     }
     if (o?.stubPicker) {
       ;(window as unknown as { showDirectoryPicker?: unknown }).showDirectoryPicker = undefined
@@ -164,6 +172,97 @@ test.describe('Lab note taking app', () => {
     await expect(page.getByRole('heading', { name: 'Setup' })).toHaveCount(0)
   })
 
+  test('legacy daily scaffold is compacted to context-only', async ({ page }) => {
+    const today = new Date()
+    const todayIso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(
+      today.getDate()
+    ).padStart(2, '0')}`
+    const formatter = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+    const title = formatter.format(today)
+    const legacyEntryId = 'entry-legacy-scaffold'
+    const nowIso = `${todayIso}T09:00:00.000Z`
+
+    const legacyEntries = {
+      [legacyEntryId]: {
+        id: legacyEntryId,
+        createdDatetime: nowIso,
+        lastEditedDatetime: nowIso,
+        authorId: 'u1',
+        title,
+        dateBucket: todayIso,
+        isDaily: true,
+        content: [
+          { id: 'legacy-context-h', type: 'heading', level: 2, text: 'Context', locked: true },
+          {
+            id: 'legacy-context',
+            type: 'paragraph',
+            text: '',
+            guide: 'What question are you answering today? Include model, conditions, and expected outcome.',
+          },
+          { id: 'legacy-setup-h', type: 'heading', level: 2, text: 'Setup', locked: true },
+          {
+            id: 'legacy-setup',
+            type: 'checklist',
+            items: [
+              { id: 'legacy-setup-1', text: '', done: false, guide: 'Sample IDs and groups confirmed' },
+              { id: 'legacy-setup-2', text: '', done: false, guide: 'Controls + blanks prepared' },
+            ],
+          },
+          { id: 'legacy-proc-h', type: 'heading', level: 2, text: 'Procedure', locked: true },
+          { id: 'legacy-proc', type: 'paragraph', text: '' },
+          { id: 'legacy-obs-h', type: 'heading', level: 2, text: 'Observations', locked: true },
+          { id: 'legacy-obs', type: 'paragraph', text: '' },
+          { id: 'legacy-next-h', type: 'heading', level: 2, text: 'Next steps', locked: true },
+          { id: 'legacy-next', type: 'paragraph', text: '' },
+        ],
+        tags: [],
+        projectTags: [],
+        experimentTags: [],
+        searchTerms: [],
+        linkedFiles: [],
+        pinnedRegions: [
+          {
+            id: 'legacy-region-context',
+            entryId: legacyEntryId,
+            label: 'Context',
+            blockIds: ['legacy-context-h', 'legacy-context'],
+            linkedAttachments: [],
+          },
+          {
+            id: 'legacy-region-setup',
+            entryId: legacyEntryId,
+            label: 'Setup',
+            blockIds: ['legacy-setup-h', 'legacy-setup'],
+            linkedAttachments: [],
+          },
+        ],
+      },
+    }
+
+    await boot(page, { noFail: '1', entries: legacyEntries })
+    await ensureViewMode(page)
+
+    await expect(page.getByRole('heading', { name: 'Context' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Setup' })).toHaveCount(0)
+  })
+
+  test('alignment controls render icon buttons', async ({ page }) => {
+    await boot(page, { noFail: '1' })
+    await ensureEditMode(page)
+
+    await expect(page.getByTestId('editor-align-left').locator('.align-icon-left')).toBeVisible()
+    await expect(page.getByTestId('editor-align-center').locator('.align-icon-center')).toBeVisible()
+    await expect(page.getByTestId('editor-align-right').locator('.align-icon-right')).toBeVisible()
+    await expect(page.getByTestId('editor-align-justify').locator('.align-icon-justify')).toBeVisible()
+
+    await page.getByRole('tab', { name: 'Protocols' }).click()
+    await page.getByRole('button', { name: 'Edit' }).click()
+    await expect(page.getByTestId('protocol-align-left').locator('.align-icon-left')).toBeVisible()
+    await expect(page.getByTestId('protocol-align-center').locator('.align-icon-center')).toBeVisible()
+    await expect(page.getByTestId('protocol-align-right').locator('.align-icon-right')).toBeVisible()
+    await expect(page.getByTestId('protocol-align-justify').locator('.align-icon-justify')).toBeVisible()
+  })
+
   test('header collapses while keeping tools visible', async ({ page }) => {
     await boot(page, { noFail: '1' })
     await page.getByTestId('today-entry').click()
@@ -285,6 +384,71 @@ test.describe('Lab note taking app', () => {
     await ensureEditMode(page)
     const cameraInput = page.getByTestId('camera-input')
     await expect(cameraInput).toHaveAttribute('capture', 'environment')
+  })
+
+  test('mobile uses compact image rows while desktop keeps preview images', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 })
+    const today = new Date()
+    const todayIso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(
+      today.getDate()
+    ).padStart(2, '0')}`
+    const formatter = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+    const title = formatter.format(today)
+    const entryId = 'entry-mobile-image'
+    const imageId = 'att-mobile-image'
+    const nowIso = `${todayIso}T10:00:00.000Z`
+    const imageDataUrl =
+      'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO2fXU4AAAAASUVORK5CYII='
+
+    await boot(page, {
+      noFail: '1',
+      entries: {
+        [entryId]: {
+          id: entryId,
+          createdDatetime: nowIso,
+          lastEditedDatetime: nowIso,
+          authorId: 'u1',
+          title,
+          dateBucket: todayIso,
+          isDaily: true,
+          content: [
+            { id: 'ctx-h', type: 'heading', level: 2, text: 'Context', locked: true },
+            { id: 'ctx-p', type: 'paragraph', text: 'Camera capture attached.' },
+            { id: 'img-1', type: 'image', attachmentId: imageId, caption: 'mobile-capture.png' },
+          ],
+          tags: [],
+          projectTags: [],
+          experimentTags: [],
+          searchTerms: [],
+          linkedFiles: [imageId],
+          pinnedRegions: [
+            { id: 'region-ctx', entryId, label: 'Context', blockIds: ['ctx-h', 'ctx-p'], linkedAttachments: [] },
+          ],
+        },
+      },
+      attachments: [
+        {
+          id: imageId,
+          entryId,
+          type: 'image',
+          filename: 'mobile-capture.png',
+          filesize: '12 KB',
+          storagePath: 'mobile-capture.png',
+          thumbnail: imageDataUrl,
+        },
+      ],
+    })
+    await ensureViewMode(page)
+
+    const imageCard = page.getByTestId('image-block-card').first()
+    await expect(imageCard).toBeVisible()
+    await expect(imageCard.getByTestId('image-block-mobile')).toBeVisible()
+    await expect(imageCard.getByTestId('image-block-preview')).toBeHidden()
+    await expect(imageCard).toContainText('mobile-capture.png')
+
+    await page.setViewportSize({ width: 1280, height: 900 })
+    await expect(imageCard.getByTestId('image-block-preview')).toBeVisible()
+    await expect(imageCard.getByTestId('image-block-mobile')).toBeHidden()
   })
 
   test('context stays editable after backspace at start', async ({ page }) => {

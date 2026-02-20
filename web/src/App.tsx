@@ -444,6 +444,8 @@ const LOCKED_TEMPLATE_SECTION_LABELS = new Set([
   'Experiment',
   'Results',
 ])
+const LEGACY_DAILY_SECTION_LABELS = new Set(['Setup', 'Procedure', 'Observations', 'Next steps'])
+const DAY_CONTEXT_GUIDE = '• ........................................\n• ........................................\n• ........................................'
 
 const DEFAULT_PROJECT_TAGS = [
   'IL-17 WT KO aging project',
@@ -520,6 +522,142 @@ function applyLockedTemplateHeadings(entry: Entry): Entry {
   return changed ? { ...entry, content: nextContent } : entry
 }
 
+function findContextBlocks(entry: Entry): {
+  heading: Extract<Block, { type: 'heading' }> | null
+  paragraph: Extract<Block, { type: 'paragraph' }> | null
+} {
+  let contextHeading: Extract<Block, { type: 'heading' }> | null = null
+  let contextParagraph: Extract<Block, { type: 'paragraph' }> | null = null
+
+  for (let idx = 0; idx < entry.content.length; idx += 1) {
+    const block = entry.content[idx]
+    if (block.type !== 'heading') continue
+    if (block.text.trim().toLowerCase() !== 'context') continue
+    contextHeading = block
+
+    for (let next = idx + 1; next < entry.content.length; next += 1) {
+      const candidate = entry.content[next]
+      if (candidate.type === 'heading') break
+      if (candidate.type === 'paragraph') {
+        contextParagraph = candidate
+        break
+      }
+    }
+    break
+  }
+
+  if (!contextParagraph) {
+    const firstParagraph = entry.content.find((block): block is Extract<Block, { type: 'paragraph' }> => block.type === 'paragraph')
+    contextParagraph = firstParagraph ?? null
+  }
+
+  return { heading: contextHeading, paragraph: contextParagraph }
+}
+
+function blockHasMeaningfulContent(block: Block): boolean {
+  switch (block.type) {
+    case 'paragraph':
+    case 'quote':
+      return block.text.trim().length > 0
+    case 'checklist':
+      return block.items.some((item) => item.done || item.text.trim().length > 0)
+    case 'list':
+      return block.items.some((item) => item.text.trim().length > 0)
+    case 'table':
+      return block.data.some((row) => row.some((cell) => cell.trim().length > 0))
+    case 'image':
+    case 'file':
+      return true
+    case 'heading': {
+      const label = block.text.trim()
+      if (!label) return false
+      return !LOCKED_TEMPLATE_SECTION_LABELS.has(label)
+    }
+    case 'divider':
+      return false
+    default:
+      return false
+  }
+}
+
+function shouldCondenseLegacyDailyEntry(entry: Entry): boolean {
+  if (!entry.isDaily) return false
+  const hasLegacySections =
+    entry.content.some(
+      (block) => block.type === 'heading' && LEGACY_DAILY_SECTION_LABELS.has(block.text.trim())
+    ) ||
+    (entry.pinnedRegions ?? []).some((region) => LEGACY_DAILY_SECTION_LABELS.has(region.label))
+  if (!hasLegacySections) return false
+
+  const { heading: contextHeading, paragraph: contextParagraph } = findContextBlocks(entry)
+  const contextIds = new Set<string>()
+  if (contextHeading) contextIds.add(contextHeading.id)
+  if (contextParagraph) contextIds.add(contextParagraph.id)
+
+  const hasLinkedLegacyRegionAttachments = (entry.pinnedRegions ?? []).some(
+    (region) =>
+      LEGACY_DAILY_SECTION_LABELS.has(region.label) &&
+      Array.isArray(region.linkedAttachments) &&
+      region.linkedAttachments.length > 0
+  )
+  if (hasLinkedLegacyRegionAttachments) return false
+
+  for (const block of entry.content) {
+    if (contextIds.has(block.id)) continue
+    if (block.type === 'heading' && LEGACY_DAILY_SECTION_LABELS.has(block.text.trim())) continue
+    if (blockHasMeaningfulContent(block)) return false
+  }
+
+  return true
+}
+
+function condenseLegacyDailyEntry(entry: Entry): Entry {
+  if (!shouldCondenseLegacyDailyEntry(entry)) return entry
+
+  const nowIso = new Date().toISOString()
+  const { heading: contextHeading, paragraph: contextParagraph } = findContextBlocks(entry)
+  const headingId = contextHeading?.id ?? newId('b-')
+  const paragraphId = contextParagraph?.id ?? newId('b-')
+  const contextRegion = (entry.pinnedRegions ?? []).find((region) => region.label.trim().toLowerCase() === 'context')
+
+  const compactHeading: Extract<Block, { type: 'heading' }> = {
+    id: headingId,
+    type: 'heading',
+    level: 2,
+    text: 'Context',
+    locked: true,
+    align: contextHeading?.align,
+    runs: contextHeading?.runs,
+    updatedAt: contextHeading?.updatedAt ?? nowIso,
+    updatedBy: contextHeading?.updatedBy ?? 'me',
+  }
+  const compactParagraph: Extract<Block, { type: 'paragraph' }> = {
+    id: paragraphId,
+    type: 'paragraph',
+    text: contextParagraph?.text ?? '',
+    runs: contextParagraph?.runs,
+    align: contextParagraph?.align,
+    guide: DAY_CONTEXT_GUIDE,
+    updatedAt: contextParagraph?.updatedAt ?? nowIso,
+    updatedBy: contextParagraph?.updatedBy ?? 'me',
+  }
+
+  const nextRegion: PinnedRegion = {
+    id: contextRegion?.id ?? newId('region-'),
+    entryId: entry.id,
+    label: 'Context',
+    blockIds: [headingId, paragraphId],
+    linkedAttachments: contextRegion?.linkedAttachments ?? [],
+    summary: contextRegion?.summary,
+  }
+
+  return {
+    ...entry,
+    content: [compactHeading, compactParagraph],
+    pinnedRegions: [nextRegion],
+  }
+}
+
 function buildTemplate(templateId: EntryTemplateId, entryId: string, nowIso: string): { content: Block[]; pinnedRegions: PinnedRegion[] } {
   if (templateId === 'blank') {
     return {
@@ -538,7 +676,7 @@ function buildTemplate(templateId: EntryTemplateId, entryId: string, nowIso: str
           id: contextBodyId,
           type: 'paragraph',
           text: '',
-          guide: '• ........................................\n• ........................................\n• ........................................',
+          guide: DAY_CONTEXT_GUIDE,
           updatedAt: nowIso,
           updatedBy: 'me',
         },
@@ -1435,7 +1573,10 @@ function App() {
       if (saved) {
         const parsed = JSON.parse(saved) as Record<string, Entry>
         return Object.fromEntries(
-          Object.entries(parsed).map(([id, entry]) => [id, ensureEntryDateBucket(applyLockedTemplateHeadings(entry))])
+          Object.entries(parsed).map(([id, entry]) => [
+            id,
+            condenseLegacyDailyEntry(ensureEntryDateBucket(applyLockedTemplateHeadings(entry))),
+          ])
         )
       }
     } catch (err) {
@@ -2146,6 +2287,13 @@ function App() {
 
         entry = newEntry
         setEntryDrafts((prev) => ({ ...prev, [entryId]: newEntry }))
+      } else {
+        const compacted = condenseLegacyDailyEntry(entry)
+        if (compacted !== entry) {
+          entry = compacted
+          const compactedId = compacted.id
+          setEntryDrafts((prev) => ({ ...prev, [compactedId]: compacted }))
+        }
       }
 
       setSelectedEntryId(entry.id)
@@ -2304,25 +2452,29 @@ function App() {
         const dateBucket = entry.dateBucket || createdDatetime.slice(0, 10)
         const title = entry.title || dateOnly.format(new Date(createdDatetime))
 
-        const normalized = applyLockedTemplateHeadings({
-          ...entry,
-          id,
-          createdDatetime,
-          lastEditedDatetime,
-          dateBucket,
-          title,
-          authorId: entry.authorId || sampleData.users[1]?.id || sampleData.users[0]?.id || 'me',
-          content: Array.isArray(entry.content) && entry.content.length > 0
-            ? entry.content
-            : [{ id: newId('b-'), type: 'paragraph', text: '' }],
-          tags: Array.isArray(entry.tags) ? entry.tags : [],
-          projectTags: Array.isArray(entry.projectTags) ? entry.projectTags : [],
-          experimentTags: Array.isArray(entry.experimentTags) ? entry.experimentTags : [],
-          searchTerms: Array.isArray(entry.searchTerms) ? entry.searchTerms : [],
-          linkedFiles: Array.isArray(entry.linkedFiles) ? entry.linkedFiles : [],
-          pinnedRegions: Array.isArray(entry.pinnedRegions) ? entry.pinnedRegions : [],
-        })
-        return ensureEntryDateBucket(normalized)
+        const normalized = condenseLegacyDailyEntry(
+          ensureEntryDateBucket(
+            applyLockedTemplateHeadings({
+              ...entry,
+              id,
+              createdDatetime,
+              lastEditedDatetime,
+              dateBucket,
+              title,
+              authorId: entry.authorId || sampleData.users[1]?.id || sampleData.users[0]?.id || 'me',
+              content: Array.isArray(entry.content) && entry.content.length > 0
+                ? entry.content
+                : [{ id: newId('b-'), type: 'paragraph', text: '' }],
+              tags: Array.isArray(entry.tags) ? entry.tags : [],
+              projectTags: Array.isArray(entry.projectTags) ? entry.projectTags : [],
+              experimentTags: Array.isArray(entry.experimentTags) ? entry.experimentTags : [],
+              searchTerms: Array.isArray(entry.searchTerms) ? entry.searchTerms : [],
+              linkedFiles: Array.isArray(entry.linkedFiles) ? entry.linkedFiles : [],
+              pinnedRegions: Array.isArray(entry.pinnedRegions) ? entry.pinnedRegions : [],
+            })
+          )
+        )
+        return normalized
       }
 
       const normalizedEntries: Record<string, Entry> = {}
@@ -5350,6 +5502,17 @@ function setAlign(editor: ReactEditor, align: TextAlign) {
   )
 }
 
+function AlignIcon({ align }: { align: TextAlign }) {
+  return (
+    <span className={`align-icon align-icon-${align}`} aria-hidden="true">
+      <span />
+      <span />
+      <span />
+      <span />
+    </span>
+  )
+}
+
 function insertHeadingBlock(editor: ReactEditor, level: 2 | 3 = 2) {
   const entry = getActiveBlockEntry(editor)
   const insertAt = entry ? Path.next(entry[1]) : [editor.children.length]
@@ -5818,44 +5981,44 @@ function EditorInsertBar({
 
         <div className="toolbar-group">
           <button
-            className={`pill soft ${activeAlign === 'left' ? 'active-pill' : ''}`}
+            className={`pill soft align-pill ${activeAlign === 'left' ? 'active-pill' : ''}`}
             type="button"
             onMouseDown={(e) => e.preventDefault()}
             onClick={() => setAlign(editor, 'left')}
             aria-label="Align left"
             data-testid="editor-align-left"
           >
-            Left
+            <AlignIcon align="left" />
           </button>
           <button
-            className={`pill soft ${activeAlign === 'center' ? 'active-pill' : ''}`}
+            className={`pill soft align-pill ${activeAlign === 'center' ? 'active-pill' : ''}`}
             type="button"
             onMouseDown={(e) => e.preventDefault()}
             onClick={() => setAlign(editor, 'center')}
             aria-label="Align center"
             data-testid="editor-align-center"
           >
-            Center
+            <AlignIcon align="center" />
           </button>
           <button
-            className={`pill soft ${activeAlign === 'right' ? 'active-pill' : ''}`}
+            className={`pill soft align-pill ${activeAlign === 'right' ? 'active-pill' : ''}`}
             type="button"
             onMouseDown={(e) => e.preventDefault()}
             onClick={() => setAlign(editor, 'right')}
             aria-label="Align right"
             data-testid="editor-align-right"
           >
-            Right
+            <AlignIcon align="right" />
           </button>
           <button
-            className={`pill soft ${activeAlign === 'justify' ? 'active-pill' : ''}`}
+            className={`pill soft align-pill ${activeAlign === 'justify' ? 'active-pill' : ''}`}
             type="button"
             onMouseDown={(e) => e.preventDefault()}
             onClick={() => setAlign(editor, 'justify')}
             aria-label="Justify"
             data-testid="editor-align-justify"
           >
-            Justify
+            <AlignIcon align="justify" />
           </button>
         </div>
 
@@ -6164,44 +6327,44 @@ function ProtocolInsertBar({ editor, revision }: { editor: HistoryReactEditor; r
 
       <div className="toolbar-group">
         <button
-          className={`pill soft ${activeAlign === 'left' ? 'active-pill' : ''}`}
+          className={`pill soft align-pill ${activeAlign === 'left' ? 'active-pill' : ''}`}
           type="button"
           onMouseDown={(e) => e.preventDefault()}
           onClick={() => setAlign(editor, 'left')}
           aria-label="Align left"
           data-testid="protocol-align-left"
         >
-          Left
+          <AlignIcon align="left" />
         </button>
         <button
-          className={`pill soft ${activeAlign === 'center' ? 'active-pill' : ''}`}
+          className={`pill soft align-pill ${activeAlign === 'center' ? 'active-pill' : ''}`}
           type="button"
           onMouseDown={(e) => e.preventDefault()}
           onClick={() => setAlign(editor, 'center')}
           aria-label="Align center"
           data-testid="protocol-align-center"
         >
-          Center
+          <AlignIcon align="center" />
         </button>
         <button
-          className={`pill soft ${activeAlign === 'right' ? 'active-pill' : ''}`}
+          className={`pill soft align-pill ${activeAlign === 'right' ? 'active-pill' : ''}`}
           type="button"
           onMouseDown={(e) => e.preventDefault()}
           onClick={() => setAlign(editor, 'right')}
           aria-label="Align right"
           data-testid="protocol-align-right"
         >
-          Right
+          <AlignIcon align="right" />
         </button>
         <button
-          className={`pill soft ${activeAlign === 'justify' ? 'active-pill' : ''}`}
+          className={`pill soft align-pill ${activeAlign === 'justify' ? 'active-pill' : ''}`}
           type="button"
           onMouseDown={(e) => e.preventDefault()}
           onClick={() => setAlign(editor, 'justify')}
           aria-label="Justify"
           data-testid="protocol-align-justify"
         >
-          Justify
+          <AlignIcon align="justify" />
         </button>
       </div>
 
@@ -6394,6 +6557,7 @@ function AttachmentElement({ element, attributes, children }: RenderElementProps
   const attachmentId = meta && (meta.type === 'image' || meta.type === 'file') ? meta.attachmentId : undefined
   const attachment = attachmentId ? ctx?.attachmentsById[attachmentId] : undefined
   const url = attachmentId ? (ctx?.attachmentUrls[attachmentId] ?? attachment?.thumbnail) : undefined
+  const isImageAttachment = meta?.type === 'image'
 
   const icon = {
     image: '🖼️',
@@ -6417,11 +6581,20 @@ function AttachmentElement({ element, attributes, children }: RenderElementProps
       : undefined)
 
   return (
-    <div {...attributes} contentEditable={false} className="readonly-block attachment-block">
+    <div
+      {...attributes}
+      contentEditable={false}
+      className={`readonly-block attachment-block ${isImageAttachment ? 'attachment-block-image' : ''}`}
+    >
       <div className="att-left">
         <div className="att-thumb">
-          {meta?.type === 'image' && url ? (
-            <img src={url} alt={attachment?.filename ?? 'Image'} />
+          {isImageAttachment && url ? (
+            <>
+              <img className="att-thumb-preview" src={url} alt={attachment?.filename ?? 'Image'} />
+              <span className="att-thumb-icon muted tiny" aria-hidden="true">
+                🖼️
+              </span>
+            </>
           ) : (
             <span className="muted tiny">{icon}</span>
           )}
@@ -6883,17 +7056,27 @@ function BlockRenderer({ block, attachments, attachmentUrls, onUpdateBlock }: Bl
     case 'image': {
       const attachment = attachments[block.attachmentId]
       const src = attachmentUrls[block.attachmentId] ?? attachment?.thumbnail
+      const imageTitle = block.caption ?? attachment?.filename ?? 'Image'
       return (
-        <figure className="media-card">
-          <div className="media-thumb">
+        <figure className="media-card media-image-card" data-testid="image-block-card">
+          <div className="media-thumb media-desktop-preview" data-testid="image-block-preview">
             {src ? (
-              <img src={src} alt={block.caption ?? attachment?.filename} />
+              <img src={src} alt={imageTitle} />
             ) : (
               <div className="media-placeholder">Image</div>
             )}
           </div>
+          <div className="media-mobile-row" data-testid="image-block-mobile">
+            <span className="media-mobile-icon" aria-hidden="true">
+              🖼️
+            </span>
+            <div className="media-mobile-meta">
+              <div className="title-sm">{imageTitle}</div>
+              {attachment?.filesize ? <p className="muted tiny">{attachment.filesize}</p> : null}
+            </div>
+          </div>
           <figcaption>
-            <div className="title-sm">{block.caption ?? attachment?.filename ?? 'Image'}</div>
+            <div className="title-sm">{imageTitle}</div>
             <p className="muted tiny">{attachment?.filesize ?? ''}</p>
           </figcaption>
         </figure>
