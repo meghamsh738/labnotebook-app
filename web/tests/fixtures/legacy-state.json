@@ -1,0 +1,63 @@
+{
+  "version": 1,
+  "projects": [
+    {
+      "id": "legacy-proj-1",
+      "labId": "lab-main",
+      "title": "Legacy Imported Project",
+      "description": "Legacy import fixture",
+      "tags": ["legacy", "import"],
+      "archived": false
+    }
+  ],
+  "experiments": [
+    {
+      "id": "legacy-exp-1",
+      "projectId": "legacy-proj-1",
+      "title": "Legacy Imported Experiment",
+      "startDatetime": "2025-12-05T09:00:00.000Z"
+    }
+  ],
+  "entries": {
+    "legacy-entry-1": {
+      "id": "legacy-entry-1",
+      "experimentId": "legacy-exp-1",
+      "projectId": "legacy-proj-1",
+      "createdDatetime": "2025-12-05T09:00:00.000Z",
+      "lastEditedDatetime": "2025-12-05T09:15:00.000Z",
+      "authorId": "u1",
+      "title": "Legacy note import",
+      "dateBucket": "2025-12-05",
+      "isDaily": true,
+      "content": [
+        {
+          "id": "legacy-context-h",
+          "type": "heading",
+          "level": 2,
+          "text": "Context",
+          "locked": true
+        },
+        {
+          "id": "legacy-context",
+          "type": "paragraph",
+          "text": "Imported from legacy fixture"
+        }
+      ],
+      "tags": [],
+      "projectTags": ["Legacy"],
+      "experimentTags": ["Imported"],
+      "searchTerms": [],
+      "linkedFiles": [],
+      "pinnedRegions": [
+        {
+          "id": "legacy-region-1",
+          "entryId": "legacy-entry-1",
+          "label": "Context",
+          "blockIds": ["legacy-context-h", "legacy-context"],
+          "linkedAttachments": []
+        }
+      ]
+    }
+  },
+  "attachments": []
+}

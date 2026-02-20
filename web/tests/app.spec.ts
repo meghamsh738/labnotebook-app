@@ -66,6 +66,14 @@ async function ensureViewMode(page: Page) {
   await expect(page.getByRole('button', { name: 'Edit' })).toBeVisible()
 }
 
+async function ensureChecklistInEditMode(page: Page) {
+  const checklistRows = page.getByTestId('check-item-text')
+  if ((await checklistRows.count()) === 0) {
+    await page.getByRole('button', { name: '+ Checks' }).click()
+  }
+  await expect(checklistRows.first()).toBeVisible()
+}
+
 async function focusBlockById(page: Page, blockId: string) {
   await page.evaluate((id) => {
     const editor = document.querySelector('[data-testid="slate-editor"]') as HTMLElement | null
@@ -146,14 +154,14 @@ test.describe('Lab note taking app', () => {
     await expect(page.getByTestId('sidebar-toggle')).toBeVisible()
   })
 
-  test('today entry opens with the guided template', async ({ page }) => {
+  test('today entry opens with the day-entry scaffold', async ({ page }) => {
     await boot(page, { noFail: '1' })
     await page.getByTestId('today-entry').click()
     await ensureEditMode(page)
 
     await page.getByRole('button', { name: 'Save' }).click()
     await expect(page.getByRole('heading', { name: 'Context' })).toBeVisible()
-    await expect(page.getByRole('heading', { name: 'Setup' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Setup' })).toHaveCount(0)
   })
 
   test('header collapses while keeping tools visible', async ({ page }) => {
@@ -200,8 +208,7 @@ test.describe('Lab note taking app', () => {
     await page.getByTestId('today-entry').click()
     await ensureEditMode(page)
 
-    const guideText =
-      'What question are you answering today? Include model, conditions, and expected outcome.'
+    const guideText = '• ........................................'
     const guideLocator = page.getByText(guideText)
     await expect(guideLocator).toBeVisible()
 
@@ -216,8 +223,7 @@ test.describe('Lab note taking app', () => {
     await page.getByTestId('today-entry').click()
     await ensureEditMode(page)
 
-    const guideText =
-      'What question are you answering today? Include model, conditions, and expected outcome.'
+    const guideText = '• ........................................'
 
     await focusBlockById(page, 'b-context')
     await page.keyboard.press('Enter')
@@ -423,6 +429,7 @@ test.describe('Lab note taking app', () => {
   test('checklist text flows horizontally in edit mode', async ({ page }) => {
     await boot(page, { noFail: '1' })
     await ensureEditMode(page)
+    await ensureChecklistInEditMode(page)
 
     const firstItem = page.getByTestId('check-item-text').first()
     await expect(firstItem).toBeVisible()
@@ -495,6 +502,9 @@ test.describe('Lab note taking app', () => {
 
   test('view-mode checklist toggle syncs', async ({ page }) => {
     await boot(page, { noFail: '1' })
+    await ensureEditMode(page)
+    await ensureChecklistInEditMode(page)
+    await page.getByRole('button', { name: 'Save' }).click()
     await ensureViewMode(page)
 
     const firstChecklist = page.locator('.check-row').first()
@@ -516,6 +526,9 @@ test.describe('Lab note taking app', () => {
 
   test('sync failures can be retried', async ({ page }) => {
     await boot(page, { noFail: '0', failNext: true })
+    await ensureEditMode(page)
+    await ensureChecklistInEditMode(page)
+    await page.getByRole('button', { name: 'Save' }).click()
     await ensureViewMode(page)
 
     const firstChecklist = page.locator('.check-row').first()
@@ -621,7 +634,6 @@ test.describe('Lab note taking app', () => {
 
   test('view mode does not accumulate context across entries', async ({ page }) => {
     await boot(page, { noFail: '1' })
-    await ensureViewMode(page)
     const formatter = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
     const todayTitle = formatter.format(new Date())
     const yesterday = new Date()
@@ -631,6 +643,19 @@ test.describe('Lab note taking app', () => {
     await clearDateFilters(page)
     const entryView = page.getByTestId('entry-view')
     const entryList = page.getByTestId('entry-list')
+
+    await entryList.getByRole('button', { name: new RegExp(yesterdayTitle) }).click()
+    await ensureEditMode(page)
+    await focusBlockById(page, 'b-y-context')
+    await page.keyboard.insertText('Beta context')
+    await page.getByRole('button', { name: 'Save' }).click()
+
+    await entryList.getByRole('button', { name: new RegExp(todayTitle) }).click()
+    await ensureEditMode(page)
+    await focusBlockById(page, 'b-context')
+    await page.keyboard.insertText('Alpha context')
+    await page.getByRole('button', { name: 'Save' }).click()
+
     await entryList.getByRole('button', { name: new RegExp(yesterdayTitle) }).click()
     await expect(entryView).toContainText('Beta context')
     await expect(entryView).not.toContainText('Alpha context')
