@@ -125,6 +125,13 @@ const isSetupComplete = () => {
   }
 }
 
+const shouldAutoBootstrapMobileSetup = () => {
+  if (typeof window === 'undefined') return false
+  const hasDesktopBridge = !!window.electronAPI?.selectDirectory
+  if (hasDesktopBridge) return false
+  return window.matchMedia?.('(max-width: 900px)').matches ?? false
+}
+
 type EntryTemplateId = 'guided' | 'blank' | 'day'
 type SyncStatus = 'pending' | 'synced' | 'failed'
 type PairLinkStatus = 'idle' | 'checking' | 'online' | 'offline'
@@ -1380,7 +1387,10 @@ function App() {
   const labStoragePath = sampleData.labs[0]?.storageConfig.path ?? ''
   const storedPaths = readStoredPaths()
   const [appPaths, setAppPaths] = useState<AppPaths>(() => storedPaths ?? suggestedPaths)
-  const [setupOpen, setSetupOpen] = useState(() => !(isSetupComplete() || storedPaths))
+  const [setupOpen, setSetupOpen] = useState(() => {
+    if (isSetupComplete() || storedPaths) return false
+    return !shouldAutoBootstrapMobileSetup()
+  })
   const [appInfo, setAppInfo] = useState<{ name: string; version: string; platform: string } | null>(null)
   const [projects, setProjects] = useState<Project[]>(() => {
     if (typeof window === 'undefined' || resetSeed) return sampleData.projects
@@ -1736,6 +1746,13 @@ function App() {
       return false
     }
   })
+
+  useEffect(() => {
+    if (!shouldAutoBootstrapMobileSetup()) return
+    if (isSetupComplete()) return
+    writeStoredPaths(appPaths)
+    setSetupOpen(false)
+  }, [appPaths])
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -3791,6 +3808,7 @@ function Sidebar({
                       key={e.id}
                       className={`entry-item ${selectedEntryId === e.id ? 'active' : ''}`}
                       onClick={() => onSelectEntry(e.id)}
+                      data-testid={`entry-list-item-${e.id}`}
                       style={{ '--row-index': index } as React.CSSProperties}
                     >
                       <div>
@@ -3821,6 +3839,7 @@ function Sidebar({
                     key={protocol.id}
                     className={`entry-item ${selectedProtocolId === protocol.id ? 'active' : ''}`}
                     onClick={() => onSelectProtocol(protocol.id)}
+                    data-testid={`protocol-list-item-${protocol.id}`}
                     style={{ '--row-index': index } as React.CSSProperties}
                   >
                     <div>
