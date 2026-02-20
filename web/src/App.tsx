@@ -125,7 +125,7 @@ const isSetupComplete = () => {
   }
 }
 
-type EntryTemplateId = 'guided' | 'blank'
+type EntryTemplateId = 'guided' | 'blank' | 'day'
 type SyncStatus = 'pending' | 'synced' | 'failed'
 type PairLinkStatus = 'idle' | 'checking' | 'online' | 'offline'
 type PairingLinkInfo = {
@@ -518,6 +518,33 @@ function buildTemplate(templateId: EntryTemplateId, entryId: string, nowIso: str
     return {
       content: [{ id: newId('b-'), type: 'paragraph', text: '' }],
       pinnedRegions: [],
+    }
+  }
+
+  if (templateId === 'day') {
+    const contextHeadingId = newId('b-')
+    const contextBodyId = newId('b-')
+    return {
+      content: [
+        { id: contextHeadingId, type: 'heading', level: 2, text: 'Context', locked: true, updatedAt: nowIso, updatedBy: 'me' },
+        {
+          id: contextBodyId,
+          type: 'paragraph',
+          text: '',
+          guide: '• ........................................\n• ........................................\n• ........................................',
+          updatedAt: nowIso,
+          updatedBy: 'me',
+        },
+      ],
+      pinnedRegions: [
+        {
+          id: newId('region-'),
+          entryId,
+          label: 'Context',
+          blockIds: [contextHeadingId, contextBodyId],
+          linkedAttachments: [],
+        },
+      ],
     }
   }
 
@@ -2079,7 +2106,7 @@ function App() {
         const entryId = newId('entry-')
         const experimentId =
           selectedExperiment !== 'all' && selectedExperiment !== 'none' ? selectedExperiment : undefined
-        const { content, pinnedRegions } = buildTemplate('guided', entryId, nowIso)
+        const { content, pinnedRegions } = buildTemplate('day', entryId, nowIso)
 
         const newEntry: Entry = {
           id: entryId,
