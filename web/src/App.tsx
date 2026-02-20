@@ -128,6 +128,12 @@ const isSetupComplete = () => {
 type EntryTemplateId = 'guided' | 'blank'
 type SyncStatus = 'pending' | 'synced' | 'failed'
 type PairLinkStatus = 'idle' | 'checking' | 'online' | 'offline'
+type PairingLinkInfo = {
+  url: string
+  candidates: string[]
+  tailscaleConnected: boolean
+  source: 'none' | 'tailscale' | 'lan'
+}
 type HistoryReactEditor = ReactEditor & HistoryEditor
 
 const monthStartFromIso = (isoDate: string) => {
@@ -634,6 +640,16 @@ const isHttpUrl = (value: string) => {
     return false
   }
 }
+const isLoopbackHttpUrl = (value: string) => {
+  try {
+    const parsed = new URL(value)
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false
+    const host = parsed.hostname.toLowerCase()
+    return host === 'localhost' || host === '127.0.0.1' || host === '::1'
+  } catch {
+    return false
+  }
+}
 const TAILSCALE_V4_PATTERN = /^100\.(\d{1,3}\.){2}\d{1,3}$/
 const isTailscaleHost = (host: string) => host.toLowerCase().endsWith('.ts.net') || TAILSCALE_V4_PATTERN.test(host)
 const isTailscaleUrl = (value: string) => {
@@ -785,6 +801,18 @@ const inferDefaultMobilePairLink = () => {
   if (protocol !== 'http:' && protocol !== 'https:') return ''
   if (hostname === 'localhost' || hostname === '127.0.0.1') return ''
   return origin
+}
+
+const normalizePairingLinkInfo = (value: unknown): PairingLinkInfo | null => {
+  if (!value || typeof value !== 'object') return null
+  const payload = value as Partial<PairingLinkInfo>
+  const url = typeof payload.url === 'string' ? payload.url.trim() : ''
+  const source = payload.source === 'tailscale' || payload.source === 'lan' || payload.source === 'none' ? payload.source : 'none'
+  const candidates = Array.isArray(payload.candidates)
+    ? payload.candidates.filter((candidate): candidate is string => typeof candidate === 'string')
+    : []
+  const tailscaleConnected = payload.tailscaleConnected === true
+  return { url, source, candidates, tailscaleConnected }
 }
 
 function hashString(input: string): number {
@@ -1474,6 +1502,7 @@ function App() {
   })
   const [mobilePairStatus, setMobilePairStatus] = useState<PairLinkStatus>('idle')
   const [mobilePairQrDataUrl, setMobilePairQrDataUrl] = useState('')
+  const [mobilePairAutoMessage, setMobilePairAutoMessage] = useState('')
   const [browserOnline, setBrowserOnline] = useState(
     typeof navigator === 'undefined' || !('onLine' in navigator) ? true : navigator.onLine
   )
@@ -1486,26 +1515,6 @@ function App() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [autoImportAttempted, setAutoImportAttempted] = useState(false)
   const canPickPaths = typeof window !== 'undefined' && !!window.electronAPI?.selectDirectory
-  const [uiZoom, setUiZoom] = useState(() => {
-    if (typeof window === 'undefined') return 1
-    const cached = window.localStorage.getItem('labnote.uiZoom')
-    const parsed = cached ? Number(cached) : NaN
-    return Number.isFinite(parsed) && parsed >= 0.7 && parsed <= 1.3 ? parsed : 1
-  })
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return
-    try {
-      window.localStorage.setItem('labnote.uiZoom', String(uiZoom))
-    } catch (err) {
-      console.warn('Unable to cache zoom', err)
-    }
-    if (window.electronAPI?.setZoomFactor) {
-      window.electronAPI.setZoomFactor(uiZoom).catch((err: unknown) => {
-        console.warn('Unable to update zoom factor', err)
-      })
-    }
-  }, [uiZoom])
 
   useEffect(() => {
     if (!selectedEntryId) return
@@ -1618,6 +1627,55 @@ function App() {
     }
   }, [mobilePairLink])
 
+  const autoDetectMobilePairLink = useCallback(async (force = false) => {
+    if (typeof window === 'undefined' || !window.electronAPI?.getPairingLink) return
+    try {
+      const detectedRaw = await window.electronAPI.getPairingLink()
+      const detected = normalizePairingLinkInfo(detectedRaw)
+      if (!detected) {
+        setMobilePairAutoMessage('Auto-detect is unavailable in this build.')
+        return
+      }
+      if (!detected.url || !isHttpUrl(detected.url)) {
+        setMobilePairAutoMessage(
+          detected.tailscaleConnected
+            ? 'Tailscale is running, but no app link was detected yet.'
+            : 'No pairing link was detected. Start Tailscale on desktop to auto-fill the mobile URL.'
+        )
+        return
+      }
+
+      let replaced = false
+      setMobilePairLink((prev) => {
+        const current = prev.trim()
+        const shouldReplace = force || !current || isLoopbackHttpUrl(current)
+        if (!shouldReplace || current === detected.url) return prev
+        replaced = true
+        return detected.url
+      })
+
+      if (replaced) {
+        setMobilePairAutoMessage(
+          detected.source === 'tailscale'
+            ? `Auto-detected Tailscale link: ${detected.url}`
+            : `Auto-detected network link: ${detected.url}`
+        )
+      } else if (force) {
+        setMobilePairAutoMessage('Keeping your existing custom mobile link.')
+      }
+    } catch (err) {
+      console.warn('Unable to auto-detect mobile pairing link', err)
+      setMobilePairAutoMessage('Auto-detect failed. You can still paste a custom link.')
+    }
+  }, [])
+
+  const initialAutoPairingAttempt = useRef(false)
+  useEffect(() => {
+    if (initialAutoPairingAttempt.current) return
+    initialAutoPairingAttempt.current = true
+    void autoDetectMobilePairLink(false)
+  }, [autoDetectMobilePairLink])
+
   const handleCloseEntryTab = useCallback(
     (entryId: string) => {
       setOpenEntryIds((prev) => {
@@ -1674,20 +1732,6 @@ function App() {
       console.warn('Unable to persist seed version', err)
     }
   }, [resetSeed])
-
-  useEffect(() => {
-    if (typeof window === 'undefined' || !window.electronAPI) return
-    const handler = (event: WheelEvent) => {
-      if (!event.ctrlKey) return
-      event.preventDefault()
-      setUiZoom((prev) => {
-        const next = event.deltaY > 0 ? prev - 0.05 : prev + 0.05
-        return Math.min(1.2, Math.max(0.8, Number(next.toFixed(2))))
-      })
-    }
-    window.addEventListener('wheel', handler, { passive: false })
-    return () => window.removeEventListener('wheel', handler)
-  }, [])
 
   useEffect(() => {
     if (typeof document === 'undefined') return
@@ -3292,6 +3336,8 @@ function App() {
           onMasterSyncPathChange={setMasterSyncPath}
           mobilePairLink={mobilePairLink}
           onMobilePairLinkChange={setMobilePairLink}
+          onAutoDetectMobilePairLink={() => autoDetectMobilePairLink(true)}
+          mobilePairAutoMessage={mobilePairAutoMessage}
           mobilePairStatus={mobilePairStatus}
           mobilePairQrDataUrl={mobilePairQrDataUrl}
           onCopyMobilePairLink={copyMobilePairLink}
@@ -7185,6 +7231,8 @@ function SettingsModal({
   onMasterSyncPathChange,
   mobilePairLink,
   onMobilePairLinkChange,
+  onAutoDetectMobilePairLink,
+  mobilePairAutoMessage,
   mobilePairStatus,
   mobilePairQrDataUrl,
   onCopyMobilePairLink,
@@ -7211,6 +7259,8 @@ function SettingsModal({
   onMasterSyncPathChange: (value: string) => void
   mobilePairLink: string
   onMobilePairLinkChange: (value: string) => void
+  onAutoDetectMobilePairLink: () => Promise<void>
+  mobilePairAutoMessage: string
   mobilePairStatus: PairLinkStatus
   mobilePairQrDataUrl: string
   onCopyMobilePairLink: () => Promise<boolean>
@@ -7399,6 +7449,15 @@ function SettingsModal({
                 <button
                   className="ghost"
                   type="button"
+                  onClick={() => {
+                    void onAutoDetectMobilePairLink()
+                  }}
+                >
+                  Auto detect
+                </button>
+                <button
+                  className="ghost"
+                  type="button"
                   disabled={!mobilePairLinkIsValid}
                   onClick={async () => {
                     const ok = await onCopyMobilePairLink()
@@ -7414,10 +7473,16 @@ function SettingsModal({
           <div className="muted tiny" style={{ marginTop: 8 }}>
             {pairCopyState === 'copied'
               ? 'Link copied to clipboard.'
-              : pairCopyState === 'error'
-                ? 'Unable to copy link from this browser session.'
-                : 'Reachable link means a URL your phone can open directly. For Tailscale, use your .ts.net link or 100.x.x.x URL.'}
+                : pairCopyState === 'error'
+                  ? 'Unable to copy link from this browser session.'
+                  : 'Reachable link means a URL your phone can open directly. For Tailscale, use your .ts.net link or 100.x.x.x URL.'}
           </div>
+
+          {mobilePairAutoMessage ? (
+            <div className="muted tiny" style={{ marginTop: 4 }}>
+              {mobilePairAutoMessage}
+            </div>
+          ) : null}
 
           <div className="muted tiny" style={{ marginTop: 4 }}>
             {mobilePairIsTailscale

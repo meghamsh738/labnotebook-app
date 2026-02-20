@@ -5,6 +5,12 @@ declare global {
     electronAPI?: {
       selectDirectory?: (options?: { title?: string; defaultPath?: string }) => Promise<string | null>
       getAppInfo?: () => Promise<{ name: string; version: string; platform: string }>
+      getPairingLink?: () => Promise<{
+        url: string
+        candidates: string[]
+        tailscaleConnected: boolean
+        source: 'none' | 'tailscale' | 'lan'
+      }>
       setZoomFactor?: (factor: number) => Promise<number | null>
       ensureDirectories?: (paths: {
         dataRoot: string
