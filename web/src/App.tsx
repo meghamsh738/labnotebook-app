@@ -2799,19 +2799,26 @@ function App() {
             ? 'pdf'
             : 'file'
 
-        // Try filesystem cache first; fallback to IndexedDB
-        const fsPath = await writeFileToCache(file)
-        let cachePath = fsPath ?? ''
-        if (!fsPath) {
-          const key = await cacheFile(file)
-          cachePath = `idb://${key}`
-        } else {
-          setFsEnabled(true)
+        let cachePath = ''
+        try {
+          // Try filesystem cache first; fallback to IndexedDB.
+          const fsPath = await writeFileToCache(file)
+          if (fsPath) {
+            cachePath = fsPath
+            setFsEnabled(true)
+          } else {
+            const key = await cacheFile(file)
+            cachePath = `idb://${key}`
+          }
+        } catch (err) {
+          // Mobile/private contexts can block IndexedDB or FS APIs.
+          // Keep metadata so the upload still appears in-note immediately.
+          console.warn('Attachment cache failed; keeping metadata-only attachment', err)
         }
 
         const exportName = `${id}-${safeFileName(file.name)}`
         const relativePath = `${bundleFolder}/attachments/${exportName}`
-        const storagePath = syncRoot ? resolveRelativePath(syncRoot, relativePath) : cachePath
+        const storagePath = syncRoot ? resolveRelativePath(syncRoot, relativePath) : cachePath || file.name
 
         saved.push({
           id,
@@ -4270,12 +4277,12 @@ function EditorPane({
   }
 
   const handleSave = () => {
-    const updatedBlocks = slateToBlocks(editorValue)
     const timestamp = new Date().toISOString()
-    updatedBlocks.forEach((b) => {
-      b.updatedAt = timestamp
-      b.updatedBy = 'me'
-    })
+    const updatedBlocks = slateToBlocks(editorValue).map((block) => ({
+      ...block,
+      updatedAt: timestamp,
+      updatedBy: 'me',
+    }))
     onUpdateEntry(entry.id, updatedBlocks)
     onEnqueueChange(entry.id, updatedBlocks.map((b) => b.id), timestamp)
     void onAutoSaveEntry(entry.id, updatedBlocks)

@@ -386,6 +386,55 @@ test.describe('Lab note taking app', () => {
     await expect(cameraInput).toHaveAttribute('capture', 'environment')
   })
 
+  test('mobile image upload inserts into today entry and stays visible after save', async ({ page }) => {
+    const pageErrors: string[] = []
+    const consoleErrors: string[] = []
+    page.on('pageerror', (err) => pageErrors.push(err.message))
+    page.on('console', (msg) => {
+      if (msg.type() === 'error') consoleErrors.push(msg.text())
+    })
+
+    await page.setViewportSize({ width: 390, height: 844 })
+    await boot(page, { noFail: '1' })
+    await page.getByTestId('today-entry').click()
+    await ensureEditMode(page)
+
+    const imageInput = page.locator('input[type="file"][accept="image/*"]:not([capture])').first()
+    await expect(page.locator('input[type="file"][accept="image/*"]:not([capture])')).toHaveCount(1)
+    await imageInput.setInputFiles({
+      name: 'mobile-upload.png',
+      mimeType: 'image/png',
+      buffer: Buffer.from(
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO2fXU4AAAAASUVORK5CYII=',
+        'base64'
+      ),
+    })
+    await page.waitForTimeout(350)
+
+    const attachmentCount = await page.evaluate(() => {
+      const raw = window.localStorage.getItem('labnote.attachments')
+      try {
+        const parsed = raw ? JSON.parse(raw) : []
+        return Array.isArray(parsed) ? parsed.length : 0
+      } catch {
+        return 0
+      }
+    })
+    expect(attachmentCount).toBeGreaterThan(0)
+
+    const editor = page.getByTestId('slate-editor')
+    await expect(editor).toContainText('mobile-upload.png')
+    await expect(page.locator('.attachment-block-image').first()).toBeVisible()
+
+    await page.getByTestId('entry-save').click()
+    expect(pageErrors).toEqual([])
+    expect(consoleErrors).toEqual([])
+    const imageCard = page.getByTestId('image-block-card').first()
+    await expect(imageCard).toBeVisible()
+    await expect(imageCard.getByTestId('image-block-mobile')).toBeVisible()
+    await expect(imageCard).toContainText('mobile-upload.png')
+  })
+
   test('mobile uses compact image rows while desktop keeps preview images', async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 })
     const today = new Date()
