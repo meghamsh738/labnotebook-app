@@ -9,6 +9,7 @@ import type { RenderElementProps, RenderLeafProps } from 'slate-react'
 import { toDataURL as toQrDataUrl } from 'qrcode'
 import { cacheFile, getCachedFile } from './idb'
 import { writeFileToCache, restoreCacheHandle, ensureCacheDir, pickCacheDir, clearCacheHandle } from './fileCache'
+import { GuidedTutorial, type TutorialStep } from './GuidedTutorial'
 import './App.css'
 import logoMark from './assets/logo.svg'
 import { sampleData, seedVersion } from './data/sampleData'
@@ -3950,6 +3951,62 @@ function EditorPane({
     })
   }, [])
 
+  const tutorialSteps: TutorialStep[] = useMemo(
+    () => [
+      {
+        selector: '[data-testid="tabs-view-toggle"]',
+        title: 'Tab navigator',
+        description: 'Use Tabs view to switch quickly between open entries and browse the full notebook list.',
+      },
+      {
+        selector: '[data-testid="entry-date-bucket"]',
+        title: 'Entry context',
+        description: 'This date bucket shows which entry is active in the current editor panel.',
+      },
+      {
+        selector: '[data-testid="editor-tab-note"]',
+        title: 'Note tab',
+        description: 'Main writing space for protocols, observations, and decisions.',
+      },
+      {
+        selector: '[data-testid="edit-note-btn"]',
+        title: 'Enter edit mode',
+        description: 'Click Edit to switch from read mode into the rich editor.',
+      },
+      {
+        selector: '[data-testid="editor-toolbar"]',
+        title: 'Formatting toolbar',
+        description: 'In edit mode, apply fonts, highlights, emphasis, alignment, and structured blocks.',
+      },
+      {
+        selector: '[data-testid="editor-tab-files"]',
+        title: 'Files tab',
+        description: 'Review and manage uploaded attachments linked to this note.',
+      },
+      {
+        selector: '[data-testid="editor-tab-details"]',
+        title: 'Details tab',
+        description: 'Manage note metadata, tags, and sync controls for this entry.',
+      },
+      {
+        selector: '[data-testid="entry-tags-inline"]',
+        title: 'Inline tags',
+        description: 'Apply project and experiment tags directly from the main editor header.',
+      },
+      {
+        selector: '[data-testid="sync-status-chip"]',
+        title: 'Sync status',
+        description: 'Tracks whether this entry is synced, pending, syncing, or failed.',
+      },
+      {
+        selector: '[data-testid="export-pdf"]',
+        title: 'Export output (final step)',
+        description: 'Export experiment records to PDF after review and tagging are complete.',
+      },
+    ],
+    []
+  )
+
   if (!entry) {
     return (
       <main className="panel editor">
@@ -4149,12 +4206,20 @@ function EditorPane({
               <span>/</span>
               <span>{experiment?.title ?? 'General note'}</span>
               <span className="pill soft" data-testid="entry-date-bucket">{entry.dateBucket}</span>
-              <span className={`status-chip ${syncing || hasWork ? 'warning' : 'success'}`}>
+              <span className={`status-chip ${syncing || hasWork ? 'warning' : 'success'}`} data-testid="sync-status-chip">
                 {syncing ? 'Syncing…' : failedCount ? `${failedCount} failed` : pendingCount ? `${pendingCount} pending` : 'Synced'}
               </span>
             </div>
 
             <div className="editor-actions">
+              <GuidedTutorial
+                steps={tutorialSteps}
+                startLabel="Tutorial"
+                onStart={() => {
+                  setHeaderCollapsed(false)
+                  setActiveTab('note')
+                }}
+              />
               <button className="ghost icon-btn" type="button" onClick={toggleHeader} data-testid="header-toggle">
                 <span className="icon">{headerCollapsed ? '▾' : '▴'}</span>
                 {headerCollapsed ? 'Show header' : 'Hide header'}
@@ -4213,7 +4278,7 @@ function EditorPane({
                 </button>
               )}
               {!isEditing ? (
-                <button className="accent icon-btn" onClick={() => setIsEditing(true)}>
+                <button className="accent icon-btn" onClick={() => setIsEditing(true)} data-testid="edit-note-btn">
                   <span className="icon">✎</span>
                   Edit
                 </button>
@@ -4277,6 +4342,7 @@ function EditorPane({
               onClick={() => setActiveTab('note')}
               role="tab"
               aria-selected={activeTab === 'note'}
+              data-testid="editor-tab-note"
             >
               <span className="icon">✍</span>
               Note
@@ -4287,6 +4353,7 @@ function EditorPane({
               onClick={() => setActiveTab('files')}
               role="tab"
               aria-selected={activeTab === 'files'}
+              data-testid="editor-tab-files"
             >
               <span className="icon">📁</span>
               Files
@@ -4297,6 +4364,7 @@ function EditorPane({
               onClick={() => setActiveTab('details')}
               role="tab"
               aria-selected={activeTab === 'details'}
+              data-testid="editor-tab-details"
             >
               <span className="icon">🏷</span>
               Details
