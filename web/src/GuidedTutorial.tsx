@@ -16,6 +16,43 @@ type GuidedTutorialProps = {
 
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value))
 
+const isRenderableTarget = (node: HTMLElement) => {
+  const style = window.getComputedStyle(node)
+  if (style.display === 'none') return false
+  if (style.visibility === 'hidden') return false
+  if (Number(style.opacity || '1') <= 0.05) return false
+  const rect = node.getBoundingClientRect()
+  return rect.width >= 8 && rect.height >= 8
+}
+
+const intersectsViewport = (rect: DOMRect) =>
+  rect.bottom > 0 && rect.right > 0 && rect.top < window.innerHeight && rect.left < window.innerWidth
+
+const distanceToViewportCenter = (rect: DOMRect) => {
+  const cx = rect.left + rect.width / 2
+  const cy = rect.top + rect.height / 2
+  const vx = window.innerWidth / 2
+  const vy = window.innerHeight / 2
+  return Math.hypot(cx - vx, cy - vy)
+}
+
+const resolveTargetNode = (selector: string): HTMLElement | null => {
+  const all = Array.from(document.querySelectorAll(selector)).filter((node): node is HTMLElement => node instanceof HTMLElement)
+  const renderable = all.filter(isRenderableTarget)
+  if (renderable.length === 0) return null
+
+  const visible = renderable.filter((node) => intersectsViewport(node.getBoundingClientRect()))
+  if (visible.length > 0) {
+    visible.sort(
+      (a, b) => distanceToViewportCenter(a.getBoundingClientRect()) - distanceToViewportCenter(b.getBoundingClientRect())
+    )
+    return visible[0]
+  }
+
+  renderable.sort((a, b) => b.getBoundingClientRect().width * b.getBoundingClientRect().height - a.getBoundingClientRect().width * a.getBoundingClientRect().height)
+  return renderable[0]
+}
+
 export function GuidedTutorial({
   steps,
   startLabel = 'Tutorial',
@@ -34,7 +71,7 @@ export function GuidedTutorial({
     if (!open || !current) return
 
     const update = () => {
-      const node = document.querySelector(current.selector) as HTMLElement | null
+      const node = resolveTargetNode(current.selector)
       if (!node) {
         setTargetFound(false)
         setTargetRect(null)
@@ -42,16 +79,18 @@ export function GuidedTutorial({
       }
 
       setTargetFound(true)
-      node.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'smooth' })
+      node.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'auto' })
       setTargetRect(node.getBoundingClientRect())
     }
 
     const timer = window.setTimeout(update, 120)
+    const settleTimer = window.setTimeout(update, 260)
     window.addEventListener('resize', update)
     window.addEventListener('scroll', update, true)
 
     return () => {
       window.clearTimeout(timer)
+      window.clearTimeout(settleTimer)
       window.removeEventListener('resize', update)
       window.removeEventListener('scroll', update, true)
     }
