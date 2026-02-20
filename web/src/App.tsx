@@ -634,6 +634,16 @@ const isHttpUrl = (value: string) => {
     return false
   }
 }
+const TAILSCALE_V4_PATTERN = /^100\.(\d{1,3}\.){2}\d{1,3}$/
+const isTailscaleHost = (host: string) => host.toLowerCase().endsWith('.ts.net') || TAILSCALE_V4_PATTERN.test(host)
+const isTailscaleUrl = (value: string) => {
+  try {
+    const parsed = new URL(value)
+    return (parsed.protocol === 'http:' || parsed.protocol === 'https:') && isTailscaleHost(parsed.hostname)
+  } catch {
+    return false
+  }
+}
 const isWindowsDriveRoot = (value: string) => /^[a-zA-Z]:[\\/]*$/.test(value)
 const shortEntryId = (entryId: string) => entryId.replace(/^entry-/, '').slice(0, 8) || entryId
 const entryBundleFolderName = (entry: Entry) => safeFileName(`${entry.dateBucket}-${shortEntryId(entry.id)}`)
@@ -7223,7 +7233,10 @@ function SettingsModal({
   const importFileRef = useRef<HTMLInputElement | null>(null)
   const versionLabel = appInfo?.version ? `v${appInfo.version}` : 'Preview build'
   const platformLabel = appInfo?.platform ?? 'Web'
-  const mobilePairLinkIsValid = isHttpUrl(mobilePairLink.trim())
+  const mobilePairLinkTrimmed = mobilePairLink.trim()
+  const mobilePairLinkIsValid = isHttpUrl(mobilePairLinkTrimmed)
+  const mobilePairIsTailscale = mobilePairLinkIsValid && isTailscaleUrl(mobilePairLinkTrimmed)
+  const mobilePairConnected = mobilePairLinkIsValid && mobilePairStatus === 'online'
   const mobilePairStatusLabel =
     !mobilePairLinkIsValid
       ? 'Add link'
@@ -7242,6 +7255,26 @@ function SettingsModal({
         : mobilePairStatus === 'offline'
           ? 'danger'
           : 'warning'
+  const mobilePairConnectedLabel =
+    !mobilePairLinkIsValid
+      ? 'Awaiting link'
+      : mobilePairConnected
+        ? mobilePairIsTailscale
+          ? 'Tailscale connected'
+          : 'Link connected'
+        : mobilePairStatus === 'checking'
+          ? 'Checking connectivity'
+          : mobilePairIsTailscale
+            ? 'Tailscale not connected'
+            : 'Link not reachable'
+  const mobilePairConnectedClass =
+    !mobilePairLinkIsValid
+      ? 'warning'
+      : mobilePairConnected
+        ? 'success'
+        : mobilePairStatus === 'checking'
+          ? 'warning'
+          : 'danger'
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -7338,9 +7371,15 @@ function SettingsModal({
               <div className="title-sm">Mobile pairing</div>
               <div className="muted tiny">Create a phone-openable link and scan the QR code.</div>
             </div>
-            <div className={`status-chip ${mobilePairStatusClass}`} data-testid="mobile-pair-status">
-              <span className={`status-dot ${mobilePairStatusClass}`} aria-hidden="true" />
-              {mobilePairStatusLabel}
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+              <div className={`status-chip ${mobilePairStatusClass}`} data-testid="mobile-pair-status">
+                <span className={`status-dot ${mobilePairStatusClass}`} aria-hidden="true" />
+                {mobilePairStatusLabel}
+              </div>
+              <div className={`status-chip ${mobilePairConnectedClass}`} data-testid="mobile-pair-connected">
+                <span className={`status-dot ${mobilePairConnectedClass}`} aria-hidden="true" />
+                {mobilePairConnectedLabel}
+              </div>
             </div>
           </div>
 
@@ -7355,7 +7394,7 @@ function SettingsModal({
                     setPairCopyState('idle')
                     onMobilePairLinkChange(e.target.value)
                   }}
-                  placeholder="e.g. https://100.88.12.4:5173"
+                  placeholder="e.g. https://my-laptop.ts.net/labnotebook"
                 />
                 <button
                   className="ghost"
@@ -7377,7 +7416,13 @@ function SettingsModal({
               ? 'Link copied to clipboard.'
               : pairCopyState === 'error'
                 ? 'Unable to copy link from this browser session.'
-                : 'Use a reachable URL (LAN, Tailscale, or reverse-proxy) for mobile pairing.'}
+                : 'Reachable link means a URL your phone can open directly. For Tailscale, use your .ts.net link or 100.x.x.x URL.'}
+          </div>
+
+          <div className="muted tiny" style={{ marginTop: 4 }}>
+            {mobilePairIsTailscale
+              ? 'Tailscale-style link detected.'
+              : 'Tip: paste a Tailscale MagicDNS link (https://<device>.ts.net/...) for easier mobile access.'}
           </div>
 
           {mobilePairQrDataUrl ? (
