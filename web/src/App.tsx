@@ -40,6 +40,11 @@ const APP_GITHUB_URL = 'https://github.com/meghamsh738'
 const APP_SETUP_KEY = 'labnote.setupComplete'
 const APP_PATHS_KEY = 'labnote.appPaths'
 const APP_MOBILE_PAIR_LINK_KEY = 'labnote.mobilePairLink'
+const SHARED_API_PREFIX = '/labnote-api'
+const SHARED_API_INFO_URL = `${SHARED_API_PREFIX}/info`
+const SHARED_API_STATE_URL = `${SHARED_API_PREFIX}/state`
+const SHARED_API_UPLOAD_URL = `${SHARED_API_PREFIX}/upload`
+const SHARED_STATE_VERSION = 1
 
 type AppPaths = {
   dataRoot: string
@@ -911,6 +916,21 @@ function downloadBlob(filename: string, blob: Blob) {
   window.setTimeout(() => URL.revokeObjectURL(url), 500)
 }
 
+function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => {
+      if (typeof reader.result === 'string') {
+        resolve(reader.result)
+        return
+      }
+      reject(new Error('Unable to read file as data URL'))
+    }
+    reader.onerror = () => reject(reader.error ?? new Error('Unable to read file'))
+    reader.readAsDataURL(file)
+  })
+}
+
 function escapeMd(text: string): string {
   return text.replace(/\\/g, '\\\\').replace(/`/g, '\\`').replace(/\*/g, '\\*').replace(/_/g, '\\_')
 }
@@ -1693,6 +1713,9 @@ function App() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [autoImportAttempted, setAutoImportAttempted] = useState(false)
   const canPickPaths = typeof window !== 'undefined' && !!window.electronAPI?.selectDirectory
+  const [sharedApiAvailable, setSharedApiAvailable] = useState(false)
+  const [sharedStateReady, setSharedStateReady] = useState(false)
+  const sharedStateFingerprintRef = useRef('')
 
   useEffect(() => {
     if (!selectedEntryId) return
@@ -1713,6 +1736,36 @@ function App() {
       }
     }
     loadInfo()
+  }, [])
+
+  useEffect(() => {
+    const shouldProbeSharedApi = (() => {
+      if (typeof window === 'undefined') return false
+      if (window.location.protocol !== 'http:' && window.location.protocol !== 'https:') return false
+      const params = new URLSearchParams(window.location.search)
+      if (params.get('sharedApi') === '1') return true
+      return window.location.port === '8030'
+    })()
+
+    if (!shouldProbeSharedApi) {
+      setSharedStateReady(true)
+      return
+    }
+
+    let cancelled = false
+    const probeSharedApi = async () => {
+      try {
+        const response = await fetch(SHARED_API_INFO_URL, { cache: 'no-store' })
+        if (!response.ok) throw new Error(`HTTP ${response.status}`)
+        if (!cancelled) setSharedApiAvailable(true)
+      } catch {
+        if (!cancelled) setSharedStateReady(true)
+      }
+    }
+    void probeSharedApi()
+    return () => {
+      cancelled = true
+    }
   }, [])
 
   const addProjectTagOption = useCallback((value: string) => {
@@ -2428,6 +2481,121 @@ function App() {
     return sampleData.attachments
   })
 
+  const parseSharedStatePayload = useCallback((raw: unknown) => {
+    const state = isRecord(raw) && isRecord(raw.state) ? raw.state : raw
+    if (!isRecord(state)) return null
+    if (!Array.isArray(state.projects) || !Array.isArray(state.experiments) || !isRecord(state.entries) || !Array.isArray(state.attachments)) {
+      return null
+    }
+    return {
+      projects: state.projects as Project[],
+      experiments: state.experiments as Experiment[],
+      entries: state.entries as Record<string, Entry>,
+      attachments: state.attachments as Attachment[],
+    }
+  }, [])
+
+  const applySharedStatePayload = useCallback(
+    (payload: { projects: Project[]; experiments: Experiment[]; entries: Record<string, Entry>; attachments: Attachment[] }) => {
+      const normalizedEntries = Object.fromEntries(
+        Object.entries(payload.entries).map(([id, entry]) => [
+          id,
+          condenseLegacyDailyEntry(ensureEntryDateBucket(applyLockedTemplateHeadings(entry))),
+        ])
+      )
+
+      const nextState = {
+        version: SHARED_STATE_VERSION,
+        projects: payload.projects,
+        experiments: payload.experiments,
+        entries: normalizedEntries,
+        attachments: payload.attachments,
+      }
+      sharedStateFingerprintRef.current = JSON.stringify(nextState)
+
+      setProjects(payload.projects)
+      setExperiments(payload.experiments)
+      setEntryDrafts(normalizedEntries)
+      setAttachmentsStore(payload.attachments)
+
+      const sortedEntries = Object.values(normalizedEntries).sort((a, b) => {
+        const aTime = entrySortTimestamp(a)
+        const bTime = entrySortTimestamp(b)
+        if (aTime !== bTime) return bTime - aTime
+        return (a.title ?? '').localeCompare(b.title ?? '')
+      })
+      const firstEntryId = sortedEntries[0]?.id ?? ''
+      setSelectedEntryId((prev) => (prev && normalizedEntries[prev] ? prev : firstEntryId))
+      setOpenEntryIds((prev) => {
+        const next = prev.filter((id) => Boolean(normalizedEntries[id]))
+        if (firstEntryId && !next.includes(firstEntryId)) next.unshift(firstEntryId)
+        return next.slice(0, 5)
+      })
+    },
+    []
+  )
+
+  useEffect(() => {
+    if (!sharedApiAvailable || sharedStateReady) return
+    let cancelled = false
+    const loadSharedState = async () => {
+      try {
+        const response = await fetch(SHARED_API_STATE_URL, { cache: 'no-store' })
+        if (!response.ok) throw new Error(`HTTP ${response.status}`)
+        const parsed = parseSharedStatePayload(await response.json())
+        if (!parsed || cancelled) return
+        applySharedStatePayload(parsed)
+      } catch (err) {
+        console.warn('Unable to load shared notebook state', err)
+      } finally {
+        if (!cancelled) setSharedStateReady(true)
+      }
+    }
+    void loadSharedState()
+    return () => {
+      cancelled = true
+    }
+  }, [applySharedStatePayload, parseSharedStatePayload, sharedApiAvailable, sharedStateReady])
+
+  useEffect(() => {
+    if (!sharedApiAvailable || !sharedStateReady) return
+    let cancelled = false
+    const refreshSharedState = async () => {
+      try {
+        const response = await fetch(SHARED_API_STATE_URL, { cache: 'no-store' })
+        if (!response.ok) return
+        const parsed = parseSharedStatePayload(await response.json())
+        if (!parsed || cancelled) return
+        const incomingFingerprint = JSON.stringify({
+          version: SHARED_STATE_VERSION,
+          projects: parsed.projects,
+          experiments: parsed.experiments,
+          entries: parsed.entries,
+          attachments: parsed.attachments,
+        })
+        if (incomingFingerprint === sharedStateFingerprintRef.current) return
+        applySharedStatePayload(parsed)
+      } catch {
+        // Best-effort refresh when window focus changes.
+      }
+    }
+    const onFocus = () => {
+      void refreshSharedState()
+    }
+    const onVisibility = () => {
+      if (document.visibilityState !== 'visible') return
+      void refreshSharedState()
+    }
+
+    window.addEventListener('focus', onFocus)
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => {
+      cancelled = true
+      window.removeEventListener('focus', onFocus)
+      document.removeEventListener('visibilitychange', onVisibility)
+    }
+  }, [applySharedStatePayload, parseSharedStatePayload, sharedApiAvailable, sharedStateReady])
+
   const applyLegacyData = useCallback(
     async (
       parsed: {
@@ -2777,6 +2945,35 @@ function App() {
     return () => window.clearTimeout(id)
   }, [attachmentsStore])
 
+  useEffect(() => {
+    if (!sharedApiAvailable || !sharedStateReady) return
+    const payload = {
+      version: SHARED_STATE_VERSION,
+      projects,
+      experiments,
+      entries: entryDrafts,
+      attachments: attachmentsStore,
+    }
+    const serialized = JSON.stringify(payload)
+    if (serialized === sharedStateFingerprintRef.current) return
+
+    const id = window.setTimeout(async () => {
+      try {
+        const response = await fetch(SHARED_API_STATE_URL, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: serialized,
+        })
+        if (!response.ok) throw new Error(`HTTP ${response.status}`)
+        sharedStateFingerprintRef.current = serialized
+      } catch (err) {
+        console.warn('Unable to sync shared notebook state', err)
+      }
+    }, 350)
+
+    return () => window.clearTimeout(id)
+  }, [attachmentsStore, entryDrafts, experiments, projects, sharedApiAvailable, sharedStateReady])
+
   const attachmentsForEntry = useCallback(
     (entryId: string) => attachmentsStore.filter((a) => a.entryId === entryId),
     [attachmentsStore]
@@ -2798,6 +2995,40 @@ function App() {
           : file.type === 'application/pdf'
             ? 'pdf'
             : 'file'
+
+        if (sharedApiAvailable) {
+          try {
+            const dataUrl = await readFileAsDataUrl(file)
+            const uploadResponse = await fetch(SHARED_API_UPLOAD_URL, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                filename: file.name,
+                dataUrl,
+                type: file.type,
+              }),
+            })
+            if (uploadResponse.ok) {
+              const uploadJson = (await uploadResponse.json()) as { url?: unknown }
+              if (typeof uploadJson.url === 'string' && uploadJson.url.trim()) {
+                const sharedUrl = new URL(uploadJson.url, window.location.origin).toString()
+                saved.push({
+                  id,
+                  entryId,
+                  type,
+                  filename: file.name,
+                  filesize: `${Math.max(1, Math.round(file.size / 1024))} KB`,
+                  storagePath: sharedUrl,
+                  pinnedOffline: false,
+                  thumbnail: type === 'image' ? sharedUrl : undefined,
+                })
+                continue
+              }
+            }
+          } catch (err) {
+            console.warn('Shared upload failed; falling back to local cache', err)
+          }
+        }
 
         let cachePath = ''
         try {
@@ -2851,7 +3082,7 @@ function App() {
 
       return saved
     },
-    [entryDrafts, masterSyncPath]
+    [entryDrafts, masterSyncPath, sharedApiAvailable]
   )
 
   const addFileDestination = useCallback((entryId: string, val: { path: string; label?: string }): Attachment => {
@@ -2924,6 +3155,7 @@ function App() {
 
       const cacheDir = await getWritableCacheDir()
       if (!cacheDir) {
+        if (sharedApiAvailable) return
         downloadBlob(
           `${entryBundleFileBase(entry)}.md`,
           new Blob([markdown], { type: 'text/markdown;charset=utf-8' })
@@ -2946,7 +3178,7 @@ function App() {
         await writeBlobToDir(attachmentsDir, name, blob)
       }
     },
-    [attachmentsStore, attachmentUrls, entryDrafts, projects, experiments]
+    [attachmentsStore, attachmentUrls, entryDrafts, projects, experiments, sharedApiAvailable]
   )
 
   // Hydrate cached attachment thumbnails/URLs from IndexedDB and fs handles
