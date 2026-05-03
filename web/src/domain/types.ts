@@ -192,6 +192,11 @@ export interface Attachment {
   sampleId?: string
   pinnedOffline?: boolean
   cachedPath?: string
+  source?: 'whatsapp' | 'telegram'
+  sourceMessageId?: string
+  sourceMediaId?: string
+  contentType?: string
+  sha256?: string
 }
 
 export interface PinnedRegion {
@@ -201,6 +206,33 @@ export interface PinnedRegion {
   blockIds: string[]
   linkedAttachments: string[]
   summary?: string
+}
+
+export interface WhatsAppCapture {
+  messageId: string
+  sender: string
+  sentAt: string
+  receivedAt: string
+  type: 'text' | 'image' | 'unsupported'
+  text?: string
+  blockIds: string[]
+  attachmentIds: string[]
+  mediaIds?: string[]
+}
+
+export interface TelegramCapture {
+  messageId: string
+  chatId: string
+  telegramMessageId: string
+  fromUsername?: string
+  fromName?: string
+  sentAt: string
+  receivedAt: string
+  type: 'text' | 'image' | 'file'
+  text?: string
+  blockIds: string[]
+  attachmentIds: string[]
+  mediaIds?: string[]
 }
 
 export interface Entry {
@@ -221,6 +253,9 @@ export interface Entry {
   linkedFiles: string[]
   pinnedRegions: PinnedRegion[]
   syncPath?: string
+  source?: 'manual' | 'whatsapp' | 'telegram'
+  whatsappCaptures?: WhatsAppCapture[]
+  telegramCaptures?: TelegramCapture[]
 }
 
 export interface SearchIndexItem {

@@ -7,6 +7,184 @@
   padding: var(--s-4);
 }
 
+/* Easylab workstation refresh: compact, calmer chrome for daily note work. */
+.app-bg {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.62), rgba(238, 242, 247, 0.78)),
+    repeating-linear-gradient(
+      90deg,
+      rgba(15, 23, 42, 0.032) 0,
+      rgba(15, 23, 42, 0.032) 1px,
+      transparent 1px,
+      transparent 52px
+    ),
+    var(--bg);
+}
+
+.app-shell {
+  gap: 12px;
+}
+
+.panel {
+  border-width: 1px;
+  border-radius: 8px;
+  box-shadow: var(--shadow-1);
+}
+
+.sidebar {
+  background: var(--surface);
+}
+
+.sidebar-header,
+.sidebar-footer,
+.editor-header {
+  border-color: var(--border);
+}
+
+.brand-mark {
+  width: 36px;
+  height: 36px;
+}
+
+.brand-title {
+  letter-spacing: 0;
+}
+
+.lab-card,
+.search-box,
+.quick-actions button,
+.ghost,
+.accent,
+.entry-item,
+.template-card,
+.tag-filter-trigger,
+.tag-filter-panel,
+.tag-option,
+.field input,
+.field select,
+.attachment-row,
+.pinned-card,
+.tabs-view-panel,
+.tabs-view-slide-main {
+  border-width: 1px;
+  border-radius: 8px;
+  box-shadow: none;
+}
+
+.search-box,
+.quick-actions button,
+.ghost,
+.field input,
+.field select,
+.tag-filter-trigger,
+.tag-filter-search input {
+  min-height: 38px;
+}
+
+.accent {
+  box-shadow: 0 10px 22px rgba(49, 86, 212, 0.16);
+}
+
+.status-chip,
+.pill,
+.kbd,
+.pill.soft,
+.pill.ghost-pill {
+  border-width: 1px;
+  min-height: 28px;
+  letter-spacing: 0;
+}
+
+.sidebar-section {
+  border-top-color: var(--border);
+}
+
+.entry-item {
+  position: relative;
+  padding: 10px 11px;
+  background: var(--surface);
+}
+
+.entry-item::before {
+  content: '';
+  position: absolute;
+  left: -1px;
+  top: 9px;
+  bottom: 9px;
+  width: 3px;
+  border-radius: 999px;
+  background: transparent;
+}
+
+.entry-item.active {
+  background: #f3f6ff;
+  border-color: var(--accent-border);
+}
+
+.entry-item.active::before {
+  background: var(--accent);
+}
+
+.editor {
+  padding: 18px;
+  gap: 14px;
+}
+
+.editor-header {
+  margin: -18px -18px 0;
+  padding: 14px 16px 10px;
+  background: rgba(255, 255, 255, 0.94);
+  backdrop-filter: blur(12px);
+}
+
+.editor-toolbar {
+  border-width: 1px;
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: var(--shadow-1);
+}
+
+.editor-toolbar .pill {
+  border-radius: 7px;
+}
+
+.tabs-view-slide-main {
+  aspect-ratio: 1.35;
+}
+
+.attachment-block,
+.attachment-row,
+.media-image-card {
+  border-radius: 8px;
+}
+
+.attachment-block {
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+}
+
+.media-image-card img,
+.att-thumb-preview {
+  border-radius: 7px;
+}
+
+.section-title,
+.eyebrow {
+  letter-spacing: 0;
+}
+
+@media (max-width: 720px) {
+  .editor {
+    padding: var(--s-2);
+  }
+
+  .editor-header {
+    margin: 0;
+    padding: var(--s-2);
+    backdrop-filter: none;
+  }
+}
+
 .app-shell {
   --sidebar-width: 320px;
   display: grid;
@@ -2830,6 +3008,47 @@
 
   .editor-header {
     padding: var(--s-2);
+  }
+
+  .editor-toolbar {
+    gap: 6px;
+    overflow: hidden;
+  }
+
+  .editor-toolbar-dock {
+    overflow: hidden;
+  }
+
+  .toolbar-group {
+    flex: 1 1 100%;
+    flex-wrap: wrap;
+    min-width: 0;
+  }
+
+  .toolbar-sep {
+    display: none;
+  }
+
+  .toolbar-label {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  .toolbar-label select {
+    min-width: 0;
+    max-width: 92px;
+  }
+
+  .editor-toolbar .pill {
+    flex: 0 1 auto;
+    min-width: 30px;
+    max-width: 100%;
+    justify-content: center;
+  }
+
+  .editor-toolbar .pill.soft {
+    white-space: normal;
+    line-height: 1.15;
   }
 
   .editor-actions,

@@ -2666,6 +2666,11 @@ function App() {
           sampleId: att.sampleId,
           pinnedOffline: att.pinnedOffline,
           cachedPath: att.cachedPath,
+          source: att.source,
+          sourceMessageId: att.sourceMessageId,
+          sourceMediaId: att.sourceMediaId,
+          contentType: att.contentType,
+          sha256: att.sha256,
         }))
         .filter((att) => att.id && att.entryId)
 
