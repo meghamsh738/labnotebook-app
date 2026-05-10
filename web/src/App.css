@@ -1,10 +1,14 @@
 .app-bg {
   min-height: 100vh;
+  height: 100vh;
+  min-height: 100dvh;
+  height: 100dvh;
   background:
     radial-gradient(1100px 540px at 5% -10%, var(--app-bg-grad-1), transparent 60%),
     radial-gradient(900px 540px at 95% 0%, var(--app-bg-grad-2), transparent 65%),
     var(--bg);
   padding: var(--s-4);
+  overflow: hidden;
 }
 
 * {
@@ -230,7 +234,8 @@
   display: grid;
   grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
   gap: 12px;
-  height: calc(100vh - 32px);
+  height: 100%;
+  min-height: 0;
 }
 
 .app-shell.sidebar-collapsed {
@@ -335,8 +340,11 @@
 .editor {
   overflow-y: auto;
   padding: var(--s-5);
+  padding-bottom: max(var(--s-5), 96px);
   gap: var(--s-4);
   min-width: 0;
+  min-height: 0;
+  scroll-padding-bottom: 96px;
 }
 
 .sidebar-header {
@@ -3388,6 +3396,9 @@
 @media (max-width: 900px) {
   .app-bg {
     padding: var(--s-2);
+    height: auto;
+    min-height: 100dvh;
+    overflow: visible;
   }
 
   .app-shell {
