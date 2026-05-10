@@ -59,7 +59,7 @@ async function ensureEditMode(page: Page) {
   await page.waitForSelector('[data-testid="entry-save"], button:has-text("Edit")')
   const saveButton = page.getByTestId('entry-save')
   if ((await saveButton.count()) === 0) {
-    const editButton = page.getByRole('button', { name: 'Edit' })
+    const editButton = page.getByTestId('edit-note-btn')
     await editButton.click()
   }
   await expect(saveButton).toBeVisible()
@@ -71,13 +71,13 @@ async function ensureViewMode(page: Page) {
   if (await saveButton.count()) {
     await page.getByRole('button', { name: 'Cancel' }).click()
   }
-  await expect(page.getByRole('button', { name: 'Edit' })).toBeVisible()
+  await expect(page.getByTestId('edit-note-btn')).toBeVisible()
 }
 
 async function ensureChecklistInEditMode(page: Page) {
   const checklistRows = page.getByTestId('check-item-text')
   if ((await checklistRows.count()) === 0) {
-    await page.getByRole('button', { name: '+ Checks' }).click()
+    await page.getByRole('button', { name: 'Checks' }).click()
   }
   await expect(checklistRows.first()).toBeVisible()
 }
@@ -140,7 +140,9 @@ async function clearDateFilters(page: Page) {
 test.describe('Lab note taking app', () => {
   test('loads baseline UI', async ({ page }) => {
     await boot(page, { noFail: '1' })
-    await expect(page.getByRole('heading', { name: /neuroimmunology lab/i })).toBeVisible()
+    await expect(
+      page.getByRole('complementary', { name: 'Lab navigation' }).getByText('Neuroimmunology Lab').first()
+    ).toBeVisible()
     await expect(page.getByRole('button', { name: /today's entry/i })).toBeVisible()
     await expect(page.getByTestId('project-tag-filter-trigger')).toBeVisible()
     await expect(page.getByTestId('sidebar-toggle')).toBeVisible()
@@ -263,7 +265,7 @@ test.describe('Lab note taking app', () => {
     await expect(page.getByTestId('protocol-align-justify').locator('.align-icon-justify')).toBeVisible()
   })
 
-  test('header collapses while keeping tools visible', async ({ page }) => {
+  test('compact header keeps tools visible', async ({ page }) => {
     await boot(page, { noFail: '1' })
     await page.getByTestId('today-entry').click()
     await ensureEditMode(page)
@@ -271,14 +273,9 @@ test.describe('Lab note taking app', () => {
     const header = page.getByTestId('editor-header')
     await expect(header).toBeVisible()
     await expect(page.getByTestId('entry-tags-inline')).toBeVisible()
-
-    await page.getByTestId('header-toggle').click()
-    await expect(header).toHaveClass(/collapsed/)
-    await expect(page.getByTestId('entry-tags-inline')).toBeHidden()
     await expect(page.getByTestId('editor-toolbar')).toBeVisible()
-
-    await page.getByTestId('header-toggle').click()
-    await expect(page.getByTestId('entry-tags-inline')).toBeVisible()
+    await expect(page.getByTestId('editor-tab-note')).toBeVisible()
+    await expect(page.getByTestId('editor-tab-workbook')).toBeVisible()
   })
 
   test('can add a missed entry from the calendar', async ({ page }) => {
@@ -409,9 +406,7 @@ test.describe('Lab note taking app', () => {
         'base64'
       ),
     })
-    await page.waitForTimeout(350)
-
-    const attachmentCount = await page.evaluate(() => {
+    await expect.poll(async () => page.evaluate(() => {
       const raw = window.localStorage.getItem('labnote.attachments')
       try {
         const parsed = raw ? JSON.parse(raw) : []
@@ -419,8 +414,7 @@ test.describe('Lab note taking app', () => {
       } catch {
         return 0
       }
-    })
-    expect(attachmentCount).toBeGreaterThan(0)
+    })).toBeGreaterThan(0)
 
     const editor = page.getByTestId('slate-editor')
     await expect(editor).toContainText('mobile-upload.png')
@@ -523,7 +517,7 @@ test.describe('Lab note taking app', () => {
       sel.removeAllRanges()
       sel.addRange(range)
     }, 'b-context')
-    await page.keyboard.type('Start text')
+    await page.keyboard.insertText('Start text')
     await page.evaluate((blockId) => {
       const editor = document.querySelector('[data-testid="slate-editor"]') as HTMLElement | null
       editor?.focus()
@@ -544,7 +538,7 @@ test.describe('Lab note taking app', () => {
       sel.addRange(range)
     }, 'b-context')
     await page.keyboard.press('Backspace')
-    await page.keyboard.type('X')
+    await page.keyboard.insertText('X')
 
     const editor = page.getByTestId('slate-editor')
     await expect(editor).toContainText('XStart text')
@@ -573,7 +567,7 @@ test.describe('Lab note taking app', () => {
       sel.removeAllRanges()
       sel.addRange(range)
     }, 'b-context')
-    await page.keyboard.type('Tag-safe draft')
+    await page.keyboard.insertText('Tag-safe draft')
 
     await page.getByRole('tab', { name: /Details/i }).click()
     await page.getByTestId('entry-project-tags').locator('button').first().click()
@@ -614,7 +608,7 @@ test.describe('Lab note taking app', () => {
     await expect(page.getByTestId('slate-editor')).toBeVisible()
   })
 
-  test('open tabs switch across calendar filters', async ({ page }) => {
+  test('entry selection switches across calendar filters', async ({ page }) => {
     await boot(page, { noFail: '1' })
     await ensureViewMode(page)
 
@@ -635,7 +629,7 @@ test.describe('Lab note taking app', () => {
     await page.getByTestId(`calendar-day-${todayIso}`).click()
     await expect(page.getByTestId('entry-date-bucket')).toHaveText(todayIso)
 
-    await page.getByTestId(`entry-tab-${yesterdayIso}`).click()
+    await page.getByTestId(`calendar-day-${yesterdayIso}`).click()
     await expect(page.getByTestId('entry-date-bucket')).toHaveText(yesterdayIso)
   })
 
@@ -665,7 +659,7 @@ test.describe('Lab note taking app', () => {
       .fill('C:\\OneDrive - Trinity College Dublin\\Lab notebook')
 
     await page.getByRole('tab', { name: /Note/ }).click()
-    await page.getByRole('button', { name: '+ File destination' }).click()
+    await page.getByRole('button', { name: 'File destination' }).click()
     await page.getByTestId('file-destination-path').fill('run1.csv')
     await page.getByTestId('file-destination-add').click()
 
@@ -724,7 +718,7 @@ test.describe('Lab note taking app', () => {
     await expect(firstChecklist).toBeVisible()
     await firstChecklist.locator('input[type="checkbox"]').click()
 
-    const statusChip = page.locator('.breadcrumbs .status-chip')
+    const statusChip = page.getByTestId('sync-status-chip')
     await expect(statusChip).toContainText('Synced')
   })
 
@@ -747,7 +741,7 @@ test.describe('Lab note taking app', () => {
     const firstChecklist = page.locator('.check-row').first()
     await firstChecklist.locator('input[type="checkbox"]').click()
 
-    const statusChip = page.locator('.breadcrumbs .status-chip')
+    const statusChip = page.getByTestId('sync-status-chip')
     await expect(statusChip).toContainText(/failed/i)
 
     await expect(page.getByTestId('sync-action')).toHaveText(/retry failed/i)
@@ -774,7 +768,7 @@ test.describe('Lab note taking app', () => {
   test('export pdf opens printable page', async ({ page }) => {
     await boot(page, { noFail: '1' })
     const [popup] = await Promise.all([
-      page.waitForEvent('popup'),
+      page.context().waitForEvent('page'),
       page.getByTestId('export-pdf').click(),
     ])
     await popup.waitForLoadState('domcontentloaded')
@@ -783,7 +777,7 @@ test.describe('Lab note taking app', () => {
 
   test('settings modal opens', async ({ page }) => {
     await boot(page, { noFail: '1', stubPicker: true })
-    await page.getByRole('button', { name: 'Settings' }).click()
+    await page.getByTestId('settings-button').click()
     const dialog = page.getByRole('dialog')
     await expect(dialog).toBeVisible()
     await expect(dialog.getByText('Disk cache', { exact: true })).toBeVisible()
@@ -795,9 +789,10 @@ test.describe('Lab note taking app', () => {
 
   test('settings shows mobile pairing QR and link status', async ({ page }) => {
     await boot(page, { noFail: '1', stubPicker: true })
-    await page.getByRole('button', { name: 'Settings' }).click()
+    await page.getByTestId('settings-button').click()
 
     const dialog = page.getByRole('dialog')
+    await dialog.getByTestId('mobile-pair-card').locator('summary').click()
     const pairLink = dialog.getByTestId('mobile-pair-link')
     await pairLink.fill(page.url())
 
@@ -809,7 +804,7 @@ test.describe('Lab note taking app', () => {
 
   test('legacy import from file loads entries', async ({ page }) => {
     await boot(page, { noFail: '1', stubPicker: true })
-    await page.getByRole('button', { name: 'Settings' }).click()
+    await page.getByTestId('settings-button').click()
     const input = page.getByTestId('import-legacy-file-input')
     const filePath = path.join(here, 'fixtures', 'legacy-state.json')
     await input.setInputFiles(filePath)
@@ -818,7 +813,7 @@ test.describe('Lab note taking app', () => {
 
   test('theme selection updates the active theme', async ({ page }) => {
     await boot(page, { noFail: '1', stubPicker: true })
-    await page.getByRole('button', { name: 'Settings' }).click()
+    await page.getByTestId('settings-button').click()
     const neoBrutal = page.getByTestId('theme-option-neo-brutal')
     await neoBrutal.click()
     await expect(neoBrutal).toHaveClass(/active/)

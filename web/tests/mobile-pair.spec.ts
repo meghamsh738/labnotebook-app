@@ -33,9 +33,11 @@ test('mobile layout shows QR pairing and keeps camera capture support', async ({
   await page.goto('/')
 
   await selectFirstEntry(page)
-  await page.getByRole('button', { name: 'Settings' }).click()
+  await page.getByTestId('settings-button').click()
   const dialog = page.getByRole('dialog')
-  await expect(dialog.getByTestId('mobile-pair-card')).toBeVisible()
+  const mobilePairCard = dialog.getByTestId('mobile-pair-card')
+  await expect(mobilePairCard).toBeVisible()
+  await mobilePairCard.locator('summary').click()
   const pairLink = dialog.getByTestId('mobile-pair-link')
   await pairLink.fill(page.url())
   await expect(dialog.getByTestId('mobile-pair-status')).toContainText('Link online')

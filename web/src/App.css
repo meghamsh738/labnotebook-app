@@ -3225,7 +3225,6 @@
 }
 
 @media (prefers-reduced-motion: no-preference) {
-  .editor-header,
   .tab-panel,
   .tabs-view-panel {
     animation: fadeRise var(--t-slow) var(--ease-out) both;
@@ -3845,6 +3844,10 @@
 }
 
 .sidebar-header-actions {
+  display: flex;
+}
+
+.sidebar-header-actions .status-chip {
   display: none;
 }
 
@@ -3876,11 +3879,43 @@
 
 .sidebar .tag-filter {
   gap: 6px;
+  min-width: 0;
+  width: 100%;
+}
+
+.sidebar .sidebar-filter-section .section-row {
+  align-items: flex-start;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.sidebar .sidebar-filter-section .tag-filter-stack {
+  width: 100%;
+}
+
+.sidebar .tag-filter-head {
+  align-items: flex-start;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.sidebar .tag-filter-title {
+  align-items: center;
+  font-size: 12px;
+  gap: 6px;
+  line-height: 1.2;
+}
+
+.sidebar .tag-filter-head .filter-chip {
+  min-height: 24px;
+  padding: 3px 8px;
 }
 
 .sidebar .tag-filter-trigger {
   min-height: 36px;
+  min-width: 0;
   padding: 7px 10px;
+  width: 100%;
 }
 
 .editor {
@@ -4140,12 +4175,17 @@
 
 .sidebar-content:has(.sidebar-search-reference) > .sidebar-filter-section,
 .sidebar-content:has(.sidebar-search-reference) > .sidebar-entries-section {
+  display: flex;
+}
+
+.sidebar .calendar-meta {
   display: none;
 }
 
-.sidebar .calendar-range,
-.sidebar .calendar-meta {
-  display: none;
+.sidebar .calendar-range {
+  display: grid;
+  gap: 6px;
+  grid-template-columns: 1fr;
 }
 
 .sidebar .calendar {
@@ -4198,14 +4238,20 @@
   position: relative;
   gap: 4px;
   padding-right: 0;
+  pointer-events: none;
+}
+
+.editor-header-inner > * {
+  pointer-events: auto;
 }
 
 .breadcrumb-row {
-  position: absolute;
-  top: 0;
-  right: 0;
+  position: static;
   gap: 6px;
-  z-index: 1;
+  z-index: 20;
+  pointer-events: none;
+  justify-content: flex-end;
+  width: 100%;
 }
 
 .breadcrumb-row .breadcrumbs {
@@ -4213,8 +4259,17 @@
 }
 
 .editor-actions {
-  max-width: 286px;
+  max-width: min(100%, 560px);
   padding-bottom: 0;
+  position: relative;
+  z-index: 21;
+  pointer-events: auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.editor-actions * {
+  pointer-events: auto;
 }
 
 .editor-actions .ghost.icon-btn,
@@ -4226,8 +4281,9 @@
 .title-row {
   min-height: 30px;
   margin-top: 0;
-  padding-right: 286px;
+  padding-right: 0;
   order: 1;
+  pointer-events: none;
 }
 
 .title-row h1 {
@@ -4392,12 +4448,15 @@
 }
 
 .sidebar-content:has(.sidebar-search-reference) > .sidebar-filter-section {
-  display: none;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  order: 4;
 }
 
 .sidebar-content:has(.sidebar-search-reference) > .sidebar-entries-section {
   display: flex;
-  order: 4;
+  order: 5;
 }
 
 .sidebar-content:has(.sidebar-search-reference) .mode-toggle {
@@ -4413,7 +4472,7 @@
 }
 
 .sidebar-content:has(.sidebar-search-reference) > .sidebar-calendar-section {
-  order: 5;
+  order: 6;
 }
 
 .sidebar-content:has(.sidebar-search-reference) > .sidebar-entries-section .section-title {

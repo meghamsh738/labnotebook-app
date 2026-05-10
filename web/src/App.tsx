@@ -4293,7 +4293,7 @@ function Sidebar({
         </div>
         <div className="sidebar-header-actions">
           <div className="status-chip success">Sync ready</div>
-          <button className="pill soft icon-button" onClick={onOpenSettings} type="button">
+          <button className="pill soft icon-button" onClick={onOpenSettings} type="button" data-testid="settings-button">
             <span className="icon"><UiIcon name="settings" /></span>
             <span className="icon-label">Settings</span>
           </button>
