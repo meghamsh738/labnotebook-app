@@ -662,6 +662,7 @@ function labnoteStore(): Plugin {
 
 // https://vite.dev/config/
 export default defineConfig({
+  base: './',
   plugins: [react(), labnoteStore()],
   publicDir: false,
   build: {

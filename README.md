@@ -1,6 +1,6 @@
 # Lab Note Taking App
 
-Offline-first lab notebook prototype built with React + TypeScript (Vite). Simple 2-pane UI: browse/filter entries on the left, write notes on the right. Add structure as needed (headers, checklists, Aim/Experiment/Results), attach files/images or store file destinations (paths), and export an experiment as Markdown or printable PDF.
+Offline-first lab notebook built with React + TypeScript (Vite). It combines daily note capture, compact rich-text editing, optional per-entry workbook grids, evidence attachments, local sync/export paths, and phone-message intake when bundled in Easylab Suite.
 
 Typography refresh (neo-brutalist display + mono labels) updated Dec 25, 2025.
 
@@ -14,9 +14,9 @@ License: All Rights Reserved. See `LICENSE`.
 | --- | --- | --- |
 | ![Dashboard](screenshots/01-dashboard.png) | ![Details](screenshots/02-details.png) | ![Edit mode](screenshots/03-edit-mode.png) |
 
-| Settings | Sync failed | Export PDF |
+| Settings | Workbook | Export PDF |
 | --- | --- | --- |
-| ![Settings](screenshots/04-settings.png) | ![Sync failed](screenshots/05-sync-failed.png) | ![Export PDF](screenshots/06-export-pdf.png) |
+| ![Settings](screenshots/04-settings.png) | ![Workbook](screenshots/07-workbook.png) | ![Export PDF](screenshots/06-export-pdf.png) |
 
 | Mobile landing |
 | --- |
@@ -24,10 +24,11 @@ License: All Rights Reserved. See `LICENSE`.
 
 ## Features
 
-- **Simple layout**: browse entries + filter by project/experiment on the left; editor stays focused.
-- **Template notes**: “Experiment note” template starts with Aim / Experiment / Results sections.
-- **Insert bar**: add headers, checklists, Aim/Experiment/Results, images/files, and “file destinations” (paths).
-- **Details drawer**: pinned regions, attachments, and sync queue live under “Details” to keep the editor clean.
+- **Compact workspace**: dark left rail for entries/calendar, focused note canvas, and a collapsible right context panel.
+- **Template notes**: daily entries start with structured scientific prompts for aim, samples, protocol run, deviations, observations, raw data, and next steps.
+- **Optional workbook**: each day can include an Excel-like grid for pasted tabular data. Empty workbooks are not saved.
+- **Insert bar**: add headers, checklists, structured sections, images/files, tables, and file destinations (paths).
+- **Details and files tabs**: tags, assignment, sync queue, attachment metadata, and checksums stay out of the writing surface.
 - **Offline-first sync queue**: per-block change queue with `pending / synced / failed`, retry and clear controls.
 - **Attachments + cache**: drag/drop/paste attachments with IndexedDB storage, plus optional disk cache via the File System Access API.
 - **Export**: Markdown bundle (note + `manifest.json` + attachments paths) and printable PDF export.

@@ -58,6 +58,109 @@ type DateRange = {
   end: string
 }
 
+type UiIconName =
+  | 'alert'
+  | 'book'
+  | 'camera'
+  | 'check'
+  | 'chevronDown'
+  | 'chevronLeft'
+  | 'chevronRight'
+  | 'chevronUp'
+  | 'download'
+  | 'edit'
+  | 'file'
+  | 'folder'
+  | 'image'
+  | 'layout'
+  | 'list'
+  | 'minus'
+  | 'note'
+  | 'paperclip'
+  | 'plus'
+  | 'refresh'
+  | 'save'
+  | 'settings'
+  | 'spark'
+  | 'tag'
+  | 'table'
+  | 'trash'
+  | 'x'
+
+function UiIcon({ name, className, title }: { name: UiIconName; className?: string; title?: string }) {
+  const common = {
+    className: ['ui-icon', className].filter(Boolean).join(' '),
+    viewBox: '0 0 24 24',
+    fill: 'none',
+    stroke: 'currentColor',
+    strokeWidth: 1.9,
+    strokeLinecap: 'round' as const,
+    strokeLinejoin: 'round' as const,
+    'aria-hidden': title ? undefined : true,
+    role: title ? 'img' : undefined,
+  }
+
+  const titleNode = title ? <title>{title}</title> : null
+  switch (name) {
+    case 'alert':
+      return <svg {...common}>{titleNode}<path d="M12 9v4" /><path d="M12 17h.01" /><path d="M10.3 4.3 2.8 18a1.6 1.6 0 0 0 1.4 2.3h15.6a1.6 1.6 0 0 0 1.4-2.3L13.7 4.3a1.9 1.9 0 0 0-3.4 0Z" /></svg>
+    case 'book':
+      return <svg {...common}>{titleNode}<path d="M4.5 5.5A2.5 2.5 0 0 1 7 3h12v16H7a2.5 2.5 0 0 0-2.5 2.5v-16Z" /><path d="M7 3v16" /><path d="M10 7h6" /><path d="M10 11h5" /></svg>
+    case 'camera':
+      return <svg {...common}>{titleNode}<path d="M4 8.5A2.5 2.5 0 0 1 6.5 6h1.8l1.2-2h5l1.2 2h1.8A2.5 2.5 0 0 1 20 8.5v8A2.5 2.5 0 0 1 17.5 19h-11A2.5 2.5 0 0 1 4 16.5v-8Z" /><circle cx="12" cy="12.5" r="3" /></svg>
+    case 'check':
+      return <svg {...common}>{titleNode}<path d="m5 12.5 4.2 4.2L19 7" /></svg>
+    case 'chevronDown':
+      return <svg {...common}>{titleNode}<path d="m6 9 6 6 6-6" /></svg>
+    case 'chevronLeft':
+      return <svg {...common}>{titleNode}<path d="m15 18-6-6 6-6" /></svg>
+    case 'chevronRight':
+      return <svg {...common}>{titleNode}<path d="m9 18 6-6-6-6" /></svg>
+    case 'chevronUp':
+      return <svg {...common}>{titleNode}<path d="m18 15-6-6-6 6" /></svg>
+    case 'download':
+      return <svg {...common}>{titleNode}<path d="M12 4v10" /><path d="m7.5 10 4.5 4.5L16.5 10" /><path d="M5 20h14" /></svg>
+    case 'edit':
+      return <svg {...common}>{titleNode}<path d="M4 20h4.6L19.3 9.3a2.1 2.1 0 0 0 0-3l-1.6-1.6a2.1 2.1 0 0 0-3 0L4 15.4V20Z" /><path d="m13.7 5.7 4.6 4.6" /></svg>
+    case 'file':
+      return <svg {...common}>{titleNode}<path d="M6.5 3.5h7L18.5 8v12.5h-12V3.5Z" /><path d="M13.5 3.5V8h5" /><path d="M9 13h6" /><path d="M9 17h4" /></svg>
+    case 'folder':
+      return <svg {...common}>{titleNode}<path d="M3.5 7.5A2.5 2.5 0 0 1 6 5h4l2 2h6A2.5 2.5 0 0 1 20.5 9.5v7A2.5 2.5 0 0 1 18 19H6a2.5 2.5 0 0 1-2.5-2.5v-9Z" /></svg>
+    case 'image':
+      return <svg {...common}>{titleNode}<rect x="4" y="5" width="16" height="14" rx="2.5" /><circle cx="9" cy="10" r="1.5" /><path d="m7 17 4.2-4.2a1.5 1.5 0 0 1 2.1 0L18 17" /></svg>
+    case 'layout':
+      return <svg {...common}>{titleNode}<rect x="4" y="5" width="16" height="14" rx="2.5" /><path d="M9 5v14" /><path d="M4 10h16" /></svg>
+    case 'list':
+      return <svg {...common}>{titleNode}<path d="M8 6h12" /><path d="M8 12h12" /><path d="M8 18h12" /><path d="M4 6h.01" /><path d="M4 12h.01" /><path d="M4 18h.01" /></svg>
+    case 'minus':
+      return <svg {...common}>{titleNode}<path d="M5 12h14" /></svg>
+    case 'note':
+      return <svg {...common}>{titleNode}<path d="M6 4h9l3 3v13H6V4Z" /><path d="M15 4v4h4" /><path d="M9 12h6" /><path d="M9 16h4" /></svg>
+    case 'paperclip':
+      return <svg {...common}>{titleNode}<path d="m9.5 12.8 5.4-5.4a3 3 0 0 1 4.2 4.2l-7 7a5 5 0 0 1-7.1-7.1l7.3-7.3" /><path d="m8.6 15.7 7.1-7.1" /></svg>
+    case 'plus':
+      return <svg {...common}>{titleNode}<path d="M12 5v14" /><path d="M5 12h14" /></svg>
+    case 'refresh':
+      return <svg {...common}>{titleNode}<path d="M20 12a8 8 0 0 1-13.7 5.7" /><path d="M4 12A8 8 0 0 1 17.7 6.3" /><path d="M18 3v4h-4" /><path d="M6 21v-4h4" /></svg>
+    case 'save':
+      return <svg {...common}>{titleNode}<path d="M5 4h11l3 3v13H5V4Z" /><path d="M8 4v6h8" /><path d="M8 20v-6h8v6" /></svg>
+    case 'settings':
+      return <svg {...common}>{titleNode}<path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z" /><path d="M19.4 15a1.8 1.8 0 0 0 .4 2l.1.1-2.1 3.6-.2-.1a1.8 1.8 0 0 0-2 .3 1.8 1.8 0 0 0-.6 1.9h-4a1.8 1.8 0 0 0-.6-1.9 1.8 1.8 0 0 0-2-.3l-.2.1-2.1-3.6.1-.1a1.8 1.8 0 0 0 .4-2A1.8 1.8 0 0 0 5 13.7H4V10h1a1.8 1.8 0 0 0 1.6-1.2 1.8 1.8 0 0 0-.4-2l-.1-.1 2.1-3.6.2.1a1.8 1.8 0 0 0 2-.3A1.8 1.8 0 0 0 11 1h4a1.8 1.8 0 0 0 .6 1.9 1.8 1.8 0 0 0 2 .3l.2-.1 2.1 3.6-.1.1a1.8 1.8 0 0 0-.4 2A1.8 1.8 0 0 0 21 10h1v3.7h-1a1.8 1.8 0 0 0-1.6 1.3Z" /></svg>
+    case 'spark':
+      return <svg {...common}>{titleNode}<path d="m12 3 1.6 5.4L19 10l-5.4 1.6L12 17l-1.6-5.4L5 10l5.4-1.6L12 3Z" /><path d="m18.5 15 .7 2.3 2.3.7-2.3.7-.7 2.3-.7-2.3-2.3-.7 2.3-.7.7-2.3Z" /></svg>
+    case 'tag':
+      return <svg {...common}>{titleNode}<path d="M4 12.2V5h7.2l8.4 8.4a2.2 2.2 0 0 1 0 3.1l-3.1 3.1a2.2 2.2 0 0 1-3.1 0L4 12.2Z" /><circle cx="8" cy="8" r="1.2" /></svg>
+    case 'table':
+      return <svg {...common}>{titleNode}<rect x="4" y="5" width="16" height="14" rx="2" /><path d="M4 10h16" /><path d="M4 15h16" /><path d="M10 5v14" /><path d="M16 5v14" /></svg>
+    case 'trash':
+      return <svg {...common}>{titleNode}<path d="M5 7h14" /><path d="M10 11v6" /><path d="M14 11v6" /><path d="M8 7l1-3h6l1 3" /><path d="M7 7l1 13h8l1-13" /></svg>
+    case 'x':
+      return <svg {...common}>{titleNode}<path d="m6 6 12 12" /><path d="M18 6 6 18" /></svg>
+    default:
+      return null
+  }
+}
+
 function newId(prefix: string) {
   return `${prefix}${crypto.randomUUID?.() ?? Math.random().toString(36).slice(2)}`
 }
@@ -198,6 +301,64 @@ const parseMarkdownLink = (line: string) => {
   }
   return null
 }
+
+const WORKBOOK_MIN_ROWS = 24
+const WORKBOOK_MIN_COLS = 8
+const WORKBOOK_MAX_ROWS = 80
+const WORKBOOK_MAX_COLS = 16
+const WORKBOOK_COLUMN_LABELS = Array.from({ length: WORKBOOK_MAX_COLS }, (_, idx) => {
+  let label = ''
+  let n = idx
+  do {
+    label = String.fromCharCode(65 + (n % 26)) + label
+    n = Math.floor(n / 26) - 1
+  } while (n >= 0)
+  return label
+})
+
+const makeEmptyWorkbookData = (rows = WORKBOOK_MIN_ROWS, cols = WORKBOOK_MIN_COLS) =>
+  Array.from({ length: rows }, () => Array.from({ length: cols }, () => ''))
+
+const workbookHasContent = (data: string[][]) =>
+  data.some((row) => row.some((cell) => String(cell ?? '').trim().length > 0))
+
+const normalizeWorkbookData = (data: string[][] = [], minRows = WORKBOOK_MIN_ROWS, minCols = WORKBOOK_MIN_COLS) => {
+  const rowCount = Math.min(Math.max(data.length, minRows), WORKBOOK_MAX_ROWS)
+  const colCount = Math.min(
+    Math.max(data.reduce((max, row) => Math.max(max, row.length), 0), minCols),
+    WORKBOOK_MAX_COLS
+  )
+
+  return Array.from({ length: rowCount }, (_, rowIdx) =>
+    Array.from({ length: colCount }, (_, colIdx) => String(data[rowIdx]?.[colIdx] ?? ''))
+  )
+}
+
+const compactWorkbookData = (data: string[][]) => {
+  let lastRow = -1
+  let lastCol = -1
+  data.forEach((row, rowIdx) => {
+    row.forEach((cell, colIdx) => {
+      if (String(cell ?? '').trim()) {
+        lastRow = Math.max(lastRow, rowIdx)
+        lastCol = Math.max(lastCol, colIdx)
+      }
+    })
+  })
+  if (lastRow < 0 || lastCol < 0) return []
+  return data.slice(0, lastRow + 1).map((row) =>
+    row.slice(0, lastCol + 1).map((cell) => String(cell ?? ''))
+  )
+}
+
+const getWorkbookBlock = (entry?: Entry | null) =>
+  entry?.content.find((block): block is Extract<Block, { type: 'workbook' }> => block.type === 'workbook') ?? null
+
+const getWorkbookDataForEntry = (entry?: Entry | null) =>
+  normalizeWorkbookData(getWorkbookBlock(entry)?.data ?? [])
+
+const getNoteBlocksForEntry = (entry?: Entry | null) =>
+  entry?.content.filter((block) => block.type !== 'workbook') ?? [{ id: 'b-empty', type: 'paragraph', text: '' } satisfies Block]
 
 const parseEntryMarkdown = (markdown: string, folderName: string): ParsedMarkdownEntry | null => {
   const lines = markdown.split(/\r?\n/)
@@ -442,6 +603,10 @@ const LOCKED_TEMPLATE_SECTION_LABELS = new Set([
   'Procedure',
   'Observations',
   'Next steps',
+  'Samples',
+  'Protocol run',
+  'Deviations',
+  'Raw data',
   'Summary',
   'Protocol',
   'Objective',
@@ -569,6 +734,7 @@ function blockHasMeaningfulContent(block: Block): boolean {
     case 'list':
       return block.items.some((item) => item.text.trim().length > 0)
     case 'table':
+    case 'workbook':
       return block.data.some((row) => row.some((cell) => cell.trim().length > 0))
     case 'image':
     case 'file':
@@ -672,16 +838,88 @@ function buildTemplate(templateId: EntryTemplateId, entryId: string, nowIso: str
   }
 
   if (templateId === 'day') {
-    const contextHeadingId = newId('b-')
-    const contextBodyId = newId('b-')
+    const aimHeadingId = newId('b-')
+    const aimBodyId = newId('b-')
+    const samplesHeadingId = newId('b-')
+    const samplesBodyId = newId('b-')
+    const protocolHeadingId = newId('b-')
+    const protocolChecklistId = newId('b-')
+    const deviationsHeadingId = newId('b-')
+    const deviationsBodyId = newId('b-')
+    const observationsHeadingId = newId('b-')
+    const observationsBodyId = newId('b-')
+    const rawDataHeadingId = newId('b-')
+    const rawDataBodyId = newId('b-')
+    const nextStepsHeadingId = newId('b-')
+    const nextStepsBodyId = newId('b-')
     return {
       content: [
-        { id: contextHeadingId, type: 'heading', level: 2, text: 'Context', locked: true, updatedAt: nowIso, updatedBy: 'me' },
+        { id: aimHeadingId, type: 'heading', level: 2, text: 'Aim', locked: true, updatedAt: nowIso, updatedBy: 'me' },
         {
-          id: contextBodyId,
+          id: aimBodyId,
           type: 'paragraph',
           text: '',
-          guide: DAY_CONTEXT_GUIDE,
+          guide: 'What are you testing today? Include the biological question, model, condition, and expected readout.',
+          updatedAt: nowIso,
+          updatedBy: 'me',
+        },
+        { id: samplesHeadingId, type: 'heading', level: 2, text: 'Samples', locked: true, updatedAt: nowIso, updatedBy: 'me' },
+        {
+          id: samplesBodyId,
+          type: 'table',
+          data: [
+            ['Sample / animal / culture', 'Group', 'Treatment', 'Notes'],
+            ['', '', '', ''],
+          ],
+          caption: 'Samples and experimental groups',
+          updatedAt: nowIso,
+          updatedBy: 'me',
+        },
+        { id: protocolHeadingId, type: 'heading', level: 2, text: 'Protocol run', locked: true, updatedAt: nowIso, updatedBy: 'me' },
+        {
+          id: protocolChecklistId,
+          type: 'checklist',
+          items: [
+            { id: newId('ci-'), text: '', guide: 'Protocol version / SOP recorded', done: false },
+            { id: newId('ci-'), text: '', guide: 'Critical timing windows noted', done: false },
+            { id: newId('ci-'), text: '', guide: 'Raw data destination confirmed', done: false },
+          ],
+          updatedAt: nowIso,
+          updatedBy: 'me',
+        },
+        { id: deviationsHeadingId, type: 'heading', level: 2, text: 'Deviations', locked: true, updatedAt: nowIso, updatedBy: 'me' },
+        {
+          id: deviationsBodyId,
+          type: 'paragraph',
+          text: '',
+          guide: 'Record anything that differed from the protocol, including timing, reagent lots, instrument settings, or sample exclusions.',
+          updatedAt: nowIso,
+          updatedBy: 'me',
+        },
+        { id: observationsHeadingId, type: 'heading', level: 2, text: 'Observations', locked: true, updatedAt: nowIso, updatedBy: 'me' },
+        {
+          id: observationsBodyId,
+          type: 'paragraph',
+          text: '',
+          guide: 'Add timestamped observations, images, instrument readouts, and phone captures as they happen.',
+          updatedAt: nowIso,
+          updatedBy: 'me',
+        },
+        { id: rawDataHeadingId, type: 'heading', level: 2, text: 'Raw data', locked: true, updatedAt: nowIso, updatedBy: 'me' },
+        {
+          id: rawDataBodyId,
+          type: 'paragraph',
+          text: '',
+          guide: 'Drag raw files/images here or link the folder. Note where the original data lives.',
+          updatedAt: nowIso,
+          updatedBy: 'me',
+        },
+        { id: nextStepsHeadingId, type: 'heading', level: 2, text: 'Next steps', locked: true, updatedAt: nowIso, updatedBy: 'me' },
+        {
+          id: nextStepsBodyId,
+          type: 'paragraph',
+          text: '',
+          guide: 'What needs to be analyzed, repeated, exported, or handed off next?',
           updatedAt: nowIso,
           updatedBy: 'me',
         },
@@ -690,8 +928,50 @@ function buildTemplate(templateId: EntryTemplateId, entryId: string, nowIso: str
         {
           id: newId('region-'),
           entryId,
-          label: 'Context',
-          blockIds: [contextHeadingId, contextBodyId],
+          label: 'Aim',
+          blockIds: [aimHeadingId, aimBodyId],
+          linkedAttachments: [],
+        },
+        {
+          id: newId('region-'),
+          entryId,
+          label: 'Samples',
+          blockIds: [samplesHeadingId, samplesBodyId],
+          linkedAttachments: [],
+        },
+        {
+          id: newId('region-'),
+          entryId,
+          label: 'Protocol run',
+          blockIds: [protocolHeadingId, protocolChecklistId],
+          linkedAttachments: [],
+        },
+        {
+          id: newId('region-'),
+          entryId,
+          label: 'Deviations',
+          blockIds: [deviationsHeadingId, deviationsBodyId],
+          linkedAttachments: [],
+        },
+        {
+          id: newId('region-'),
+          entryId,
+          label: 'Observations',
+          blockIds: [observationsHeadingId, observationsBodyId],
+          linkedAttachments: [],
+        },
+        {
+          id: newId('region-'),
+          entryId,
+          label: 'Raw data',
+          blockIds: [rawDataHeadingId, rawDataBodyId],
+          linkedAttachments: [],
+        },
+        {
+          id: newId('region-'),
+          entryId,
+          label: 'Next steps',
+          blockIds: [nextStepsHeadingId, nextStepsBodyId],
           linkedAttachments: [],
         },
       ],
@@ -953,6 +1233,7 @@ function blockToSearchText(block: Block): string {
     case 'quote':
       return block.text
     case 'table':
+    case 'workbook':
       return block.data.flat().join(' ')
     case 'checklist':
       return block.items.map((i) => i.text).join(' ')
@@ -1099,6 +1380,10 @@ function blocksToMarkdown(blocks: Block[], attachmentsById: Record<string, Attac
         parts.push(mdTable(block.data, block.headerRow !== false))
         if (block.caption) parts.push(`*${escapeMd(block.caption)}*`)
         break
+      case 'workbook':
+        parts.push('## Workbook')
+        parts.push(mdTable(block.data, true))
+        break
       case 'image': {
         const att = attachmentsById[block.attachmentId]
         const label = block.caption ?? att?.filename ?? 'image'
@@ -1184,6 +1469,8 @@ function blocksToHtml(blocks: Block[], attachmentsById: Record<string, Attachmen
         }
         case 'table':
           return `<div class="table-wrap">${renderTable(block.data, block.headerRow !== false)}${block.caption ? `<div class="caption">${esc(block.caption)}</div>` : ''}</div>`
+        case 'workbook':
+          return `<h2>Workbook</h2><div class="table-wrap workbook-export">${renderTable(block.data, true)}</div>`
         case 'image': {
           const att = attachmentsById[block.attachmentId]
           const src = attachmentUrls[block.attachmentId] ?? att?.thumbnail
@@ -1328,6 +1615,11 @@ async function buildEntryPdf(
         break
       }
       case 'table':
+        block.data.forEach((row) => addParagraph(row.join(' | '), font, 10, 2))
+        y -= 6
+        break
+      case 'workbook':
+        addParagraph('Workbook', fontBold, 14, 6)
         block.data.forEach((row) => addParagraph(row.join(' | '), font, 10, 2))
         y -= 6
         break
@@ -3607,6 +3899,27 @@ function App() {
     }
   }, [filteredProtocols, selectedProtocolId])
 
+  const sidebarEntrySignals = useMemo<Record<string, SidebarEntrySignal>>(() => {
+    return Object.fromEntries(
+      entryList.map((entryItem) => {
+        const entryAttachments = attachmentsForEntry(entryItem.id)
+        const queueItems = changeQueue.filter((change) => change.entryId === entryItem.id)
+        return [
+          entryItem.id,
+          {
+            attachments: entryAttachments.length,
+            images: entryAttachments.filter((att) => att.type === 'image').length,
+            intake: (entryItem.telegramCaptures?.length ?? 0) + (entryItem.whatsappCaptures?.length ?? 0),
+            pending: queueItems.filter((change) => change.status === 'pending').length,
+            failed: queueItems.filter((change) => change.status === 'failed').length,
+            verified: entryAttachments.filter((att) => Boolean(att.sha256)).length,
+            source: entryItem.source,
+          },
+        ]
+      })
+    )
+  }, [attachmentsForEntry, changeQueue, entryList])
+
   return (
     <div className="app-bg">
       <div className={`app-shell ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
@@ -3616,6 +3929,7 @@ function App() {
           experiments={experiments}
           entries={filteredEntries}
           allEntries={entryList}
+          entrySignals={sidebarEntrySignals}
           selectedEntryId={selectedEntryId}
           protocols={filteredProtocols}
           selectedProtocolId={selectedProtocolId}
@@ -3805,12 +4119,23 @@ function App() {
   )
 }
 
+type SidebarEntrySignal = {
+  attachments: number
+  images: number
+  intake: number
+  pending: number
+  failed: number
+  verified: number
+  source?: Entry['source']
+}
+
 interface SidebarProps {
   labs: typeof sampleData.labs
   projects: Project[]
   experiments: Experiment[]
   entries: Entry[]
   allEntries: Entry[]
+  entrySignals: Record<string, SidebarEntrySignal>
   selectedEntryId: string
   protocols: Protocol[]
   selectedProtocolId: string
@@ -3851,6 +4176,7 @@ function Sidebar({
   experiments,
   entries,
   allEntries,
+  entrySignals,
   selectedEntryId,
   protocols,
   selectedProtocolId,
@@ -3968,7 +4294,7 @@ function Sidebar({
         <div className="sidebar-header-actions">
           <div className="status-chip success">Sync ready</div>
           <button className="pill soft icon-button" onClick={onOpenSettings} type="button">
-            <span className="icon">⚙</span>
+            <span className="icon"><UiIcon name="settings" /></span>
             <span className="icon-label">Settings</span>
           </button>
         </div>
@@ -4010,22 +4336,29 @@ function Sidebar({
           {isEntriesMode ? (
             <div className="quick-actions">
               <button className="accent" onClick={onTodayEntry} data-testid="today-entry">
-                <span className="icon">✚</span>
+                <span className="icon"><UiIcon name="plus" /></span>
                 Today's Entry
               </button>
             </div>
           ) : (
             <div className="quick-actions">
               <button className="accent" onClick={onNewProtocol} data-testid="new-protocol">
-                <span className="icon">📘</span>
+                <span className="icon"><UiIcon name="book" /></span>
                 New Protocol
               </button>
             </div>
           )}
 
+          {isEntriesMode && (
+            <button className="sidebar-search-reference" type="button" onClick={() => onModeChange('entries')}>
+              <span>Search entries</span>
+              <kbd>Ctrl K</kbd>
+            </button>
+          )}
+
           {isEntriesMode ? (
             <>
-              <section className="sidebar-section">
+              <section className="sidebar-section sidebar-filter-section">
                 <div className="section-row">
                   <div className="section-title">Tag filters</div>
                   <button className="ghost subtle" type="button" onClick={onClearFilters} data-testid="clear-filters">
@@ -4074,7 +4407,7 @@ function Sidebar({
                 </div>
               </section>
 
-              <section className="sidebar-section">
+              <section className="sidebar-section sidebar-calendar-section">
                 <div className="section-title">Calendar</div>
                 <div className="calendar-range">
                   <label className="field">
@@ -4115,7 +4448,7 @@ function Sidebar({
                           onCalendarMonthChange(new Date(calendarMonth.getFullYear(), calendarMonth.getMonth() - 1, 1))
                         }
                       >
-                        ^
+                        ‹
                       </button>
                       <button
                         type="button"
@@ -4124,7 +4457,7 @@ function Sidebar({
                           onCalendarMonthChange(new Date(calendarMonth.getFullYear(), calendarMonth.getMonth() + 1, 1))
                         }
                       >
-                        v
+                        ›
                       </button>
                     </div>
                   </div>
@@ -4182,7 +4515,7 @@ function Sidebar({
                         onClick={() => onCreateEntryForDate(selectedDate)}
                         data-testid="calendar-create-entry"
                       >
-                        <span className="icon">✚</span>
+                        <span className="icon"><UiIcon name="plus" /></span>
                         Add entry for {selectedDateLabel}
                       </button>
                     </div>
@@ -4190,8 +4523,8 @@ function Sidebar({
                 </div>
               </section>
 
-              <section className="sidebar-section">
-                <div className="section-title">Entries</div>
+              <section className="sidebar-section sidebar-entries-section">
+                <div className="section-title">Recent entries</div>
                 <div className="muted tiny" style={{ marginBottom: 6 }}>
                   Showing {entries.length} item{entries.length === 1 ? '' : 's'}
                 </div>
@@ -4199,24 +4532,38 @@ function Sidebar({
                   {entries.length === 0 && (
                     <div className="muted tiny">No entries match these filters.</div>
                   )}
-                  {entries.map((e, index) => (
-                    <button
-                      key={e.id}
-                      className={`entry-item ${selectedEntryId === e.id ? 'active' : ''}`}
-                      onClick={() => onSelectEntry(e.id)}
-                      data-testid={`entry-list-item-${e.id}`}
-                      style={{ '--row-index': index } as React.CSSProperties}
-                    >
-                      <div>
-                        <div className="title-sm">{e.title}</div>
-                        <p className="muted tiny">{dateOnly.format(new Date(e.createdDatetime))}</p>
-                      </div>
-                      {(() => {
-                        const pill = getEntryPill(e)
-                        return <div className={pill.className}>{pill.label}</div>
-                      })()}
-                    </button>
-                  ))}
+                  {entries.map((e, index) => {
+                    const signals = entrySignals[e.id]
+                    const pill = getEntryPill(e)
+                    const syncLabel = signals?.failed
+                      ? 'Sync failed'
+                      : signals?.pending
+                        ? 'Sync pending'
+                        : 'Synced'
+                    return (
+                      <button
+                        key={e.id}
+                        className={`entry-item ${selectedEntryId === e.id ? 'active' : ''}`}
+                        onClick={() => onSelectEntry(e.id)}
+                        data-testid={`entry-list-item-${e.id}`}
+                        style={{ '--row-index': index } as React.CSSProperties}
+                      >
+                        <div>
+                          <div className="title-sm">{e.title}</div>
+                          <p className="muted tiny">{dateOnly.format(new Date(e.createdDatetime))}</p>
+                        </div>
+                        <div className="entry-signal-row">
+                          <span className={pill.className}>{pill.label}</span>
+                          {signals?.attachments ? <span className="entry-signal">Files {signals.attachments}</span> : null}
+                          {signals?.intake ? <span className="entry-signal">Intake {signals.intake}</span> : null}
+                          {signals?.verified ? <span className="entry-signal">Verified {signals.verified}</span> : null}
+                          <span className={`entry-signal ${signals?.failed ? 'danger' : signals?.pending ? 'warning' : 'success'}`}>
+                            {syncLabel}
+                          </span>
+                        </div>
+                      </button>
+                    )
+                  })}
                 </div>
               </section>
             </>
@@ -4346,8 +4693,9 @@ function EditorPane({
 }: EditorPaneProps) {
   const [exporting, setExporting] = useState(false)
   const [isEditing, setIsEditing] = useState(false)
-  const [activeTab, setActiveTab] = useState<'note' | 'files' | 'details'>('note')
+  const [activeTab, setActiveTab] = useState<'note' | 'workbook' | 'files' | 'details'>('note')
   const [headerCollapsed, setHeaderCollapsed] = useState(false)
+  const [contextCollapsed, setContextCollapsed] = useState(false)
   const [editor] = useState<HistoryReactEditor>(() =>
     withHistory(withChecklists(withReact(createEditor() as ReactEditor))) as HistoryReactEditor
   )
@@ -4355,15 +4703,16 @@ function EditorPane({
   const lastEntryIdRef = useRef<string | null>(null)
   const [editorRevision, setEditorRevision] = useState(0)
   const [editorValue, setEditorValue] = useState<Descendant[]>(
-    () => blocksToSlate(entry?.content ?? [{ id: 'b-empty', type: 'paragraph', text: '' }])
+    () => blocksToSlate(getNoteBlocksForEntry(entry))
   )
+  const [workbookData, setWorkbookData] = useState<string[][]>(() => getWorkbookDataForEntry(entry))
   const focusEditor = useCallback(() => {
     try {
       const start = Editor.start(editor, [])
       Transforms.select(editor, start)
       ReactEditor.focus(editor)
-    } catch (err) {
-      console.warn('Unable to focus editor', err)
+    } catch {
+      // Slate can briefly expose an empty root while switching entries; focus will retry on the next edit action.
     }
   }, [editor])
 
@@ -4373,12 +4722,14 @@ function EditorPane({
     if (isNewEntry) {
       lastEntryIdRef.current = entry.id
       setIsEditing(false)
-      setEditorValue(blocksToSlate(entry.content))
+      setEditorValue(blocksToSlate(getNoteBlocksForEntry(entry)))
+      setWorkbookData(getWorkbookDataForEntry(entry))
       setActiveTab('note')
       return
     }
     if (!isEditing) {
-      setEditorValue(blocksToSlate(entry.content))
+      setEditorValue(blocksToSlate(getNoteBlocksForEntry(entry)))
+      setWorkbookData(getWorkbookDataForEntry(entry))
     }
   }, [entry, isEditing])
 
@@ -4404,6 +4755,19 @@ function EditorPane({
   const pendingCount = changeQueue.filter((c) => c.status === 'pending').length
   const failedCount = changeQueue.filter((c) => c.status === 'failed').length
   const hasWork = pendingCount > 0 || failedCount > 0
+  const imageCount = attachments.filter((a) => a.type === 'image').length
+  const fileCount = attachments.length - imageCount
+  const intakeCount = (entry?.telegramCaptures?.length ?? 0) + (entry?.whatsappCaptures?.length ?? 0)
+  const latestAttachments = attachments.slice(0, 3)
+  const verifiedAttachmentCount = attachments.filter((a) => Boolean(a.sha256)).length
+  const hasWorkbook = workbookHasContent(workbookData)
+  const saveStateLabel = syncing
+    ? 'Syncing changes'
+    : failedCount
+      ? `${failedCount} sync issue${failedCount === 1 ? '' : 's'}`
+      : pendingCount
+        ? 'Saved locally · sync pending'
+        : 'Saved locally · synced'
 
   const handleUpdateBlock = useCallback(
     (updated: Block) => {
@@ -4419,7 +4783,7 @@ function EditorPane({
   )
 
   const viewSections = useMemo(() => {
-    const blocks = entry?.content ?? []
+    const blocks = getNoteBlocksForEntry(entry)
     const sections: Array<{ key: string; blocks: Block[] }> = []
     let current: { key: string; blocks: Block[] } | null = null
 
@@ -4439,7 +4803,7 @@ function EditorPane({
     }
 
     return sections
-  }, [entry?.content])
+  }, [entry])
 
   const toggleHeader = useCallback(() => {
     setHeaderCollapsed((prev) => {
@@ -4482,6 +4846,11 @@ function EditorPane({
         description: 'Review and manage uploaded attachments linked to this note.',
       },
       {
+        selector: '[data-testid="editor-tab-workbook"]',
+        title: 'Workbook tab',
+        description: 'Paste spreadsheet-style data into the day entry only when the entry needs tabular calculations or raw values.',
+      },
+      {
         selector: '[data-testid="editor-tab-details"]',
         title: 'Details tab',
         description: 'Manage note metadata, tags, and sync controls for this entry.',
@@ -4515,11 +4884,24 @@ function EditorPane({
 
   const handleSave = () => {
     const timestamp = new Date().toISOString()
-    const updatedBlocks = slateToBlocks(editorValue).map((block) => ({
+    const noteBlocks = slateToBlocks(editorValue).map((block) => ({
       ...block,
       updatedAt: timestamp,
       updatedBy: 'me',
     }))
+    const existingWorkbook = getWorkbookBlock(entry)
+    const compactWorkbook = compactWorkbookData(workbookData)
+    const workbookBlock: Block | null = compactWorkbook.length
+      ? {
+          id: existingWorkbook?.id ?? newId('b-workbook-'),
+          type: 'workbook',
+          title: 'Workbook',
+          data: compactWorkbook,
+          updatedAt: timestamp,
+          updatedBy: 'me',
+        }
+      : null
+    const updatedBlocks = workbookBlock ? [...noteBlocks, workbookBlock] : noteBlocks
     onUpdateEntry(entry.id, updatedBlocks)
     onEnqueueChange(entry.id, updatedBlocks.map((b) => b.id), timestamp)
     void onAutoSaveEntry(entry.id, updatedBlocks)
@@ -4719,7 +5101,7 @@ function EditorPane({
                 }}
               />
               <button className="ghost icon-btn" type="button" onClick={toggleHeader} data-testid="header-toggle">
-                <span className="icon">{headerCollapsed ? '▾' : '▴'}</span>
+                <span className="icon"><UiIcon name={headerCollapsed ? 'chevronDown' : 'chevronUp'} /></span>
                 {headerCollapsed ? 'Show header' : 'Hide header'}
               </button>
               {(pendingCount > 0 || failedCount > 0) && (
@@ -4730,7 +5112,7 @@ function EditorPane({
                   onClick={() => onSyncNow(failedCount > 0)}
                   disabled={syncing}
                 >
-                  <span className="icon">⟳</span>
+                  <span className="icon"><UiIcon name="refresh" /></span>
                   {failedCount > 0 ? 'Retry failed' : 'Sync now'}
                 </button>
               )}
@@ -4749,7 +5131,7 @@ function EditorPane({
                       }
                     }}
                   >
-                    <span className="icon">⬇</span>
+                    <span className="icon"><UiIcon name="download" /></span>
                     Export PDF
                   </button>
                   <button
@@ -4765,29 +5147,36 @@ function EditorPane({
                       }
                     }}
                   >
-                    <span className="icon">⬇</span>
+                    <span className="icon"><UiIcon name="download" /></span>
                     Export MD
                   </button>
                 </>
               ) : (
                 <button className="ghost icon-btn" disabled title="Attach this note to an experiment to export a bundle.">
-                  <span className="icon">⬇</span>
+                  <span className="icon"><UiIcon name="download" /></span>
                   Export PDF
                 </button>
               )}
               {!isEditing ? (
                 <button className="accent icon-btn" onClick={() => setIsEditing(true)} data-testid="edit-note-btn">
-                  <span className="icon">✎</span>
+                  <span className="icon"><UiIcon name="edit" /></span>
                   Edit
                 </button>
               ) : (
                 <div className="edit-actions">
-                  <button className="ghost icon-btn" onClick={() => setIsEditing(false)}>
-                    <span className="icon">✕</span>
+                  <button
+                    className="ghost icon-btn"
+                    onClick={() => {
+                      setIsEditing(false)
+                      setEditorValue(blocksToSlate(getNoteBlocksForEntry(entry)))
+                      setWorkbookData(getWorkbookDataForEntry(entry))
+                    }}
+                  >
+                    <span className="icon"><UiIcon name="x" /></span>
                     Cancel
                   </button>
                   <button className="accent icon-btn" onClick={handleSave} data-testid="entry-save">
-                    <span className="icon">✓</span>
+                    <span className="icon"><UiIcon name="save" /></span>
                     Save
                   </button>
                 </div>
@@ -4797,6 +5186,9 @@ function EditorPane({
           <div className="title-row">
             <h1>{entry.title}</h1>
             {experiment?.protocolRef && <span className="pill">{experiment.protocolRef}</span>}
+            <span className={`status-chip provenance-chip ${failedCount ? 'danger' : pendingCount || syncing ? 'warning' : 'success'}`}>
+              {saveStateLabel}
+            </span>
           </div>
           <div className="tag-editor" data-testid="entry-tags-inline">
             <TagPicker
@@ -4842,8 +5234,19 @@ function EditorPane({
               aria-selected={activeTab === 'note'}
               data-testid="editor-tab-note"
             >
-              <span className="icon">✍</span>
+              <span className="icon"><UiIcon name="note" /></span>
               Note
+            </button>
+            <button
+              type="button"
+              className={`tab-button ${activeTab === 'workbook' ? 'active' : ''}`}
+              onClick={() => setActiveTab('workbook')}
+              role="tab"
+              aria-selected={activeTab === 'workbook'}
+              data-testid="editor-tab-workbook"
+            >
+              <span className="icon"><UiIcon name="table" /></span>
+              Workbook
             </button>
             <button
               type="button"
@@ -4853,7 +5256,7 @@ function EditorPane({
               aria-selected={activeTab === 'files'}
               data-testid="editor-tab-files"
             >
-              <span className="icon">📁</span>
+              <span className="icon"><UiIcon name="folder" /></span>
               Files
             </button>
             <button
@@ -4864,7 +5267,7 @@ function EditorPane({
               aria-selected={activeTab === 'details'}
               data-testid="editor-tab-details"
             >
-              <span className="icon">🏷</span>
+              <span className="icon"><UiIcon name="tag" /></span>
               Details
             </button>
           </div>
@@ -4883,6 +5286,41 @@ function EditorPane({
           )}
         </div>
       </div>
+
+      <div className={`editor-workspace ${contextCollapsed ? 'context-collapsed' : ''}`}>
+        <aside className="entry-browser-rail" aria-label="Entries">
+          <div className="entry-browser-head">
+            <div>
+              <div className="section-title">Entries</div>
+              <div className="muted tiny">{allEntries.length} notebook records</div>
+            </div>
+            <button className="ghost subtle" type="button" onClick={() => setTabsViewOpen((prev) => !prev)}>
+              Browse
+            </button>
+          </div>
+          <div className="entry-browser-list">
+            {allEntries.slice(0, 8).map((item) => {
+              const tag = item.experimentTags?.[0] ?? item.projectTags?.[0] ?? item.tags[0]
+              return (
+                <button
+                  key={`rail-${item.id}`}
+                  type="button"
+                  className={`entry-browser-item ${item.id === selectedEntryId ? 'active' : ''}`}
+                  onClick={() => onSelectEntry(item.id)}
+                >
+                  <span className="entry-browser-date">{item.dateBucket}</span>
+                  <strong>{item.title}</strong>
+                  <span className="entry-browser-meta">
+                    {tag ? <span className="pill soft">{tag}</span> : <span>General note</span>}
+                    <span className="status-dot success" aria-hidden="true" />
+                  </span>
+                </button>
+              )
+            })}
+          </div>
+        </aside>
+
+        <div className="editor-main-stack">
 
       {activeTab === 'note' && !isEditing && (
         <div className="blocks" data-testid="entry-view" key={`entry-view-${entry.id}`}>
@@ -5069,6 +5507,35 @@ function EditorPane({
         </>
       )}
 
+      {activeTab === 'workbook' && (
+        <div className="tab-panel workbook-tab-panel">
+          <div className="panel-card workbook-card">
+            <div className="panel-card-head">
+              <div>
+                <div className="section-title">Workbook</div>
+                <div className="muted tiny">
+                  Paste tabular data from Excel, Prism, instruments, or CSV/TSV exports. Empty workbooks are ignored on save.
+                </div>
+              </div>
+              <span className={`status-chip ${workbookHasContent(workbookData) ? 'success' : 'warning'}`}>
+                {workbookHasContent(workbookData) ? 'Will save with entry' : 'Not saved while empty'}
+              </span>
+            </div>
+            <WorkbookSheet
+              data={workbookData}
+              isEditing={isEditing}
+              onChange={setWorkbookData}
+            />
+            {!isEditing && !workbookHasContent(workbookData) && (
+              <div className="file-drop-empty workbook-empty-state">
+                <strong>No workbook data for this day</strong>
+                <span>Click Edit, paste a table into the grid, and Save. If the grid is cleared later, the workbook block is removed from the entry.</span>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {activeTab === 'files' && (
         <div className="tab-panel">
           <div className="panel-card">
@@ -5093,19 +5560,44 @@ function EditorPane({
           </div>
 
           <div className="panel-card">
-            <div className="section-title">Files</div>
-            {attachments.length === 0 && <div className="muted tiny">No files linked.</div>}
+            <div className="panel-card-head">
+              <div>
+                <div className="section-title">Files</div>
+                <div className="muted tiny">
+                  {attachments.length
+                    ? `${verifiedAttachmentCount}/${attachments.length} files have checksums recorded.`
+                    : 'Drop files, raw exports, PDFs, or microscope images into the note to link evidence.'}
+                </div>
+              </div>
+              <span className={`status-chip ${attachments.length && verifiedAttachmentCount === attachments.length ? 'success' : 'warning'}`}>
+                {attachments.length ? (verifiedAttachmentCount === attachments.length ? 'Verified manifest' : 'Verification pending') : 'No files yet'}
+              </span>
+            </div>
+            {attachments.length === 0 && (
+              <div className="file-drop-empty">
+                <strong>Attach evidence to this entry</strong>
+                <span>Drag files into the editor or use + File / + Image in the toolbar. Source, path, size, and checksum status will appear here.</span>
+              </div>
+            )}
             {attachments.length > 0 && (
               <div className="attachment-list">
                 {attachments.map((file) => (
                   <div key={file.id} className="attachment-row">
-                    <div className="attachment-icon">📎</div>
+                    <div className="attachment-icon"><UiIcon name="paperclip" /></div>
                     <div className="attachment-body">
                       <div className="title-sm">{file.filename}</div>
                       <div className="muted tiny">{file.storagePath}</div>
+                      <div className="attachment-row-meta">
+                        <span>Source: {file.source ? file.source : 'manual'}</span>
+                        <span>{file.contentType ? `Type: ${file.contentType}` : `Kind: ${file.type}`}</span>
+                        <span>{file.sha256 ? `Checksum: ${file.sha256.slice(0, 12)}...` : 'Checksum: pending'}</span>
+                      </div>
                     </div>
                     <span className="pill soft">{file.type.toUpperCase()}</span>
                     <span className="pill soft">{file.filesize}</span>
+                    <span className={`pill soft ${file.sha256 ? 'verified-pill' : 'warning-pill'}`}>
+                      {file.sha256 ? 'Verified' : 'Needs hash'}
+                    </span>
                   </div>
                 ))}
               </div>
@@ -5172,7 +5664,7 @@ function EditorPane({
                 onClick={() => onSyncNow(failedCount > 0)}
                 disabled={syncing}
               >
-                <span className="icon">⟳</span>
+                <span className="icon"><UiIcon name="refresh" /></span>
                 {failedCount > 0 ? 'Retry failed' : 'Sync now'}
               </button>
             )}
@@ -5192,6 +5684,144 @@ function EditorPane({
           </div>
         </div>
       )}
+        </div>
+
+        <aside className="entry-context-panel" aria-label="Entry context">
+          <button
+            className="ghost context-toggle"
+            type="button"
+            onClick={() => setContextCollapsed((prev) => !prev)}
+            aria-expanded={!contextCollapsed}
+            data-testid="context-panel-toggle"
+          >
+            <span className="icon"><UiIcon name={contextCollapsed ? 'chevronLeft' : 'chevronRight'} /></span>
+            <span>{contextCollapsed ? 'Open details' : 'Hide details'}</span>
+          </button>
+
+          {!contextCollapsed && (
+            <div className="context-panel-body">
+              <section className="context-card context-card-primary">
+                <div className="context-card-head">
+                  <div>
+                    <div className="section-title">Entry status</div>
+                    <div className="title-sm">{entry.dateBucket}</div>
+                  </div>
+                  <span className={`status-chip ${syncing || hasWork ? 'warning' : 'success'}`}>
+                    {syncing ? 'Syncing' : failedCount ? `${failedCount} failed` : pendingCount ? `${pendingCount} pending` : 'Synced'}
+                  </span>
+                </div>
+                <div className="context-metrics">
+                  <button type="button" className="context-metric" onClick={() => setActiveTab('files')}>
+                    <span>{attachments.length}</span>
+                    <small>Files</small>
+                  </button>
+                  <button type="button" className="context-metric" onClick={() => setActiveTab('files')}>
+                    <span>{imageCount}</span>
+                    <small>Images</small>
+                  </button>
+                  <button type="button" className="context-metric" onClick={() => setActiveTab('details')}>
+                    <span>{intakeCount}</span>
+                    <small>Intake</small>
+                  </button>
+                  <button type="button" className="context-metric" onClick={() => setActiveTab('workbook')}>
+                    <span>{hasWorkbook ? 1 : 0}</span>
+                    <small>Workbook</small>
+                  </button>
+                </div>
+              </section>
+
+              <section className="context-card">
+                <div className="context-card-head">
+                  <div>
+                    <div className="section-title">Workspace</div>
+                    <div className="muted tiny">{project?.title ?? 'No project selected'}</div>
+                  </div>
+                  <button className="ghost subtle" type="button" onClick={() => setActiveTab('details')}>
+                    Edit
+                  </button>
+                </div>
+                <div className="context-chip-row">
+                  {(entry.projectTags ?? []).slice(0, 3).map((tag) => (
+                    <span key={`ctx-project-${tag}`} className="pill soft">{tag}</span>
+                  ))}
+                  {(entry.experimentTags ?? []).slice(0, 3).map((tag) => (
+                    <span key={`ctx-exp-${tag}`} className="pill ghost-pill">{tag}</span>
+                  ))}
+                  {!(entry.projectTags?.length || entry.experimentTags?.length) && (
+                    <span className="muted tiny">No tags yet.</span>
+                  )}
+                </div>
+              </section>
+
+              <section className="context-card">
+                <div className="context-card-head">
+                  <div>
+                    <div className="section-title">Attachments</div>
+                    <div className="muted tiny">{imageCount} images · {fileCount} files</div>
+                  </div>
+                  <button className="ghost subtle" type="button" onClick={() => setActiveTab('files')}>
+                    View
+                  </button>
+                </div>
+                <div className="context-list">
+                  {latestAttachments.length === 0 && <div className="muted tiny">Drop files into the note to attach them.</div>}
+                  {latestAttachments.map((file) => (
+                    <button key={`ctx-file-${file.id}`} type="button" className="context-list-item" onClick={() => setActiveTab('files')}>
+                      <span className="context-file-icon">{file.type === 'image' ? 'IMG' : 'FILE'}</span>
+                      <span>
+                        <strong>{file.filename}</strong>
+                        <small>{file.filesize}</small>
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </section>
+
+              <section className="context-card">
+                <div className="section-title">Capture inbox</div>
+                <div className="context-intake-grid">
+                  <div>
+                    <span>{entry.telegramCaptures?.length ?? 0}</span>
+                    <small>Telegram</small>
+                  </div>
+                  <div>
+                    <span>{entry.whatsappCaptures?.length ?? 0}</span>
+                    <small>WhatsApp</small>
+                  </div>
+                </div>
+                <div className="muted tiny">Phone intake stays local and appears here when messages are imported.</div>
+              </section>
+
+              <section className="context-card">
+                <div className="section-title">Quick actions</div>
+                <div className="context-actions">
+                  <button className="ghost" type="button" onClick={() => setActiveTab('note')}>Note</button>
+                  <button className="ghost" type="button" onClick={() => setActiveTab('workbook')}>Workbook</button>
+                  <button className="ghost" type="button" onClick={() => setActiveTab('files')}>Files</button>
+                  <button className="ghost" type="button" onClick={() => setActiveTab('details')}>Details</button>
+                  {experiment && (
+                    <button
+                      className="accent"
+                      type="button"
+                      disabled={exporting}
+                      onClick={async () => {
+                        setExporting(true)
+                        try {
+                          await onExportExperiment(experiment.id, 'pdf')
+                        } finally {
+                          setExporting(false)
+                        }
+                      }}
+                    >
+                      Export
+                    </button>
+                  )}
+                </div>
+              </section>
+            </div>
+          )}
+        </aside>
+      </div>
     </main>
   )
 }
@@ -5213,8 +5843,8 @@ function ProtocolPane({ protocol, onUpdateProtocol, onUpdateProtocolMeta }: Prot
       const start = Editor.start(editor, [])
       Transforms.select(editor, start)
       ReactEditor.focus(editor)
-    } catch (err) {
-      console.warn('Unable to focus editor', err)
+    } catch {
+      // Slate can briefly expose an empty root while switching protocols; focus will retry on the next edit action.
     }
   }, [editor])
 
@@ -5287,12 +5917,12 @@ function ProtocolPane({ protocol, onUpdateProtocol, onUpdateProtocolMeta }: Prot
                 onClick={() => setHeaderCollapsed((prev) => !prev)}
                 data-testid="protocol-header-toggle"
               >
-                <span className="icon">{headerCollapsed ? '▾' : '▴'}</span>
+                <span className="icon"><UiIcon name={headerCollapsed ? 'chevronDown' : 'chevronUp'} /></span>
                 {headerCollapsed ? 'Show header' : 'Hide header'}
               </button>
               {!isEditing ? (
                 <button className="accent icon-btn" onClick={() => setIsEditing(true)}>
-                  <span className="icon">✎</span>
+                  <span className="icon"><UiIcon name="edit" /></span>
                   Edit
                 </button>
               ) : (
@@ -5305,11 +5935,11 @@ function ProtocolPane({ protocol, onUpdateProtocol, onUpdateProtocolMeta }: Prot
                       setDraftTitle(protocol.title)
                     }}
                   >
-                    <span className="icon">✕</span>
+                    <span className="icon"><UiIcon name="x" /></span>
                     Cancel
                   </button>
                   <button className="accent icon-btn" onClick={handleSave} data-testid="protocol-save">
-                    <span className="icon">✓</span>
+                    <span className="icon"><UiIcon name="save" /></span>
                     Save
                   </button>
                 </div>
@@ -5884,6 +6514,115 @@ function parseTableFromClipboard(text: string): string[][] | null {
   return rows
 }
 
+function parseWorkbookClipboard(text: string): string[][] {
+  const trimmed = text.replace(/\r/g, '').trimEnd()
+  if (!trimmed) return [['']]
+  return trimmed.split('\n').map((row) => {
+    const delimiter = row.includes('\t') ? '\t' : ','
+    return row.split(delimiter).map((cell) => cell.trim().replace(/^"(.*)"$/, '$1').replace(/""/g, '"'))
+  })
+}
+
+function WorkbookSheet({
+  data,
+  isEditing,
+  onChange,
+}: {
+  data: string[][]
+  isEditing: boolean
+  onChange: (data: string[][]) => void
+}) {
+  const grid = normalizeWorkbookData(data)
+
+  const updateCell = (rowIdx: number, colIdx: number, value: string) => {
+    const next = normalizeWorkbookData(grid)
+    next[rowIdx][colIdx] = value
+    onChange(next)
+  }
+
+  const pasteCells = (startRow: number, startCol: number, text: string) => {
+    const pasted = parseWorkbookClipboard(text)
+    const next = normalizeWorkbookData(grid)
+    pasted.slice(0, WORKBOOK_MAX_ROWS - startRow).forEach((row, rowOffset) => {
+      row.slice(0, WORKBOOK_MAX_COLS - startCol).forEach((cell, colOffset) => {
+        next[startRow + rowOffset][startCol + colOffset] = cell
+      })
+    })
+    onChange(normalizeWorkbookData(next))
+  }
+
+  const addRows = () => {
+    onChange(normalizeWorkbookData([...grid, ...makeEmptyWorkbookData(5, grid[0]?.length ?? WORKBOOK_MIN_COLS)]))
+  }
+
+  const addColumn = () => {
+    const next = grid.map((row) => row.length < WORKBOOK_MAX_COLS ? [...row, ''] : row)
+    onChange(normalizeWorkbookData(next, grid.length, Math.min((grid[0]?.length ?? WORKBOOK_MIN_COLS) + 1, WORKBOOK_MAX_COLS)))
+  }
+
+  const clearWorkbook = () => onChange(makeEmptyWorkbookData())
+
+  return (
+    <div className="workbook-shell" data-testid="entry-workbook">
+      <div className="workbook-toolbar">
+        <div className="muted tiny">
+          {grid.length} rows · {grid[0]?.length ?? 0} columns
+        </div>
+        <div className="workbook-actions">
+          <button className="pill soft" type="button" onClick={addRows} disabled={!isEditing || grid.length >= WORKBOOK_MAX_ROWS}>
+            <UiIcon name="plus" />
+            Rows
+          </button>
+          <button className="pill soft" type="button" onClick={addColumn} disabled={!isEditing || (grid[0]?.length ?? 0) >= WORKBOOK_MAX_COLS}>
+            <UiIcon name="plus" />
+            Column
+          </button>
+          <button className="pill soft" type="button" onClick={clearWorkbook} disabled={!isEditing || !workbookHasContent(grid)}>
+            <UiIcon name="trash" />
+            Clear
+          </button>
+        </div>
+      </div>
+      <div className="workbook-grid-wrap">
+        <table className="workbook-grid">
+          <thead>
+            <tr>
+              <th className="workbook-corner" aria-label="Workbook row numbers" />
+              {(grid[0] ?? []).map((_, colIdx) => (
+                <th key={`col-${colIdx}`}>{WORKBOOK_COLUMN_LABELS[colIdx]}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {grid.map((row, rowIdx) => (
+              <tr key={`row-${rowIdx}`}>
+                <th>{rowIdx + 1}</th>
+                {row.map((cell, colIdx) => (
+                  <td key={`${rowIdx}-${colIdx}`}>
+                    <input
+                      value={cell}
+                      readOnly={!isEditing}
+                      aria-label={`Cell ${WORKBOOK_COLUMN_LABELS[colIdx]}${rowIdx + 1}`}
+                      onChange={(event) => updateCell(rowIdx, colIdx, event.target.value)}
+                      onPaste={(event) => {
+                        if (!isEditing) return
+                        const text = event.clipboardData.getData('text/plain')
+                        if (!text || (!text.includes('\t') && !text.includes('\n') && !text.includes(','))) return
+                        event.preventDefault()
+                        pasteCells(rowIdx, colIdx, text)
+                      }}
+                    />
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
+
 function insertTableBlock(editor: ReactEditor, data: string[][]) {
   const entry = getActiveBlockEntry(editor)
   const insertAt = entry ? Path.next(entry[1]) : [editor.children.length]
@@ -6270,10 +7009,12 @@ function EditorInsertBar({
 
         <div className="toolbar-group">
           <button className="pill soft" type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => insertHeadingBlock(editor, 2)}>
-            + Header
+            <UiIcon name="note" />
+            Header
           </button>
           <button className="pill soft" type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => insertChecklistBlock(editor)}>
-            + Checks
+            <UiIcon name="check" />
+            Checks
           </button>
           {LIST_STYLE_OPTIONS.map((option) => (
             <button
@@ -6290,7 +7031,8 @@ function EditorInsertBar({
           ))}
           {onShowTags && (
             <button className="pill soft" type="button" onMouseDown={(e) => e.preventDefault()} onClick={onShowTags}>
-              + Tags
+              <UiIcon name="tag" />
+              Tags
             </button>
           )}
         </div>
@@ -6313,22 +7055,28 @@ function EditorInsertBar({
 
         <div className="toolbar-group">
           <button className="pill soft" type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => imgRef.current?.click()}>
-            + Image
+            <UiIcon name="image" />
+            Image
           </button>
           <button className="pill soft" type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => cameraRef.current?.click()}>
-            + Camera
+            <UiIcon name="camera" />
+            Camera
           </button>
           <button className="pill soft" type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => insertTableBlock(editor, [['Sample', 'Value']])}>
-            + Table
+            <UiIcon name="table" />
+            Table
           </button>
           <button className="pill soft" type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => fileRef.current?.click()}>
-            + File
+            <UiIcon name="file" />
+            File
           </button>
           <button className="pill soft" type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => setDestOpen(true)}>
-            + File destination
+            <UiIcon name="folder" />
+            File destination
           </button>
           <button className="pill soft" type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => insertDividerBlock(editor)}>
-            + Divider
+            <UiIcon name="minus" />
+            Divider
           </button>
         </div>
         </div>
@@ -6616,10 +7364,12 @@ function ProtocolInsertBar({ editor, revision }: { editor: HistoryReactEditor; r
 
       <div className="toolbar-group">
         <button className="pill soft" type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => insertHeadingBlock(editor, 2)}>
-          + Header
+          <UiIcon name="note" />
+          Header
         </button>
         <button className="pill soft" type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => insertChecklistBlock(editor)}>
-          + Checks
+          <UiIcon name="check" />
+          Checks
         </button>
         {LIST_STYLE_OPTIONS.map((option) => (
           <button
@@ -6654,10 +7404,12 @@ function ProtocolInsertBar({ editor, revision }: { editor: HistoryReactEditor; r
 
       <div className="toolbar-group">
         <button className="pill soft" type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => insertTableBlock(editor, [['Step', 'Notes']])}>
-          + Table
+          <UiIcon name="table" />
+          Table
         </button>
         <button className="pill soft" type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => insertDividerBlock(editor)}>
-          + Divider
+          <UiIcon name="minus" />
+          Divider
           </button>
         </div>
       </div>
@@ -6803,12 +7555,7 @@ function AttachmentElement({ element, attributes, children }: RenderElementProps
   const url = attachmentId ? (ctx?.attachmentUrls[attachmentId] ?? attachment?.thumbnail) : undefined
   const isImageAttachment = meta?.type === 'image'
 
-  const icon = {
-    image: '🖼️',
-    pdf: '📄',
-    file: '📁',
-    raw: '🧪',
-  }[attachment?.type ?? 'file']
+  const iconName: UiIconName = attachment?.type === 'image' ? 'image' : attachment?.type === 'raw' ? 'spark' : 'file'
 
   const elementLabel = typeof element.label === 'string' ? element.label : 'Attachment'
   const title =
@@ -6835,12 +7582,10 @@ function AttachmentElement({ element, attributes, children }: RenderElementProps
           {isImageAttachment && url ? (
             <>
               <img className="att-thumb-preview" src={url} alt={attachment?.filename ?? 'Image'} />
-              <span className="att-thumb-icon muted tiny" aria-hidden="true">
-                🖼️
-              </span>
+              <span className="att-thumb-icon muted tiny" aria-hidden="true"><UiIcon name="image" /></span>
             </>
           ) : (
-            <span className="muted tiny">{icon}</span>
+            <span className="muted tiny"><UiIcon name={iconName} /></span>
           )}
         </div>
         <div className="att-meta">
@@ -7121,6 +7866,8 @@ const blocksToSlate = (blocks: Block[]): Descendant[] => {
           meta: { ...block, headerRow: block.headerRow !== false },
           children: [{ text: '' }],
         }
+      case 'workbook':
+        return { type: 'readonly', blockId: block.id, meta: block, label: 'Workbook', children: [{ text: '' }] }
       case 'image':
       case 'file':
         return { type: 'attachment', blockId: block.id, meta: block, children: [{ text: '' }] }
@@ -7294,6 +8041,26 @@ function BlockRenderer({ block, attachments, attachmentUrls, onUpdateBlock }: Bl
             </tbody>
           </table>
           {block.caption && <div className="muted tiny">{block.caption}</div>}
+        </div>
+      )
+    }
+    case 'workbook': {
+      return (
+        <div className="table-wrap workbook-preview">
+          <div className="section-title">Workbook</div>
+          <table>
+            <tbody>
+              {block.data.map((row, idx) => (
+                <tr key={idx}>
+                  {row.map((cell, cIdx) => (
+                    <td key={cIdx} className={idx === 0 ? 'th' : ''}>
+                      {cell}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       )
     }
@@ -7491,7 +8258,7 @@ function TagFilterDropdown({
                     onClick={() => onToggle(tag)}
                   >
                     <span className="tag-option-check" aria-hidden="true">
-                      {isSelected ? '✓' : ''}
+                      {isSelected ? <UiIcon name="check" /> : ''}
                     </span>
                     <span>{tag}</span>
                   </button>
@@ -7505,7 +8272,7 @@ function TagFilterDropdown({
                       }}
                       aria-label={`Delete tag ${tag}`}
                     >
-                      ✕
+                      <UiIcon name="x" />
                     </button>
                   )}
                 </div>
@@ -7782,14 +8549,10 @@ function SettingsModal({
     !mobilePairLinkIsValid
       ? 'Awaiting link'
       : mobilePairConnected
-        ? mobilePairIsTailscale
-          ? 'Tailscale connected'
-          : 'Link connected'
+        ? 'Reachable from phone'
         : mobilePairStatus === 'checking'
           ? 'Checking connectivity'
-          : mobilePairIsTailscale
-            ? 'Tailscale not connected'
-            : 'Link not reachable'
+          : 'Not reachable yet'
   const mobilePairConnectedClass =
     !mobilePairLinkIsValid
       ? 'warning'
@@ -7812,7 +8575,7 @@ function SettingsModal({
 
   return (
     <div className="modal-overlay" role="dialog" aria-modal="true" onMouseDown={onClose}>
-      <div className="modal" onMouseDown={(e) => e.stopPropagation()}>
+      <div className="modal settings-modal" onMouseDown={(e) => e.stopPropagation()}>
         <div className="modal-head">
           <div>
             <div className="title-sm">Settings</div>
@@ -7888,13 +8651,13 @@ function SettingsModal({
           </div>
         </div>
 
-        <div className="meta-card" data-testid="mobile-pair-card">
-          <div className="settings-row">
+        <details className="meta-card settings-disclosure" data-testid="mobile-pair-card">
+          <summary className="settings-disclosure-summary">
             <div>
-              <div className="title-sm">Mobile pairing</div>
-              <div className="muted tiny">Create a phone-openable link and scan the QR code.</div>
+              <div className="title-sm">Phone access</div>
+              <div className="muted tiny">Optional QR link for opening this notebook from your phone.</div>
             </div>
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+            <div className="settings-status-row">
               <div className={`status-chip ${mobilePairStatusClass}`} data-testid="mobile-pair-status">
                 <span className={`status-dot ${mobilePairStatusClass}`} aria-hidden="true" />
                 {mobilePairStatusLabel}
@@ -7904,11 +8667,11 @@ function SettingsModal({
                 {mobilePairConnectedLabel}
               </div>
             </div>
-          </div>
+          </summary>
 
-          <div style={{ marginTop: 10 }}>
+          <div className="settings-disclosure-body">
             <label className="field">
-              <span className="muted tiny">Mobile access link (http/https)</span>
+              <span className="muted tiny">Phone link</span>
               <div className="field-row">
                 <input
                   data-testid="mobile-pair-link"
@@ -7917,7 +8680,7 @@ function SettingsModal({
                     setPairCopyState('idle')
                     onMobilePairLinkChange(e.target.value)
                   }}
-                  placeholder="e.g. https://my-laptop.ts.net/labnotebook"
+                  placeholder="Paste a reachable http(s) notebook link"
                 />
                 <button
                   className="ghost"
@@ -7926,7 +8689,7 @@ function SettingsModal({
                     void onAutoDetectMobilePairLink()
                   }}
                 >
-                  Auto detect
+                  Detect
                 </button>
                 <button
                   className="ghost"
@@ -7941,48 +8704,48 @@ function SettingsModal({
                 </button>
               </div>
             </label>
-          </div>
 
-          <div className="muted tiny" style={{ marginTop: 8 }}>
-            {pairCopyState === 'copied'
-              ? 'Link copied to clipboard.'
-                : pairCopyState === 'error'
-                  ? 'Unable to copy link from this browser session.'
-                  : 'Reachable link means a URL your phone can open directly. For Tailscale, use your .ts.net link or 100.x.x.x URL.'}
-          </div>
-
-          {mobilePairAutoMessage ? (
-            <div className="muted tiny" style={{ marginTop: 4 }}>
-              {mobilePairAutoMessage}
+            <div className="muted tiny" style={{ marginTop: 8 }}>
+              {pairCopyState === 'copied'
+                ? 'Link copied to clipboard.'
+                  : pairCopyState === 'error'
+                    ? 'Unable to copy link from this browser session.'
+                    : 'Use any private network or local URL your phone can open. Leave this blank if you only use the desktop app.'}
             </div>
-          ) : null}
 
-          <div className="muted tiny" style={{ marginTop: 4 }}>
-            {mobilePairIsTailscale
-              ? 'Tailscale-style link detected.'
-              : 'Tip: paste a Tailscale MagicDNS link (https://<device>.ts.net/...) for easier mobile access.'}
-          </div>
-
-          {mobilePairQrDataUrl ? (
-            <div className="mobile-pair-grid">
-              <img
-                src={mobilePairQrDataUrl}
-                alt="QR code for mobile pairing link"
-                className="mobile-pair-qr"
-                data-testid="mobile-pair-qr"
-              />
-              <div className="muted tiny">
-                Scan the QR code from your phone camera to open this notebook.
-                <br />
-                Status checks run while Settings is open.
+            {mobilePairAutoMessage ? (
+              <div className="muted tiny" style={{ marginTop: 4 }}>
+                {mobilePairAutoMessage}
               </div>
+            ) : null}
+
+            <div className="muted tiny mobile-pair-hint">
+              {mobilePairIsTailscale
+                ? 'Private network link detected. The QR code will work when the phone can reach the same network.'
+                : 'This is optional. It does not affect Telegram, WhatsApp, desktop notes, or local file storage.'}
             </div>
-          ) : (
-            <div className="muted tiny" style={{ marginTop: 10 }}>
-              Enter a valid http(s) link to generate the QR code.
-            </div>
-          )}
-        </div>
+
+            {mobilePairQrDataUrl ? (
+              <div className="mobile-pair-grid">
+                <img
+                  src={mobilePairQrDataUrl}
+                  alt="QR code for mobile pairing link"
+                  className="mobile-pair-qr"
+                  data-testid="mobile-pair-qr"
+                />
+                <div className="muted tiny">
+                  Scan the QR code from your phone camera to open this notebook.
+                  <br />
+                  Connectivity checks run only while Settings is open.
+                </div>
+              </div>
+            ) : (
+              <div className="muted tiny" style={{ marginTop: 10 }}>
+                Enter a valid http(s) link to generate the QR code.
+              </div>
+            )}
+          </div>
+        </details>
 
         <div className="meta-card">
           <div className="settings-row">

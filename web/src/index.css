@@ -23,8 +23,8 @@
 }
 
 :root {
-  --font-display: 'Space Grotesk', system-ui, sans-serif;
-  --font-body: 'Space Grotesk', 'Segoe UI', system-ui, -apple-system, sans-serif;
+  --font-display: 'Segoe UI', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-body: 'Segoe UI', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
   --font-mono: 'Space Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
   --tracking-display: 0;
   --tracking-label: 0;
@@ -32,7 +32,7 @@
   font-family: var(--font-body);
   font-size: 16px;
   line-height: 1.5;
-  font-weight: 500;
+  font-weight: 400;
   letter-spacing: 0;
   color-scheme: light;
 

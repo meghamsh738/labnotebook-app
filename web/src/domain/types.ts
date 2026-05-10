@@ -66,6 +66,7 @@ export type BlockType =
   | 'heading'
   | 'paragraph'
   | 'table'
+  | 'workbook'
   | 'image'
   | 'file'
   | 'checklist'
@@ -114,6 +115,12 @@ export interface TableBlock extends BlockBase {
   data: string[][]
   caption?: string
   headerRow?: boolean
+}
+
+export interface WorkbookBlock extends BlockBase {
+  type: 'workbook'
+  data: string[][]
+  title?: string
 }
 
 export interface ImageBlock extends BlockBase {
@@ -172,6 +179,7 @@ export type Block =
   | HeadingBlock
   | ParagraphBlock
   | TableBlock
+  | WorkbookBlock
   | ImageBlock
   | FileBlock
   | ChecklistBlock
