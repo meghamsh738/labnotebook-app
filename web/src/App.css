@@ -2386,7 +2386,7 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   background: var(--surface);
-  padding: 16px;
+  padding: 10px;
   display: flex;
   flex-direction: column;
   gap: var(--s-3);
@@ -2592,6 +2592,7 @@
   font-size: var(--fs-16);
   line-height: 1.68;
   color: var(--text);
+  padding-inline: 0;
 }
 
 .slate-editor > * + * {
@@ -4901,21 +4902,35 @@
 }
 
 .sidebar-content:has(.sidebar-search-reference) > .sidebar-calendar-section .calendar {
-  margin-top: 28px;
-  padding-top: 6px;
+  margin-top: 8px;
+  padding-top: 4px;
 }
 
 .sidebar-content:has(.sidebar-search-reference) > .sidebar-calendar-section .calendar-header {
-  padding-bottom: 5px;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 1px 7px;
 }
 
 .sidebar-content:has(.sidebar-search-reference) > .sidebar-calendar-section .calendar-month {
   font-size: 12px;
+  line-height: 1.1;
+}
+
+.sidebar-content:has(.sidebar-search-reference) > .sidebar-calendar-section .calendar-nav {
+  flex-direction: row;
+  gap: 5px;
+  margin-left: auto;
 }
 
 .sidebar-content:has(.sidebar-search-reference) > .sidebar-calendar-section .calendar-nav button {
-  width: 24px;
-  height: 24px;
+  width: 25px;
+  height: 25px;
+  border-radius: 8px;
+  background: rgba(226, 232, 240, 0.1);
+  border-color: rgba(226, 232, 240, 0.18);
+  color: #dce7f4;
+  font-size: 14px;
 }
 
 .sidebar-content:has(.sidebar-search-reference) > .sidebar-calendar-section .calendar-weekdays {
