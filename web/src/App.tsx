@@ -4360,9 +4360,9 @@ function Sidebar({
             <>
               <section className="sidebar-section sidebar-filter-section">
                 <div className="section-row">
-                  <div className="section-title">Tag filters</div>
+                  <div className="section-title">Filters</div>
                   <button className="ghost subtle" type="button" onClick={onClearFilters} data-testid="clear-filters">
-                    Clear filters
+                    Clear
                   </button>
                 </div>
                 <div className="tag-filter-stack">
@@ -4374,7 +4374,7 @@ function Sidebar({
                     onToggle={onToggleProjectTag}
                     onRemoveOption={onRemoveProjectTag}
                     testId="project-tag-filter"
-                    placeholder="Filter by project tags"
+                    placeholder="Project tags"
                   />
                   <TagFilterDropdown
                     label="Experiment tags"
@@ -4384,7 +4384,7 @@ function Sidebar({
                     onToggle={onToggleExperimentTag}
                     onRemoveOption={onRemoveExperimentTag}
                     testId="experiment-tag-filter"
-                    placeholder="Filter by experiment tags"
+                    placeholder="Experiment tags"
                   />
                 </div>
 
@@ -4395,13 +4395,13 @@ function Sidebar({
                       className={`pill soft filter-chip ${filterHasImage ? 'active-pill' : ''}`}
                       onClick={onToggleHasImage}
                     >
-                      Has image
+                      Images
                     </button>
                     <button
                       className={`pill soft filter-chip ${filterHasFile ? 'active-pill' : ''}`}
                       onClick={onToggleHasFile}
                     >
-                      Has file/raw/pdf
+                      Files
                     </button>
                   </div>
                 </div>
@@ -4540,6 +4540,11 @@ function Sidebar({
                       : signals?.pending
                         ? 'Sync pending'
                         : 'Synced'
+                    const signalSummary = signals?.intake
+                      ? `${signals.intake} intake`
+                      : signals?.attachments
+                        ? `${signals.attachments} file${signals.attachments === 1 ? '' : 's'}`
+                        : ''
                     return (
                       <button
                         key={e.id}
@@ -4554,9 +4559,7 @@ function Sidebar({
                         </div>
                         <div className="entry-signal-row">
                           <span className={pill.className}>{pill.label}</span>
-                          {signals?.attachments ? <span className="entry-signal">Files {signals.attachments}</span> : null}
-                          {signals?.intake ? <span className="entry-signal">Intake {signals.intake}</span> : null}
-                          {signals?.verified ? <span className="entry-signal">Verified {signals.verified}</span> : null}
+                          {signalSummary ? <span className="entry-signal summary">{signalSummary}</span> : null}
                           <span className={`entry-signal ${signals?.failed ? 'danger' : signals?.pending ? 'warning' : 'success'}`}>
                             {syncLabel}
                           </span>
