@@ -1,26 +1,11 @@
-@font-face {
-  font-family: 'Space Grotesk';
-  font-style: normal;
-  font-weight: 400 700;
-  font-display: swap;
-  src: url('./assets/fonts/SpaceGrotesk-VariableFont_wght.ttf') format('truetype');
-}
-
-@font-face {
-  font-family: 'Space Mono';
-  font-style: normal;
-  font-weight: 400;
-  font-display: swap;
-  src: url('./assets/fonts/SpaceMono-Regular.ttf') format('truetype');
-}
-
-@font-face {
-  font-family: 'Space Mono';
-  font-style: normal;
-  font-weight: 700;
-  font-display: swap;
-  src: url('./assets/fonts/SpaceMono-Bold.ttf') format('truetype');
-}
+@import '@fontsource/ibm-plex-sans/latin-400.css';
+@import '@fontsource/ibm-plex-sans/latin-500.css';
+@import '@fontsource/ibm-plex-sans/latin-600.css';
+@import '@fontsource/ibm-plex-sans/latin-700.css';
+@import '@fontsource/ibm-plex-mono/latin-400.css';
+@import '@fontsource/ibm-plex-mono/latin-500.css';
+@import '@fontsource/ibm-plex-mono/latin-600.css';
+@import '@fontsource/ibm-plex-mono/latin-700.css';
 
 :root {
   --font-display: 'Segoe UI', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
@@ -194,4 +179,46 @@ button {
 input::placeholder,
 textarea::placeholder {
   color: var(--text-3);
+}
+
+/* Lab operations visual system: warm paper, evergreen nav, IBM Plex typography. */
+:root,
+[data-theme],
+[data-theme='dark'],
+[data-theme='neo-brutal'],
+[data-theme='sage'] {
+  color-scheme: light;
+  --font-display: 'IBM Plex Sans', 'Segoe UI', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-body: 'IBM Plex Sans', 'Segoe UI', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
+
+  --bg: #f4efe5;
+  --surface: rgba(255, 252, 245, 0.92);
+  --surface-2: rgba(250, 245, 235, 0.92);
+  --surface-3: rgba(239, 231, 217, 0.86);
+
+  --text: #142620;
+  --text-2: #31443d;
+  --text-3: #68736d;
+
+  --border: rgba(32, 48, 42, 0.12);
+  --border-2: rgba(32, 48, 42, 0.2);
+
+  --accent: #075c49;
+  --accent-weak: rgba(7, 92, 73, 0.1);
+  --accent-border: rgba(7, 92, 73, 0.28);
+  --accent-border-strong: rgba(7, 92, 73, 0.42);
+  --focus: rgba(7, 92, 73, 0.18);
+  --app-bg-grad-1: rgba(7, 92, 73, 0.08);
+  --app-bg-grad-2: rgba(177, 136, 83, 0.07);
+
+  --danger: #9f2d20;
+  --danger-weak: rgba(159, 45, 32, 0.1);
+
+  --radius-sm: 7px;
+  --radius-md: 9px;
+  --shadow-1: 0 1px 2px rgba(20, 38, 32, 0.05), 0 12px 30px rgba(20, 38, 32, 0.08);
+  --shadow-2: 0 18px 45px rgba(20, 38, 32, 0.11);
+  --tracking-display: 0;
+  --tracking-label: 0.03em;
 }

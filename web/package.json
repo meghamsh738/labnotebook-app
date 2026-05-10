@@ -12,6 +12,8 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@fontsource/ibm-plex-mono": "^5.2.7",
+    "@fontsource/ibm-plex-sans": "^5.2.8",
     "lunr": "^2.3.9",
     "pdf-lib": "^1.17.1",
     "qrcode": "^1.5.4",
