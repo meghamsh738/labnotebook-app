@@ -311,6 +311,10 @@
   min-height: 34px;
   padding: 0;
   justify-content: center;
+  background: rgba(226, 232, 240, 0.12);
+  border-color: rgba(226, 232, 240, 0.18);
+  color: #dbe7f4;
+  box-shadow: none;
 }
 
 .sidebar .sidebar-header-actions .icon-label {
@@ -3930,9 +3934,32 @@
   justify-content: flex-start;
   min-height: 42px;
   border-radius: 8px;
-  background: #3f5fba;
-  border-color: rgba(147, 197, 253, 0.28);
+  background: #425da8;
+  border-color: rgba(147, 197, 253, 0.22);
   box-shadow: none;
+}
+
+.sidebar .mode-toggle .pill.soft,
+.sidebar .ghost,
+.sidebar .sidebar-toggle {
+  background: rgba(226, 232, 240, 0.1);
+  border-color: rgba(226, 232, 240, 0.18);
+  color: #dce7f4;
+  box-shadow: none;
+}
+
+.sidebar .mode-toggle .pill.soft:hover,
+.sidebar .ghost:hover:not(:disabled),
+.sidebar .sidebar-toggle:hover {
+  background: rgba(226, 232, 240, 0.16);
+  border-color: rgba(226, 232, 240, 0.24);
+  color: #f1f5f9;
+}
+
+.sidebar .mode-toggle .pill.active-pill {
+  background: rgba(118, 148, 216, 0.26);
+  border-color: rgba(147, 197, 253, 0.32);
+  color: #eef5ff;
 }
 
 .tag-filter-stack {
@@ -4763,6 +4790,9 @@
   padding: 3px 8px;
   font-size: 11px;
   margin-left: auto;
+  background: rgba(226, 232, 240, 0.12);
+  border-color: rgba(226, 232, 240, 0.18);
+  color: #dce7f4;
 }
 
 .sidebar-content:has(.sidebar-search-reference) > .sidebar-filter-section .tag-filter-stack {
@@ -4798,8 +4828,8 @@
   min-height: 26px;
   padding: 3px 9px;
   font-size: 11px;
-  background: rgba(255, 255, 255, 0.07);
-  border-color: rgba(255, 255, 255, 0.14);
+  background: rgba(226, 232, 240, 0.1);
+  border-color: rgba(226, 232, 240, 0.16);
   color: #dbe7f4;
 }
 
@@ -4832,13 +4862,19 @@
   min-height: 30px;
   padding: 5px 6px;
   font-size: 11px;
-  border-color: rgba(255, 255, 255, 0.12);
+  background: rgba(226, 232, 240, 0.1);
+  border-color: rgba(226, 232, 240, 0.16);
+  color: #dce7f4;
+  color-scheme: dark;
 }
 
 .sidebar-content:has(.sidebar-search-reference) > .sidebar-calendar-section .calendar-range .ghost {
   min-height: 30px;
   padding: 5px 8px;
   font-size: 11px;
+  background: rgba(226, 232, 240, 0.1);
+  border-color: rgba(226, 232, 240, 0.16);
+  color: #dce7f4;
 }
 
 .sidebar-content:has(.sidebar-search-reference) > .sidebar-calendar-section .calendar {
