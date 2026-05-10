@@ -2046,11 +2046,23 @@
   background: var(--surface);
 }
 
+.slate-editor > .table-block {
+  padding: 0;
+  overflow: hidden;
+}
+
 .table-toolbar {
   display: flex;
   flex-wrap: wrap;
   gap: var(--s-2);
   margin-bottom: var(--s-2);
+}
+
+.slate-editor > .table-block .table-toolbar {
+  margin-bottom: 0;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-2);
 }
 
 .table-editor {
