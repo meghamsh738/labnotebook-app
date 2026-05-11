@@ -691,21 +691,21 @@ type ThemeOption = {
 const THEME_OPTIONS: ThemeOption[] = [
   {
     id: 'light',
-    label: 'Studio',
-    description: 'Cool slate, cobalt accents.',
-    preview: { bg: '#F4F6FB', surface: '#FFFFFF', accent: '#2F6AF6', border: '#0F172A' },
+    label: 'Parchment',
+    description: 'Warm notebook surface with evergreen controls.',
+    preview: { bg: '#F4EFE5', surface: '#FFFCF5', accent: '#075C49', border: '#20302A' },
   },
   {
     id: 'neo-brutal',
-    label: 'Neo Brutal',
-    description: 'Punchy contrast, bold shadows.',
-    preview: { bg: '#FFF3DB', surface: '#FFFDF6', accent: '#FF4D2E', border: '#111111' },
+    label: 'Graphite',
+    description: 'Low-glare dark rail with paper work surfaces.',
+    preview: { bg: '#ECE8DE', surface: '#FCF8EE', accent: '#2F5D62', border: '#263B3C' },
   },
   {
     id: 'sage',
-    label: 'Sage',
-    description: 'Calm greens with crisp contrast.',
-    preview: { bg: '#F3F6F1', surface: '#FFFFFF', accent: '#1C8C5A', border: '#173023' },
+    label: 'Botanical',
+    description: 'Softer green lab palette for long sessions.',
+    preview: { bg: '#EFF3EA', surface: '#FCFFF8', accent: '#2D6F4F', border: '#254334' },
   },
 ]
 
@@ -2261,6 +2261,7 @@ function App() {
     if (typeof window === 'undefined') return 'light'
     try {
       const saved = window.localStorage.getItem('labnote.theme')
+      if (saved === 'dark') return 'neo-brutal'
       if (isThemeName(saved)) return saved
     } catch (err) {
       console.warn('Unable to read cached theme', err)

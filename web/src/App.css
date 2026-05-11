@@ -5085,10 +5085,10 @@
 /* Professional lab-operations theme: calm parchment workspace with evergreen navigation. */
 .app-bg {
   background:
-    linear-gradient(rgba(244, 239, 229, 0.96), rgba(244, 239, 229, 0.96)),
-    linear-gradient(rgba(32, 48, 42, 0.035) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(32, 48, 42, 0.035) 1px, transparent 1px),
-    #f4efe5;
+    linear-gradient(color-mix(in srgb, var(--bg) 96%, transparent), color-mix(in srgb, var(--bg) 96%, transparent)),
+    linear-gradient(var(--paper-grid-line) 1px, transparent 1px),
+    linear-gradient(90deg, var(--paper-grid-line) 1px, transparent 1px),
+    var(--bg);
   background-size: auto, 28px 28px, 28px 28px, auto;
   padding: 12px;
 }
@@ -5110,34 +5110,34 @@
   top: 0;
   height: 100%;
   background:
-    linear-gradient(180deg, rgba(5, 63, 50, 0.98), rgba(0, 47, 38, 0.99)),
-    #053f32;
-  color: rgba(255, 252, 245, 0.9);
-  border-color: rgba(0, 47, 38, 0.78);
-  box-shadow: 0 18px 45px rgba(0, 47, 38, 0.2);
+    linear-gradient(180deg, color-mix(in srgb, var(--nav-bg) 98%, transparent), color-mix(in srgb, var(--nav-bg-2) 99%, transparent)),
+    var(--nav-bg);
+  color: var(--nav-text);
+  border-color: color-mix(in srgb, var(--nav-bg-2) 78%, transparent);
+  box-shadow: 0 18px 45px color-mix(in srgb, var(--nav-bg-2) 20%, transparent);
 }
 
 .sidebar .brand-title,
 .sidebar .title-sm,
 .sidebar .section-title {
-  color: #fffaf0;
+  color: var(--nav-text);
 }
 
 .sidebar .brand-meta .muted,
 .sidebar .muted,
 .sidebar .tiny {
-  color: rgba(255, 252, 245, 0.68);
+  color: var(--nav-muted);
 }
 
 .sidebar .brand-mark {
-  color: #dfeade;
+  color: color-mix(in srgb, var(--nav-text) 88%, var(--nav-accent));
   filter: saturate(0.72);
 }
 
 .sidebar-header,
 .sidebar-footer,
 .sidebar-section {
-  border-color: rgba(255, 252, 245, 0.12);
+  border-color: var(--nav-border);
 }
 
 .sidebar-content {
@@ -5156,25 +5156,25 @@
 .sidebar .tag-filter-trigger,
 .sidebar-content:has(.sidebar-search-reference) > .sidebar-calendar-section .field input,
 .sidebar-content:has(.sidebar-search-reference) > .sidebar-calendar-section .calendar-range .ghost {
-  background: rgba(255, 252, 245, 0.075);
-  border-color: rgba(255, 252, 245, 0.14);
-  color: rgba(255, 252, 245, 0.9);
+  background: var(--nav-control-bg);
+  border-color: var(--nav-control-border);
+  color: var(--nav-text);
 }
 
 .sidebar .search-box input,
 .sidebar .tag-filter-trigger {
-  color: rgba(255, 252, 245, 0.9);
+  color: var(--nav-text);
 }
 
 .sidebar .search-box input::placeholder,
 .sidebar .field input::placeholder {
-  color: rgba(255, 252, 245, 0.48);
+  color: color-mix(in srgb, var(--nav-muted) 72%, transparent);
 }
 
 .sidebar .kbd {
-  background: rgba(255, 252, 245, 0.1);
-  border-color: rgba(255, 252, 245, 0.14);
-  color: rgba(255, 252, 245, 0.62);
+  background: color-mix(in srgb, var(--nav-text) 10%, transparent);
+  border-color: var(--nav-control-border);
+  color: var(--nav-muted);
 }
 
 .mode-toggle,
@@ -5186,12 +5186,12 @@
 }
 
 .sidebar .mode-toggle {
-  background: rgba(0, 47, 38, 0.42);
-  border: 1px solid rgba(255, 252, 245, 0.13);
+  background: color-mix(in srgb, var(--nav-bg-2) 42%, transparent);
+  border: 1px solid var(--nav-border);
 }
 
 .sidebar .mode-toggle .tab-button {
-  color: rgba(255, 252, 245, 0.78);
+  color: color-mix(in srgb, var(--nav-text) 78%, transparent);
 }
 
 .sidebar .mode-toggle .tab-button.active,
@@ -5206,10 +5206,10 @@
 .accent,
 .tab-button.active[data-testid='editor-tab-note'],
 .editor-tabs .tab-button.active {
-  background: #075c49;
-  border-color: #075c49;
+  background: var(--accent);
+  border-color: var(--accent);
   color: #fffaf0;
-  box-shadow: 0 8px 18px rgba(7, 92, 73, 0.16);
+  box-shadow: 0 8px 18px color-mix(in srgb, var(--accent) 16%, transparent);
 }
 
 .ghost,
@@ -5243,47 +5243,47 @@
 .pill,
 .pill.soft,
 .status-chip {
-  background: rgba(7, 92, 73, 0.08);
-  border-color: rgba(7, 92, 73, 0.18);
-  color: #075c49;
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent);
 }
 
 .status-chip.success,
 .entry-signal.success {
-  background: rgba(7, 92, 73, 0.1);
-  border-color: rgba(7, 92, 73, 0.26);
-  color: #075c49;
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 26%, transparent);
+  color: var(--accent);
 }
 
 .entry-item,
 .sidebar-content:has(.sidebar-search-reference) > .sidebar-entries-section .entry-item {
-  background: rgba(255, 252, 245, 0.06);
-  border-color: rgba(255, 252, 245, 0.13);
+  background: color-mix(in srgb, var(--nav-text) 6%, transparent);
+  border-color: var(--nav-border);
 }
 
 .entry-item.active,
 .sidebar-content:has(.sidebar-search-reference) > .sidebar-entries-section .entry-item.active {
-  background: rgba(255, 252, 245, 0.13);
-  border-color: rgba(211, 232, 218, 0.38);
+  background: var(--nav-active-bg);
+  border-color: var(--nav-active-border);
 }
 
 .sidebar-content:has(.sidebar-search-reference) > .sidebar-entries-section .entry-item .title-sm {
-  color: #fffaf0;
+  color: var(--nav-text);
 }
 
 .sidebar-content:has(.sidebar-search-reference) > .sidebar-entries-section .entry-item .pill,
 .sidebar .entry-signal,
 .sidebar .entry-signal-row .pill {
-  background: rgba(223, 234, 222, 0.12);
-  border-color: rgba(223, 234, 222, 0.2);
-  color: rgba(255, 252, 245, 0.82);
+  background: color-mix(in srgb, var(--nav-accent) 12%, transparent);
+  border-color: color-mix(in srgb, var(--nav-accent) 20%, transparent);
+  color: color-mix(in srgb, var(--nav-text) 82%, transparent);
 }
 
 .sidebar .entry-signal.success,
 .sidebar .entry-signal-row .pill.status-chip.success {
-  background: rgba(156, 200, 172, 0.18);
-  border-color: rgba(156, 200, 172, 0.34);
-  color: #dff0e2;
+  background: color-mix(in srgb, var(--nav-accent) 18%, transparent);
+  border-color: color-mix(in srgb, var(--nav-accent) 34%, transparent);
+  color: color-mix(in srgb, var(--nav-accent) 70%, var(--nav-text));
 }
 
 .sidebar .entry-signal-row .pill {
@@ -5291,7 +5291,7 @@
 }
 
 .entry-item.active::before {
-  background: #9cc8ac;
+  background: var(--nav-accent);
 }
 
 .editor {
@@ -5312,13 +5312,13 @@
 .block-heading,
 .section-title,
 .brand-title {
-  color: #142620;
+  color: var(--text);
   font-family: var(--font-display);
   letter-spacing: 0;
 }
 
 .muted {
-  color: #68736d;
+  color: var(--text-3);
 }
 
 .editor-actions {
@@ -5340,8 +5340,8 @@
 .ghost,
 .quick-actions button {
   background: rgba(255, 252, 245, 0.78);
-  border: 1px solid rgba(32, 48, 42, 0.14);
-  color: #243b34;
+  border: 1px solid var(--border);
+  color: var(--text-2);
 }
 
 .ghost:hover:not(:disabled),
@@ -5444,33 +5444,33 @@ code,
 
 .table-editor input,
 .workbook-grid input {
-  color: #142620;
+  color: var(--text);
 }
 
 .workbook-grid input:focus,
 .table-editor input:focus {
   background: rgba(255, 252, 245, 0.98);
-  box-shadow: inset 0 0 0 2px rgba(7, 92, 73, 0.22);
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent) 22%, transparent);
 }
 
 .workbook-format-button {
   background: rgba(255, 252, 245, 0.66);
-  border-color: rgba(32, 48, 42, 0.14);
-  color: #31443d;
+  border-color: var(--border);
+  color: var(--text-2);
 }
 
 .workbook-commandbar button {
   background: rgba(255, 252, 245, 0.66);
-  border-color: rgba(32, 48, 42, 0.14);
-  color: #31443d;
+  border-color: var(--border);
+  color: var(--text-2);
 }
 
 .workbook-format-button:hover,
 .workbook-format-button.active,
 .workbook-commandbar button:hover:not(:disabled) {
-  background: rgba(7, 92, 73, 0.1);
-  border-color: rgba(7, 92, 73, 0.26);
-  color: #053f32;
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 26%, transparent);
+  color: var(--accent);
 }
 
 .entry-context-panel {
@@ -5485,54 +5485,54 @@ code,
 
 .sidebar-content:has(.sidebar-search-reference) > .sidebar-filter-section .ghost.subtle,
 .sidebar-content:has(.sidebar-search-reference) > .sidebar-filter-section .filter-chip {
-  background: rgba(255, 252, 245, 0.08);
-  border-color: rgba(255, 252, 245, 0.14);
-  color: rgba(255, 252, 245, 0.82);
+  background: var(--nav-control-bg);
+  border-color: var(--nav-control-border);
+  color: color-mix(in srgb, var(--nav-text) 82%, transparent);
 }
 
 .sidebar-content:has(.sidebar-search-reference) > .sidebar-calendar-section .section-title,
 .sidebar-content:has(.sidebar-search-reference) > .sidebar-filter-section .section-title,
 .sidebar-content:has(.sidebar-search-reference) > .sidebar-entries-section .section-title {
-  color: #fffaf0;
+  color: var(--nav-text);
 }
 
 .sidebar .calendar {
   background: transparent;
   border: 0;
   box-shadow: none;
-  color: rgba(255, 252, 245, 0.88);
+  color: color-mix(in srgb, var(--nav-text) 88%, transparent);
 }
 
 .sidebar .calendar-month,
 .sidebar-content:has(.sidebar-search-reference) > .sidebar-calendar-section .calendar-month {
-  color: #fffaf0;
+  color: var(--nav-text);
   font-family: var(--font-mono);
 }
 
 .sidebar .calendar-nav button,
 .sidebar-content:has(.sidebar-search-reference) > .sidebar-calendar-section .calendar-nav button {
-  background: rgba(255, 252, 245, 0.08);
-  border-color: rgba(255, 252, 245, 0.14);
-  color: rgba(255, 252, 245, 0.84);
+  background: var(--nav-control-bg);
+  border-color: var(--nav-control-border);
+  color: color-mix(in srgb, var(--nav-text) 84%, transparent);
 }
 
 .sidebar .calendar-day {
-  color: rgba(255, 252, 245, 0.86);
+  color: color-mix(in srgb, var(--nav-text) 86%, transparent);
 }
 
 .sidebar .calendar-day.outside {
-  color: rgba(255, 252, 245, 0.44);
+  color: color-mix(in srgb, var(--nav-text) 44%, transparent);
 }
 
 .sidebar .calendar-day.selected,
 .sidebar .calendar-day.selected.has-entry {
-  background: rgba(255, 252, 245, 0.18);
-  border-color: rgba(255, 252, 245, 0.34);
-  color: #fffaf0;
+  background: color-mix(in srgb, var(--nav-text) 18%, transparent);
+  border-color: color-mix(in srgb, var(--nav-text) 34%, transparent);
+  color: var(--nav-text);
 }
 
 .sidebar .calendar-day.today {
-  border-color: rgba(255, 252, 245, 0.38);
+  border-color: color-mix(in srgb, var(--nav-text) 38%, transparent);
 }
 
 * {

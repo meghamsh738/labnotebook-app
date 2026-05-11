@@ -181,12 +181,9 @@ textarea::placeholder {
   color: var(--text-3);
 }
 
-/* Lab operations visual system: warm paper, evergreen nav, IBM Plex typography. */
+/* Lab operations visual system: all themes keep IBM Plex typography. */
 :root,
-[data-theme],
-[data-theme='dark'],
-[data-theme='neo-brutal'],
-[data-theme='sage'] {
+[data-theme] {
   color-scheme: light;
   --font-display: 'IBM Plex Sans', 'Segoe UI', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
   --font-body: 'IBM Plex Sans', 'Segoe UI', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
@@ -196,6 +193,7 @@ textarea::placeholder {
   --surface: rgba(255, 252, 245, 0.92);
   --surface-2: rgba(250, 245, 235, 0.92);
   --surface-3: rgba(239, 231, 217, 0.86);
+  --paper-grid-line: rgba(32, 48, 42, 0.035);
 
   --text: #142620;
   --text-2: #31443d;
@@ -211,6 +209,17 @@ textarea::placeholder {
   --focus: rgba(7, 92, 73, 0.18);
   --app-bg-grad-1: rgba(7, 92, 73, 0.08);
   --app-bg-grad-2: rgba(177, 136, 83, 0.07);
+  --nav-bg: #053f32;
+  --nav-bg-2: #002f26;
+  --nav-text: #fffaf0;
+  --nav-muted: rgba(255, 252, 245, 0.68);
+  --nav-border: rgba(255, 252, 245, 0.12);
+  --nav-control-bg: rgba(255, 252, 245, 0.075);
+  --nav-control-border: rgba(255, 252, 245, 0.14);
+  --nav-control-hover: rgba(255, 252, 245, 0.13);
+  --nav-active-bg: rgba(255, 252, 245, 0.13);
+  --nav-active-border: rgba(211, 232, 218, 0.38);
+  --nav-accent: #9cc8ac;
 
   --danger: #9f2d20;
   --danger-weak: rgba(159, 45, 32, 0.1);
@@ -221,4 +230,100 @@ textarea::placeholder {
   --shadow-2: 0 18px 45px rgba(20, 38, 32, 0.11);
   --tracking-display: 0;
   --tracking-label: 0.03em;
+}
+
+[data-theme='neo-brutal'] {
+  --bg: #ece8de;
+  --surface: rgba(252, 248, 238, 0.94);
+  --surface-2: rgba(242, 236, 224, 0.94);
+  --surface-3: rgba(229, 222, 208, 0.9);
+  --paper-grid-line: rgba(38, 59, 60, 0.04);
+
+  --text: #172526;
+  --text-2: #34494a;
+  --text-3: #667473;
+  --border: rgba(38, 59, 60, 0.14);
+  --border-2: rgba(38, 59, 60, 0.24);
+
+  --accent: #2f5d62;
+  --accent-weak: rgba(47, 93, 98, 0.11);
+  --accent-border: rgba(47, 93, 98, 0.3);
+  --accent-border-strong: rgba(47, 93, 98, 0.45);
+  --focus: rgba(47, 93, 98, 0.18);
+  --app-bg-grad-1: rgba(47, 93, 98, 0.08);
+  --app-bg-grad-2: rgba(142, 118, 83, 0.08);
+
+  --nav-bg: #263b3c;
+  --nav-bg-2: #182b2d;
+  --nav-text: #f8f3e8;
+  --nav-muted: rgba(248, 243, 232, 0.66);
+  --nav-border: rgba(248, 243, 232, 0.13);
+  --nav-control-bg: rgba(248, 243, 232, 0.075);
+  --nav-control-border: rgba(248, 243, 232, 0.14);
+  --nav-control-hover: rgba(248, 243, 232, 0.13);
+  --nav-active-bg: rgba(248, 243, 232, 0.13);
+  --nav-active-border: rgba(190, 214, 210, 0.36);
+  --nav-accent: #b8ccc7;
+}
+
+[data-theme='sage'] {
+  --bg: #eff3ea;
+  --surface: rgba(252, 255, 248, 0.94);
+  --surface-2: rgba(241, 247, 237, 0.94);
+  --surface-3: rgba(224, 235, 218, 0.9);
+  --paper-grid-line: rgba(37, 67, 52, 0.04);
+
+  --text: #14241c;
+  --text-2: #314338;
+  --text-3: #68746c;
+  --border: rgba(37, 67, 52, 0.13);
+  --border-2: rgba(37, 67, 52, 0.22);
+
+  --accent: #2d6f4f;
+  --accent-weak: rgba(45, 111, 79, 0.11);
+  --accent-border: rgba(45, 111, 79, 0.3);
+  --accent-border-strong: rgba(45, 111, 79, 0.45);
+  --focus: rgba(45, 111, 79, 0.18);
+  --app-bg-grad-1: rgba(45, 111, 79, 0.08);
+  --app-bg-grad-2: rgba(143, 160, 98, 0.08);
+
+  --nav-bg: #254334;
+  --nav-bg-2: #173226;
+  --nav-text: #fbfff6;
+  --nav-muted: rgba(251, 255, 246, 0.68);
+  --nav-border: rgba(251, 255, 246, 0.13);
+  --nav-control-bg: rgba(251, 255, 246, 0.075);
+  --nav-control-border: rgba(251, 255, 246, 0.14);
+  --nav-control-hover: rgba(251, 255, 246, 0.13);
+  --nav-active-bg: rgba(251, 255, 246, 0.13);
+  --nav-active-border: rgba(203, 225, 198, 0.38);
+  --nav-accent: #b7d1a9;
+}
+
+[data-theme='dark'] {
+  --bg: #ece8de;
+  --surface: rgba(252, 248, 238, 0.94);
+  --surface-2: rgba(242, 236, 224, 0.94);
+  --surface-3: rgba(229, 222, 208, 0.9);
+  --text: #172526;
+  --text-2: #34494a;
+  --text-3: #667473;
+  --border: rgba(38, 59, 60, 0.14);
+  --border-2: rgba(38, 59, 60, 0.24);
+  --accent: #2f5d62;
+  --accent-weak: rgba(47, 93, 98, 0.11);
+  --accent-border: rgba(47, 93, 98, 0.3);
+  --accent-border-strong: rgba(47, 93, 98, 0.45);
+  --focus: rgba(47, 93, 98, 0.18);
+  --nav-bg: #263b3c;
+  --nav-bg-2: #182b2d;
+  --nav-text: #f8f3e8;
+  --nav-muted: rgba(248, 243, 232, 0.66);
+  --nav-border: rgba(248, 243, 232, 0.13);
+  --nav-control-bg: rgba(248, 243, 232, 0.075);
+  --nav-control-border: rgba(248, 243, 232, 0.14);
+  --nav-control-hover: rgba(248, 243, 232, 0.13);
+  --nav-active-bg: rgba(248, 243, 232, 0.13);
+  --nav-active-border: rgba(190, 214, 210, 0.36);
+  --nav-accent: #b8ccc7;
 }
