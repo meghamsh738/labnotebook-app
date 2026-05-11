@@ -26,6 +26,7 @@ import type {
   TextRun,
   ThemeName,
   ListStyle,
+  WorkbookCellStyle,
 } from './domain/types'
 
 const dateOnly = new Intl.DateTimeFormat('en-US', {
@@ -315,6 +316,13 @@ const WORKBOOK_COLUMN_LABELS = Array.from({ length: WORKBOOK_MAX_COLS }, (_, idx
   } while (n >= 0)
   return label
 })
+type WorkbookCellStyles = Record<string, WorkbookCellStyle>
+type WorkbookCellPosition = { rowIdx: number; colIdx: number }
+
+const workbookCellKey = (rowIdx: number, colIdx: number) => `${rowIdx}:${colIdx}`
+
+const workbookStyleHasContent = (style?: WorkbookCellStyle) =>
+  Boolean(style?.bold || style?.italic || style?.underline || style?.align)
 
 const makeEmptyWorkbookData = (rows = WORKBOOK_MIN_ROWS, cols = WORKBOOK_MIN_COLS) =>
   Array.from({ length: rows }, () => Array.from({ length: cols }, () => ''))
@@ -351,11 +359,44 @@ const compactWorkbookData = (data: string[][]) => {
   )
 }
 
+const normalizeWorkbookStyles = (styles?: WorkbookCellStyles): WorkbookCellStyles => {
+  if (!styles) return {}
+  return Object.fromEntries(
+    Object.entries(styles).filter(([key, style]) => {
+      const [row, col] = key.split(':').map(Number)
+      return (
+        Number.isInteger(row) &&
+        Number.isInteger(col) &&
+        row >= 0 &&
+        col >= 0 &&
+        row < WORKBOOK_MAX_ROWS &&
+        col < WORKBOOK_MAX_COLS &&
+        workbookStyleHasContent(style)
+      )
+    })
+  )
+}
+
+const compactWorkbookStyles = (styles: WorkbookCellStyles, compactData: string[][]): WorkbookCellStyles => {
+  const rowCount = compactData.length
+  const colCount = compactData[0]?.length ?? 0
+  if (!rowCount || !colCount) return {}
+  return Object.fromEntries(
+    Object.entries(normalizeWorkbookStyles(styles)).filter(([key]) => {
+      const [row, col] = key.split(':').map(Number)
+      return row < rowCount && col < colCount
+    })
+  )
+}
+
 const getWorkbookBlock = (entry?: Entry | null) =>
   entry?.content.find((block): block is Extract<Block, { type: 'workbook' }> => block.type === 'workbook') ?? null
 
 const getWorkbookDataForEntry = (entry?: Entry | null) =>
   normalizeWorkbookData(getWorkbookBlock(entry)?.data ?? [])
+
+const getWorkbookStylesForEntry = (entry?: Entry | null) =>
+  normalizeWorkbookStyles(getWorkbookBlock(entry)?.styles)
 
 const getNoteBlocksForEntry = (entry?: Entry | null) =>
   entry?.content.filter((block) => block.type !== 'workbook') ?? [{ id: 'b-empty', type: 'paragraph', text: '' } satisfies Block]
@@ -4709,6 +4750,7 @@ function EditorPane({
     () => blocksToSlate(getNoteBlocksForEntry(entry))
   )
   const [workbookData, setWorkbookData] = useState<string[][]>(() => getWorkbookDataForEntry(entry))
+  const [workbookStyles, setWorkbookStyles] = useState<WorkbookCellStyles>(() => getWorkbookStylesForEntry(entry))
   const focusEditor = useCallback(() => {
     try {
       const start = Editor.start(editor, [])
@@ -4727,12 +4769,14 @@ function EditorPane({
       setIsEditing(false)
       setEditorValue(blocksToSlate(getNoteBlocksForEntry(entry)))
       setWorkbookData(getWorkbookDataForEntry(entry))
+      setWorkbookStyles(getWorkbookStylesForEntry(entry))
       setActiveTab('note')
       return
     }
     if (!isEditing) {
       setEditorValue(blocksToSlate(getNoteBlocksForEntry(entry)))
       setWorkbookData(getWorkbookDataForEntry(entry))
+      setWorkbookStyles(getWorkbookStylesForEntry(entry))
     }
   }, [entry, isEditing])
 
@@ -4894,12 +4938,14 @@ function EditorPane({
     }))
     const existingWorkbook = getWorkbookBlock(entry)
     const compactWorkbook = compactWorkbookData(workbookData)
+    const compactStyles = compactWorkbookStyles(workbookStyles, compactWorkbook)
     const workbookBlock: Block | null = compactWorkbook.length
       ? {
           id: existingWorkbook?.id ?? newId('b-workbook-'),
           type: 'workbook',
           title: 'Workbook',
           data: compactWorkbook,
+          ...(Object.keys(compactStyles).length ? { styles: compactStyles } : {}),
           updatedAt: timestamp,
           updatedBy: 'me',
         }
@@ -5173,6 +5219,7 @@ function EditorPane({
                       setIsEditing(false)
                       setEditorValue(blocksToSlate(getNoteBlocksForEntry(entry)))
                       setWorkbookData(getWorkbookDataForEntry(entry))
+                      setWorkbookStyles(getWorkbookStylesForEntry(entry))
                     }}
                   >
                     <span className="icon"><UiIcon name="x" /></span>
@@ -5526,13 +5573,16 @@ function EditorPane({
             </div>
             <WorkbookSheet
               data={workbookData}
+              styles={workbookStyles}
               isEditing={isEditing}
+              onRequestEdit={() => setIsEditing(true)}
               onChange={setWorkbookData}
+              onStylesChange={setWorkbookStyles}
             />
             {!isEditing && !workbookHasContent(workbookData) && (
               <div className="file-drop-empty workbook-empty-state">
                 <strong>No workbook data for this day</strong>
-                <span>Click Edit, paste a table into the grid, and Save. If the grid is cleared later, the workbook block is removed from the entry.</span>
+                <span>Click any cell or paste a table to start editing. If the grid is cleared later, the workbook block is removed from the entry.</span>
               </div>
             )}
           </div>
@@ -6528,22 +6578,56 @@ function parseWorkbookClipboard(text: string): string[][] {
 
 function WorkbookSheet({
   data,
+  styles,
   isEditing,
+  onRequestEdit,
   onChange,
+  onStylesChange,
 }: {
   data: string[][]
+  styles: WorkbookCellStyles
   isEditing: boolean
+  onRequestEdit: () => void
   onChange: (data: string[][]) => void
+  onStylesChange: (styles: WorkbookCellStyles) => void
 }) {
   const grid = normalizeWorkbookData(data)
+  const [selectedCell, setSelectedCell] = useState<WorkbookCellPosition>({ rowIdx: 0, colIdx: 0 })
+  const selectedKey = workbookCellKey(selectedCell.rowIdx, selectedCell.colIdx)
+  const selectedStyle = styles[selectedKey] ?? {}
+
+  const ensureEditing = () => {
+    if (!isEditing) onRequestEdit()
+  }
 
   const updateCell = (rowIdx: number, colIdx: number, value: string) => {
+    ensureEditing()
     const next = normalizeWorkbookData(grid)
     next[rowIdx][colIdx] = value
     onChange(next)
   }
 
+  const updateCellStyle = (patch: Partial<WorkbookCellStyle>) => {
+    ensureEditing()
+    const nextStyle: WorkbookCellStyle = { ...(styles[selectedKey] ?? {}), ...patch }
+    ;(Object.keys(nextStyle) as Array<keyof WorkbookCellStyle>).forEach((key) => {
+      if (!nextStyle[key]) delete nextStyle[key]
+    })
+    const nextStyles = { ...styles }
+    if (workbookStyleHasContent(nextStyle)) nextStyles[selectedKey] = nextStyle
+    else delete nextStyles[selectedKey]
+    onStylesChange(nextStyles)
+  }
+
+  const clearCellStyle = () => {
+    ensureEditing()
+    const nextStyles = { ...styles }
+    delete nextStyles[selectedKey]
+    onStylesChange(nextStyles)
+  }
+
   const pasteCells = (startRow: number, startCol: number, text: string) => {
+    ensureEditing()
     const pasted = parseWorkbookClipboard(text)
     const next = normalizeWorkbookData(grid)
     pasted.slice(0, WORKBOOK_MAX_ROWS - startRow).forEach((row, rowOffset) => {
@@ -6555,36 +6639,78 @@ function WorkbookSheet({
   }
 
   const addRows = () => {
+    ensureEditing()
     onChange(normalizeWorkbookData([...grid, ...makeEmptyWorkbookData(5, grid[0]?.length ?? WORKBOOK_MIN_COLS)]))
   }
 
   const addColumn = () => {
+    ensureEditing()
     const next = grid.map((row) => row.length < WORKBOOK_MAX_COLS ? [...row, ''] : row)
     onChange(normalizeWorkbookData(next, grid.length, Math.min((grid[0]?.length ?? WORKBOOK_MIN_COLS) + 1, WORKBOOK_MAX_COLS)))
   }
 
-  const clearWorkbook = () => onChange(makeEmptyWorkbookData())
+  const clearWorkbook = () => {
+    ensureEditing()
+    onChange(makeEmptyWorkbookData())
+    onStylesChange({})
+  }
+
+  const renderFormatButton = (
+    label: string,
+    active: boolean,
+    onClick: () => void,
+    title: string,
+    className = ''
+  ) => (
+    <button
+      className={`workbook-format-button ${active ? 'active' : ''} ${className}`.trim()}
+      type="button"
+      onClick={onClick}
+      title={title}
+      aria-pressed={active}
+    >
+      {label}
+    </button>
+  )
 
   return (
     <div className="workbook-shell" data-testid="entry-workbook">
       <div className="workbook-toolbar">
         <div className="muted tiny">
-          {grid.length} rows · {grid[0]?.length ?? 0} columns
+          {grid.length} rows - {grid[0]?.length ?? 0} columns
+          <span className="workbook-selection">
+            Selected {WORKBOOK_COLUMN_LABELS[selectedCell.colIdx]}{selectedCell.rowIdx + 1}
+          </span>
         </div>
         <div className="workbook-actions">
-          <button className="pill soft" type="button" onClick={addRows} disabled={!isEditing || grid.length >= WORKBOOK_MAX_ROWS}>
+          <button className="pill soft" type="button" onClick={addRows} disabled={grid.length >= WORKBOOK_MAX_ROWS}>
             <UiIcon name="plus" />
             Rows
           </button>
-          <button className="pill soft" type="button" onClick={addColumn} disabled={!isEditing || (grid[0]?.length ?? 0) >= WORKBOOK_MAX_COLS}>
+          <button className="pill soft" type="button" onClick={addColumn} disabled={(grid[0]?.length ?? 0) >= WORKBOOK_MAX_COLS}>
             <UiIcon name="plus" />
             Column
           </button>
-          <button className="pill soft" type="button" onClick={clearWorkbook} disabled={!isEditing || !workbookHasContent(grid)}>
+          <button className="pill soft" type="button" onClick={clearWorkbook} disabled={!workbookHasContent(grid)}>
             <UiIcon name="trash" />
             Clear
           </button>
         </div>
+      </div>
+      <div className="workbook-formatbar" aria-label="Workbook cell formatting">
+        <span className="workbook-format-label">Cell</span>
+        {renderFormatButton('B', Boolean(selectedStyle.bold), () => updateCellStyle({ bold: !selectedStyle.bold }), 'Bold selected cell', 'bold')}
+        {renderFormatButton('I', Boolean(selectedStyle.italic), () => updateCellStyle({ italic: !selectedStyle.italic }), 'Italic selected cell', 'italic')}
+        {renderFormatButton('U', Boolean(selectedStyle.underline), () => updateCellStyle({ underline: !selectedStyle.underline }), 'Underline selected cell', 'underline')}
+        <span className="workbook-format-divider" />
+        {renderFormatButton('Left', selectedStyle.align === 'left' || !selectedStyle.align, () => updateCellStyle({ align: 'left' }), 'Align selected cell left')}
+        {renderFormatButton('Center', selectedStyle.align === 'center', () => updateCellStyle({ align: 'center' }), 'Align selected cell center')}
+        {renderFormatButton('Right', selectedStyle.align === 'right', () => updateCellStyle({ align: 'right' }), 'Align selected cell right')}
+        <span className="workbook-format-divider" />
+        <button className="workbook-format-button" type="button" onClick={clearCellStyle}>
+          Clear format
+        </button>
+        {!isEditing && <span className="workbook-edit-hint">Click a cell to edit</span>}
       </div>
       <div className="workbook-grid-wrap">
         <table className="workbook-grid">
@@ -6600,23 +6726,40 @@ function WorkbookSheet({
             {grid.map((row, rowIdx) => (
               <tr key={`row-${rowIdx}`}>
                 <th>{rowIdx + 1}</th>
-                {row.map((cell, colIdx) => (
-                  <td key={`${rowIdx}-${colIdx}`}>
-                    <input
-                      value={cell}
-                      readOnly={!isEditing}
-                      aria-label={`Cell ${WORKBOOK_COLUMN_LABELS[colIdx]}${rowIdx + 1}`}
-                      onChange={(event) => updateCell(rowIdx, colIdx, event.target.value)}
-                      onPaste={(event) => {
-                        if (!isEditing) return
-                        const text = event.clipboardData.getData('text/plain')
-                        if (!text || (!text.includes('\t') && !text.includes('\n') && !text.includes(','))) return
-                        event.preventDefault()
-                        pasteCells(rowIdx, colIdx, text)
-                      }}
-                    />
-                  </td>
-                ))}
+                {row.map((cell, colIdx) => {
+                  const key = workbookCellKey(rowIdx, colIdx)
+                  const cellStyle = styles[key] ?? {}
+                  const cellCss: React.CSSProperties = {
+                    fontWeight: cellStyle.bold ? 700 : undefined,
+                    fontStyle: cellStyle.italic ? 'italic' : undefined,
+                    textDecoration: cellStyle.underline ? 'underline' : undefined,
+                    textAlign: cellStyle.align ?? 'left',
+                  }
+                  const isSelected = selectedCell.rowIdx === rowIdx && selectedCell.colIdx === colIdx
+
+                  return (
+                    <td key={`${rowIdx}-${colIdx}`} className={isSelected ? 'is-selected' : undefined}>
+                      <input
+                        value={cell}
+                        style={cellCss}
+                        aria-label={`Cell ${WORKBOOK_COLUMN_LABELS[colIdx]}${rowIdx + 1}`}
+                        onFocus={() => {
+                          setSelectedCell({ rowIdx, colIdx })
+                          ensureEditing()
+                        }}
+                        onClick={() => setSelectedCell({ rowIdx, colIdx })}
+                        onChange={(event) => updateCell(rowIdx, colIdx, event.target.value)}
+                        onPaste={(event) => {
+                          const text = event.clipboardData.getData('text/plain')
+                          if (!text || (!text.includes('\t') && !text.includes('\n') && !text.includes(','))) return
+                          event.preventDefault()
+                          setSelectedCell({ rowIdx, colIdx })
+                          pasteCells(rowIdx, colIdx, text)
+                        }}
+                      />
+                    </td>
+                  )
+                })}
               </tr>
             ))}
           </tbody>
@@ -8055,11 +8198,21 @@ function BlockRenderer({ block, attachments, attachmentUrls, onUpdateBlock }: Bl
             <tbody>
               {block.data.map((row, idx) => (
                 <tr key={idx}>
-                  {row.map((cell, cIdx) => (
-                    <td key={cIdx} className={idx === 0 ? 'th' : ''}>
-                      {cell}
-                    </td>
-                  ))}
+                  {row.map((cell, cIdx) => {
+                    const style = block.styles?.[workbookCellKey(idx, cIdx)]
+                    const cellCss: React.CSSProperties = {
+                      fontWeight: style?.bold ? 700 : undefined,
+                      fontStyle: style?.italic ? 'italic' : undefined,
+                      textDecoration: style?.underline ? 'underline' : undefined,
+                      textAlign: style?.align ?? undefined,
+                    }
+
+                    return (
+                      <td key={cIdx} className={idx === 0 ? 'th' : ''} style={cellCss}>
+                        {cell}
+                      </td>
+                    )
+                  })}
                 </tr>
               ))}
             </tbody>

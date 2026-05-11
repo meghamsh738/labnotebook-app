@@ -117,10 +117,18 @@ export interface TableBlock extends BlockBase {
   headerRow?: boolean
 }
 
+export interface WorkbookCellStyle {
+  bold?: boolean
+  italic?: boolean
+  underline?: boolean
+  align?: 'left' | 'center' | 'right'
+}
+
 export interface WorkbookBlock extends BlockBase {
   type: 'workbook'
   data: string[][]
   title?: string
+  styles?: Record<string, WorkbookCellStyle>
 }
 
 export interface ImageBlock extends BlockBase {
