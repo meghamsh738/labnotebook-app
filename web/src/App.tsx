@@ -318,8 +318,12 @@ const WORKBOOK_COLUMN_LABELS = Array.from({ length: WORKBOOK_MAX_COLS }, (_, idx
 })
 type WorkbookCellStyles = Record<string, WorkbookCellStyle>
 type WorkbookCellPosition = { rowIdx: number; colIdx: number }
+type WorkbookCellRange = { start: WorkbookCellPosition; end: WorkbookCellPosition }
 
 const workbookCellKey = (rowIdx: number, colIdx: number) => `${rowIdx}:${colIdx}`
+
+const workbookCellLabel = ({ rowIdx, colIdx }: WorkbookCellPosition) =>
+  `${WORKBOOK_COLUMN_LABELS[colIdx]}${rowIdx + 1}`
 
 const workbookStyleHasContent = (style?: WorkbookCellStyle) =>
   Boolean(style?.bold || style?.italic || style?.underline || style?.align)
@@ -6597,8 +6601,49 @@ function WorkbookSheet({
 }) {
   const grid = normalizeWorkbookData(data)
   const [selectedCell, setSelectedCell] = useState<WorkbookCellPosition>({ rowIdx: 0, colIdx: 0 })
+  const [selectedRange, setSelectedRange] = useState<WorkbookCellRange>({
+    start: { rowIdx: 0, colIdx: 0 },
+    end: { rowIdx: 0, colIdx: 0 },
+  })
   const selectedKey = workbookCellKey(selectedCell.rowIdx, selectedCell.colIdx)
   const selectedStyle = styles[selectedKey] ?? {}
+
+  const rangeBounds = (range = selectedRange) => ({
+    top: Math.min(range.start.rowIdx, range.end.rowIdx),
+    bottom: Math.max(range.start.rowIdx, range.end.rowIdx),
+    left: Math.min(range.start.colIdx, range.end.colIdx),
+    right: Math.max(range.start.colIdx, range.end.colIdx),
+  })
+
+  const selectedBounds = rangeBounds()
+  const selectedRangeSize =
+    (selectedBounds.bottom - selectedBounds.top + 1) * (selectedBounds.right - selectedBounds.left + 1)
+  const selectedRangeLabel = selectedRangeSize > 1
+    ? `${workbookCellLabel({ rowIdx: selectedBounds.top, colIdx: selectedBounds.left })}:${workbookCellLabel({ rowIdx: selectedBounds.bottom, colIdx: selectedBounds.right })}`
+    : workbookCellLabel(selectedCell)
+
+  const setWorkbookSelection = (cell: WorkbookCellPosition, extend = false) => {
+    const nextCell = {
+      rowIdx: Math.max(0, Math.min(cell.rowIdx, WORKBOOK_MAX_ROWS - 1)),
+      colIdx: Math.max(0, Math.min(cell.colIdx, WORKBOOK_MAX_COLS - 1)),
+    }
+    setSelectedCell(nextCell)
+    setSelectedRange((prev) => (extend ? { start: prev.start, end: nextCell } : { start: nextCell, end: nextCell }))
+  }
+
+  const forEachSelectedCell = (callback: (rowIdx: number, colIdx: number) => void) => {
+    const bounds = rangeBounds()
+    for (let rowIdx = bounds.top; rowIdx <= bounds.bottom; rowIdx += 1) {
+      for (let colIdx = bounds.left; colIdx <= bounds.right; colIdx += 1) {
+        callback(rowIdx, colIdx)
+      }
+    }
+  }
+
+  const isInSelectedRange = (rowIdx: number, colIdx: number) => {
+    const bounds = rangeBounds()
+    return rowIdx >= bounds.top && rowIdx <= bounds.bottom && colIdx >= bounds.left && colIdx <= bounds.right
+  }
 
   const ensureEditing = () => {
     if (!isEditing) onRequestEdit()
@@ -6613,20 +6658,25 @@ function WorkbookSheet({
 
   const updateCellStyle = (patch: Partial<WorkbookCellStyle>) => {
     ensureEditing()
-    const nextStyle: WorkbookCellStyle = { ...(styles[selectedKey] ?? {}), ...patch }
-    ;(Object.keys(nextStyle) as Array<keyof WorkbookCellStyle>).forEach((key) => {
-      if (!nextStyle[key]) delete nextStyle[key]
-    })
     const nextStyles = { ...styles }
-    if (workbookStyleHasContent(nextStyle)) nextStyles[selectedKey] = nextStyle
-    else delete nextStyles[selectedKey]
+    forEachSelectedCell((rowIdx, colIdx) => {
+      const key = workbookCellKey(rowIdx, colIdx)
+      const nextStyle: WorkbookCellStyle = { ...(nextStyles[key] ?? {}), ...patch }
+      ;(Object.keys(nextStyle) as Array<keyof WorkbookCellStyle>).forEach((styleKey) => {
+        if (!nextStyle[styleKey]) delete nextStyle[styleKey]
+      })
+      if (workbookStyleHasContent(nextStyle)) nextStyles[key] = nextStyle
+      else delete nextStyles[key]
+    })
     onStylesChange(nextStyles)
   }
 
   const clearCellStyle = () => {
     ensureEditing()
     const nextStyles = { ...styles }
-    delete nextStyles[selectedKey]
+    forEachSelectedCell((rowIdx, colIdx) => {
+      delete nextStyles[workbookCellKey(rowIdx, colIdx)]
+    })
     onStylesChange(nextStyles)
   }
 
@@ -6641,8 +6691,12 @@ function WorkbookSheet({
     onStylesChange(nextStyles)
   }
 
-  const copyCell = async () => {
-    const value = grid[selectedCell.rowIdx]?.[selectedCell.colIdx] ?? ''
+  const copySelection = async () => {
+    const bounds = rangeBounds()
+    const value = grid
+      .slice(bounds.top, bounds.bottom + 1)
+      .map((row) => row.slice(bounds.left, bounds.right + 1).join('\t'))
+      .join('\n')
     try {
       await navigator.clipboard.writeText(value)
     } catch {
@@ -6663,8 +6717,12 @@ function WorkbookSheet({
 
   const cutCell = async () => {
     ensureEditing()
-    await copyCell()
-    updateCell(selectedCell.rowIdx, selectedCell.colIdx, '')
+    await copySelection()
+    const next = normalizeWorkbookData(grid)
+    forEachSelectedCell((rowIdx, colIdx) => {
+      next[rowIdx][colIdx] = ''
+    })
+    onChange(next)
   }
 
   const pasteFromClipboard = async () => {
@@ -6672,7 +6730,8 @@ function WorkbookSheet({
     try {
       const text = await navigator.clipboard.readText()
       if (!text) return
-      pasteCells(selectedCell.rowIdx, selectedCell.colIdx, text)
+      const bounds = rangeBounds()
+      pasteCells(bounds.top, bounds.left, text)
     } catch {
       // The onPaste handler below covers standard browser paste events when direct clipboard read is blocked.
     }
@@ -6700,7 +6759,7 @@ function WorkbookSheet({
     ].slice(0, WORKBOOK_MAX_ROWS)
     onChange(normalizeWorkbookData(next, Math.max(WORKBOOK_MIN_ROWS, next.length), colCount))
     transformStyles((row, col) => (row >= rowIdx ? { rowIdx: row + 1, colIdx: col } : { rowIdx: row, colIdx: col }))
-    setSelectedCell({ rowIdx: Math.min(rowIdx, WORKBOOK_MAX_ROWS - 1), colIdx: selectedCell.colIdx })
+    setWorkbookSelection({ rowIdx: Math.min(rowIdx, WORKBOOK_MAX_ROWS - 1), colIdx: selectedCell.colIdx })
   }
 
   const deleteRow = () => {
@@ -6711,7 +6770,7 @@ function WorkbookSheet({
       if (row === selectedCell.rowIdx) return null
       return row > selectedCell.rowIdx ? { rowIdx: row - 1, colIdx: col } : { rowIdx: row, colIdx: col }
     })
-    setSelectedCell((prev) => ({ ...prev, rowIdx: Math.max(0, Math.min(prev.rowIdx, next.length - 1)) }))
+    setWorkbookSelection({ ...selectedCell, rowIdx: Math.max(0, Math.min(selectedCell.rowIdx, next.length - 1)) })
   }
 
   const insertColumn = (colIdx: number) => {
@@ -6723,7 +6782,7 @@ function WorkbookSheet({
     ].slice(0, WORKBOOK_MAX_COLS))
     onChange(normalizeWorkbookData(next, grid.length, Math.min((grid[0]?.length ?? WORKBOOK_MIN_COLS) + 1, WORKBOOK_MAX_COLS)))
     transformStyles((row, col) => (col >= colIdx ? { rowIdx: row, colIdx: col + 1 } : { rowIdx: row, colIdx: col }))
-    setSelectedCell({ rowIdx: selectedCell.rowIdx, colIdx: Math.min(colIdx, WORKBOOK_MAX_COLS - 1) })
+    setWorkbookSelection({ rowIdx: selectedCell.rowIdx, colIdx: Math.min(colIdx, WORKBOOK_MAX_COLS - 1) })
   }
 
   const deleteColumn = () => {
@@ -6734,7 +6793,7 @@ function WorkbookSheet({
       if (col === selectedCell.colIdx) return null
       return col > selectedCell.colIdx ? { rowIdx: row, colIdx: col - 1 } : { rowIdx: row, colIdx: col }
     })
-    setSelectedCell((prev) => ({ ...prev, colIdx: Math.max(0, Math.min(prev.colIdx, (next[0]?.length ?? 1) - 1)) }))
+    setWorkbookSelection({ ...selectedCell, colIdx: Math.max(0, Math.min(selectedCell.colIdx, (next[0]?.length ?? 1) - 1)) })
   }
 
   const clearWorkbook = () => {
@@ -6765,10 +6824,10 @@ function WorkbookSheet({
     if (!(event.ctrlKey || event.metaKey)) return
     const key = event.key.toLowerCase()
     if (!['c', 'x', 'v'].includes(key)) return
-    setSelectedCell({ rowIdx, colIdx })
+    setWorkbookSelection({ rowIdx, colIdx }, isInSelectedRange(rowIdx, colIdx))
     if (key === 'c') {
       event.preventDefault()
-      void copyCell()
+      void copySelection()
       return
     }
     if (key === 'x') {
@@ -6785,7 +6844,7 @@ function WorkbookSheet({
         <div className="muted tiny">
           {grid.length} rows - {grid[0]?.length ?? 0} columns
           <span className="workbook-selection">
-            Selected {WORKBOOK_COLUMN_LABELS[selectedCell.colIdx]}{selectedCell.rowIdx + 1}
+            Selected {selectedRangeLabel}
           </span>
         </div>
         <div className="workbook-actions">
@@ -6796,7 +6855,7 @@ function WorkbookSheet({
         </div>
       </div>
       <div className="workbook-commandbar" aria-label="Workbook structure commands">
-        <button type="button" onClick={() => void copyCell()}>Copy</button>
+        <button type="button" onClick={() => void copySelection()}>Copy</button>
         <button type="button" onClick={() => void cutCell()}>Cut</button>
         <button type="button" onClick={() => void pasteFromClipboard()}>Paste</button>
         <span className="workbook-format-divider" />
@@ -6847,26 +6906,38 @@ function WorkbookSheet({
                     textAlign: cellStyle.align ?? 'left',
                   }
                   const isSelected = selectedCell.rowIdx === rowIdx && selectedCell.colIdx === colIdx
+                  const isInRange = isInSelectedRange(rowIdx, colIdx)
 
                   return (
-                    <td key={`${rowIdx}-${colIdx}`} className={isSelected ? 'is-selected' : undefined}>
+                    <td
+                      key={`${rowIdx}-${colIdx}`}
+                      className={[
+                        isInRange ? 'is-range-selected' : '',
+                        isSelected ? 'is-selected' : '',
+                      ].filter(Boolean).join(' ') || undefined}
+                      onMouseDown={(event) => {
+                        setWorkbookSelection({ rowIdx, colIdx }, event.shiftKey)
+                      }}
+                      onMouseEnter={(event) => {
+                        if (event.buttons === 1) setWorkbookSelection({ rowIdx, colIdx }, true)
+                      }}
+                    >
                       <input
                         value={cell}
                         style={cellCss}
                         aria-label={`Cell ${WORKBOOK_COLUMN_LABELS[colIdx]}${rowIdx + 1}`}
                         onFocus={() => {
-                          setSelectedCell({ rowIdx, colIdx })
                           ensureEditing()
                         }}
-                        onClick={() => setSelectedCell({ rowIdx, colIdx })}
+                        onClick={(event) => setWorkbookSelection({ rowIdx, colIdx }, event.shiftKey)}
                         onChange={(event) => updateCell(rowIdx, colIdx, event.target.value)}
                         onKeyDown={(event) => handleCellKeyDown(event, rowIdx, colIdx)}
                         onPaste={(event) => {
                           const text = event.clipboardData.getData('text/plain')
                           if (!text || (!text.includes('\t') && !text.includes('\n') && !text.includes(','))) return
                           event.preventDefault()
-                          setSelectedCell({ rowIdx, colIdx })
-                          pasteCells(rowIdx, colIdx, text)
+                          const bounds = rangeBounds()
+                          pasteCells(bounds.top, bounds.left, text)
                         }}
                       />
                     </td>
