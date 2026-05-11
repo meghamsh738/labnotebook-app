@@ -60,6 +60,11 @@
   gap: 12px;
 }
 
+.app-bg.suite-shell {
+  min-height: calc(100dvh - var(--easylab-suite-shell-offset, 0px));
+  height: calc(100dvh - var(--easylab-suite-shell-offset, 0px));
+}
+
 .panel {
   border-width: 1px;
   border-radius: 8px;
@@ -2176,8 +2181,46 @@
   scrollbar-width: none;
 }
 
+.workbook-commandbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  background: rgba(255, 252, 245, 0.66);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
 .workbook-formatbar::-webkit-scrollbar {
   display: none;
+}
+
+.workbook-commandbar::-webkit-scrollbar {
+  display: none;
+}
+
+.workbook-commandbar button {
+  flex: 0 0 auto;
+  min-height: 28px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: rgba(255, 252, 245, 0.74);
+  color: var(--text-2);
+  padding: 4px 9px;
+  font: 600 var(--fs-12) / 1 var(--font-body);
+  cursor: pointer;
+}
+
+.workbook-commandbar button:hover:not(:disabled) {
+  border-color: rgba(7, 92, 73, 0.28);
+  background: rgba(7, 92, 73, 0.1);
+  color: var(--accent);
+}
+
+.workbook-commandbar button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
 }
 
 .workbook-format-label,
@@ -5364,6 +5407,7 @@
 
 .slate-editor > .table-block .table-toolbar,
 .workbook-toolbar,
+.workbook-commandbar,
 .workbook-formatbar {
   background: rgba(239, 231, 217, 0.42);
   border-color: rgba(32, 48, 42, 0.12);
@@ -5415,8 +5459,15 @@ code,
   color: #31443d;
 }
 
+.workbook-commandbar button {
+  background: rgba(255, 252, 245, 0.66);
+  border-color: rgba(32, 48, 42, 0.14);
+  color: #31443d;
+}
+
 .workbook-format-button:hover,
-.workbook-format-button.active {
+.workbook-format-button.active,
+.workbook-commandbar button:hover:not(:disabled) {
   background: rgba(7, 92, 73, 0.1);
   border-color: rgba(7, 92, 73, 0.26);
   color: #053f32;
@@ -5497,4 +5548,53 @@ code,
   border-width: 1px;
   background: rgba(7, 92, 73, 0.2);
   background-clip: padding-box;
+}
+
+.app-bg.suite-shell {
+  min-height: calc(100dvh - var(--easylab-suite-shell-offset, 0px));
+  height: calc(100dvh - var(--easylab-suite-shell-offset, 0px));
+}
+
+.editor-header {
+  isolation: isolate;
+}
+
+.breadcrumb-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) max-content;
+  align-items: start;
+  gap: 8px;
+}
+
+.editor-actions {
+  flex-wrap: wrap;
+  overflow: visible;
+  row-gap: 6px;
+  max-width: min(430px, 42vw);
+}
+
+.title-row,
+.tag-editor,
+.editor-tabs {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.title-row {
+  flex-wrap: wrap;
+}
+
+.tag-picker.inline .chip-row {
+  max-height: none;
+}
+
+@media (max-width: 1120px) {
+  .breadcrumb-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .editor-actions {
+    justify-content: flex-start;
+    max-width: 100%;
+  }
 }
