@@ -5614,3 +5614,46 @@ code,
     max-width: 100%;
   }
 }
+
+.editor {
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scroll-padding-bottom: 80px;
+  scrollbar-width: none;
+}
+
+.editor::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
+.editor-main-stack {
+  padding-bottom: 72px;
+}
+
+.editor::after {
+  content: "";
+  position: sticky;
+  bottom: 0;
+  display: block;
+  height: 3px;
+  margin-top: -3px;
+  border-radius: 999px;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    color-mix(in srgb, var(--accent) 28%, transparent),
+    transparent
+  );
+  opacity: 0.45;
+  pointer-events: none;
+}
+
+.app-bg.suite-shell .editor {
+  max-height: 100%;
+}
+
+.app-bg.suite-shell .entry-context-panel {
+  max-height: calc(100dvh - var(--easylab-suite-shell-offset, 0px) - 116px);
+}
