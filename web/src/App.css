@@ -5657,3 +5657,39 @@ code,
 .app-bg.suite-shell .entry-context-panel {
   max-height: calc(100dvh - var(--easylab-suite-shell-offset, 0px) - 116px);
 }
+
+.app-bg.suite-shell {
+  height: calc(100dvh - var(--easylab-suite-shell-offset, 0px));
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+
+.app-bg.suite-shell::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
+.app-bg.suite-shell .app-shell {
+  height: auto;
+  min-height: calc(100dvh - var(--easylab-suite-shell-offset, 0px) - 24px);
+  align-items: stretch;
+}
+
+.app-bg.suite-shell .sidebar {
+  height: calc(100dvh - var(--easylab-suite-shell-offset, 0px) - 24px);
+  max-height: calc(100dvh - var(--easylab-suite-shell-offset, 0px) - 24px);
+}
+
+.app-bg.suite-shell .editor {
+  height: auto;
+  min-height: calc(100dvh - var(--easylab-suite-shell-offset, 0px) - 24px);
+  max-height: none;
+  overflow: visible;
+  padding-bottom: 88px;
+}
+
+.app-bg.suite-shell .editor::after {
+  display: none;
+}

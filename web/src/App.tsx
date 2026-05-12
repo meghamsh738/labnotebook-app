@@ -3969,8 +3969,49 @@ function App() {
     )
   }, [attachmentsForEntry, changeQueue, entryList])
 
+  const appBgRef = useRef<HTMLDivElement | null>(null)
+
+  const handleSuiteShellWheel = useCallback((event: WheelEvent) => {
+    if (!isSuiteShell || event.ctrlKey || event.defaultPrevented || event.deltaY === 0) return
+
+    const root = appBgRef.current
+    if (!root) return
+    if (root.scrollHeight <= root.clientHeight + 1) return
+
+    let node = event.target instanceof HTMLElement ? event.target : null
+    while (node && node !== root) {
+      const style = window.getComputedStyle(node)
+      const canScroll =
+        (style.overflowY === 'auto' || style.overflowY === 'scroll') &&
+        node.scrollHeight > node.clientHeight + 1
+
+      if (canScroll) {
+        const atTop = node.scrollTop <= 1
+        const atBottom = node.scrollTop + node.clientHeight >= node.scrollHeight - 1
+        if ((event.deltaY < 0 && !atTop) || (event.deltaY > 0 && !atBottom)) return
+      }
+
+      node = node.parentElement
+    }
+
+    const maxScrollTop = root.scrollHeight - root.clientHeight
+    const nextScrollTop = Math.max(0, Math.min(maxScrollTop, root.scrollTop + event.deltaY))
+    if (Math.abs(nextScrollTop - root.scrollTop) < 0.5) return
+
+    event.preventDefault()
+    root.scrollTop = nextScrollTop
+  }, [isSuiteShell])
+
+  useEffect(() => {
+    const root = appBgRef.current
+    if (!isSuiteShell || !root) return undefined
+
+    root.addEventListener('wheel', handleSuiteShellWheel, { capture: true, passive: false })
+    return () => root.removeEventListener('wheel', handleSuiteShellWheel, true)
+  }, [handleSuiteShellWheel, isSuiteShell])
+
   return (
-    <div className={`app-bg ${isSuiteShell ? 'suite-shell' : ''}`}>
+    <div ref={appBgRef} className={`app-bg ${isSuiteShell ? 'suite-shell' : ''}`}>
       <div className={`app-shell ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
         <Sidebar
           labs={sampleData.labs}
