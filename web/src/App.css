@@ -5693,3 +5693,46 @@ code,
 .app-bg.suite-shell .editor::after {
   display: none;
 }
+
+:root {
+  scroll-behavior: smooth;
+}
+
+.app-bg,
+.app-bg.suite-shell,
+.editor,
+.sidebar-content,
+.entry-list,
+.entry-browser-list,
+.context-panel-body,
+.tab-panel,
+.attachment-list,
+.tag-editor,
+.editor-tabs,
+.workbook-grid-wrap,
+.workbook-formatbar,
+.workbook-commandbar,
+.table-editor {
+  scroll-behavior: smooth;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root,
+  .app-bg,
+  .app-bg.suite-shell,
+  .editor,
+  .sidebar-content,
+  .entry-list,
+  .entry-browser-list,
+  .context-panel-body,
+  .tab-panel,
+  .attachment-list,
+  .tag-editor,
+  .editor-tabs,
+  .workbook-grid-wrap,
+  .workbook-formatbar,
+  .workbook-commandbar,
+  .table-editor {
+    scroll-behavior: auto;
+  }
+}

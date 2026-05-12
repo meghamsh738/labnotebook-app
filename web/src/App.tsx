@@ -3999,7 +3999,13 @@ function App() {
     if (Math.abs(nextScrollTop - root.scrollTop) < 0.5) return
 
     event.preventDefault()
-    root.scrollTop = nextScrollTop
+    const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false
+    if (reduceMotion) {
+      root.scrollTop = nextScrollTop
+      return
+    }
+
+    root.scrollTo({ top: nextScrollTop, behavior: 'smooth' })
   }, [isSuiteShell])
 
   useEffect(() => {
