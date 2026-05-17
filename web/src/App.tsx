@@ -8947,6 +8947,28 @@ function SettingsModal({
         : mobilePairStatus === 'checking'
           ? 'warning'
           : 'danger'
+  const outputDestinations = [
+    {
+      label: 'Notebook data and state',
+      path: appPaths.dataRoot,
+      use: 'Daily entries, metadata, workbook content, sync queue, and the shared state file.',
+    },
+    {
+      label: 'Attachment intake and uploads',
+      path: appPaths.attachmentsRoot,
+      use: 'Dragged files, pasted images, camera uploads, and Telegram/WhatsApp image or file captures.',
+    },
+    {
+      label: 'Generated exports',
+      path: appPaths.exportRoot,
+      use: 'PDFs, Markdown bundles, manifests, and exported experiment folders. Some browser exports may still ask for a destination.',
+    },
+    {
+      label: 'Sync and file destinations',
+      path: appPaths.syncRoot,
+      use: 'Relative file destination blocks and attachment references. The master sync folder uses this value by default.',
+    },
+  ]
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -8973,38 +8995,34 @@ function SettingsModal({
         <div className="meta-card">
           <div className="settings-row">
             <div>
-              <div className="title-sm">Storage locations</div>
-              <div className="muted tiny">Base folders used for notes, uploaded files, exports, and sync.</div>
+              <div className="title-sm">Output and storage destinations</div>
+              <div className="muted tiny">Where Easylab writes generated files, captured media, and notebook data on this laptop.</div>
             </div>
             <button className="ghost" type="button" onClick={onEditSetup}>
               Edit setup
             </button>
           </div>
-          <div className="settings-grid">
-            <div>
-              <div className="muted tiny">Data root</div>
-              <div className="settings-path">{appPaths.dataRoot || 'Not set'}</div>
-            </div>
-            <div>
-              <div className="muted tiny">Attachments</div>
-              <div className="settings-path">{appPaths.attachmentsRoot || 'Not set'}</div>
-            </div>
-            <div>
-              <div className="muted tiny">Exports</div>
-              <div className="settings-path">{appPaths.exportRoot || 'Not set'}</div>
-            </div>
-            <div>
-              <div className="muted tiny">Sync root</div>
-              <div className="settings-path">{appPaths.syncRoot || 'Not set'}</div>
-            </div>
+          <div className="settings-output-grid">
+            {outputDestinations.map((item) => (
+              <div className="settings-path-card" key={item.label}>
+                <div className="settings-path-card-head">
+                  <div className="settings-path-label">{item.label}</div>
+                  <span className={`status-chip ${item.path ? 'success' : 'warning'}`}>
+                    {item.path ? 'Set' : 'Missing'}
+                  </span>
+                </div>
+                <div className="settings-path">{item.path || 'Not set'}</div>
+                <div className="settings-path-use">{item.use}</div>
+              </div>
+            ))}
           </div>
           <div className="settings-notes">
             <div className="muted tiny">
-              <strong>Notes and metadata:</strong> saved under <code>{appPaths.dataRoot || 'Data root'}</code>.
+              <strong>Export buttons:</strong> use <code>{appPaths.exportRoot || 'Generated exports'}</code> as the intended output folder. Chrome/Edge folder exports may still ask you to confirm a location; fallback downloads go to the browser Downloads folder.
             </div>
             <div className="muted tiny">
-              <strong>Uploaded files and cached attachments:</strong> stored under{' '}
-              <code>{appPaths.attachmentsRoot || 'Attachments'}</code>.
+              <strong>Phone intake:</strong> Telegram and WhatsApp captures save files under{' '}
+              <code>{appPaths.attachmentsRoot || 'Attachment intake'}</code> and then link them into the daily note.
             </div>
           </div>
         </div>
@@ -9012,8 +9030,8 @@ function SettingsModal({
         <div className="meta-card">
           <div className="settings-row">
             <div>
-              <div className="title-sm">Master sync folder</div>
-              <div className="muted tiny">Root for file destinations + attachment references (local folder or cloud URL).</div>
+              <div className="title-sm">Master sync / file destination root</div>
+              <div className="muted tiny">Where new relative file destinations resolve. This is for lab folders, raw data paths, and shared-drive references.</div>
             </div>
           </div>
 
@@ -9033,6 +9051,9 @@ function SettingsModal({
                   </button>
                 )}
               </div>
+              <span className="field-hint">
+                Changing this does not move existing files. It controls how new file destination blocks and relative attachment paths are resolved.
+              </span>
             </label>
           </div>
         </div>
@@ -9426,8 +9447,8 @@ function SetupWizard({
 
         <div className="setup-body">
           <p className="muted tiny">
-            Choose where data, attachments, exports, and sync files should live on this machine. You can edit these later
-            in Settings.
+            Choose where notebook data, attachment intake, generated exports, and file-destination references should live
+            on this machine. You can edit these later in Settings.
           </p>
           <p className="muted tiny">
             These folders do not need to exist yet — Easylab will create them when you finish setup.
@@ -9435,7 +9456,7 @@ function SetupWizard({
 
           <div className="setup-grid">
             <label className="field">
-              <span className="muted tiny">Data root</span>
+              <span className="muted tiny">Notebook data and state</span>
               <div className="field-row">
                 <input
                   data-testid="setup-data-root"
@@ -9449,10 +9470,11 @@ function SetupWizard({
                   </button>
                 )}
               </div>
+              <span className="field-hint">Daily entries, workbook content, metadata, and shared state.</span>
             </label>
 
             <label className="field">
-              <span className="muted tiny">Attachments cache</span>
+              <span className="muted tiny">Attachment intake and uploads</span>
               <div className="field-row">
                 <input
                   data-testid="setup-attachments-root"
@@ -9466,10 +9488,11 @@ function SetupWizard({
                   </button>
                 )}
               </div>
+              <span className="field-hint">Dragged files, pasted images, camera uploads, and phone intake media.</span>
             </label>
 
             <label className="field">
-              <span className="muted tiny">Exports</span>
+              <span className="muted tiny">Generated exports</span>
               <div className="field-row">
                 <input
                   data-testid="setup-export-root"
@@ -9483,10 +9506,11 @@ function SetupWizard({
                   </button>
                 )}
               </div>
+              <span className="field-hint">PDFs, Markdown bundles, manifests, and experiment export folders.</span>
             </label>
 
             <label className="field">
-              <span className="muted tiny">Sync folder</span>
+              <span className="muted tiny">Sync and file destinations</span>
               <div className="field-row">
                 <input
                   data-testid="setup-sync-root"
@@ -9500,6 +9524,7 @@ function SetupWizard({
                   </button>
                 )}
               </div>
+              <span className="field-hint">Relative file destination blocks and shared lab folder references.</span>
             </label>
           </div>
 

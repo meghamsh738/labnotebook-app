@@ -3095,6 +3095,12 @@
   color: var(--danger);
 }
 
+.field-hint {
+  color: var(--text-3);
+  font-size: var(--fs-12);
+  line-height: 1.35;
+}
+
 .field input,
 .field select {
   border-radius: var(--radius-sm);
@@ -3269,6 +3275,41 @@
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
   gap: var(--s-3);
+}
+
+.settings-output-grid {
+  margin-top: var(--s-3);
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: var(--s-3);
+}
+
+.settings-path-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--surface-2) 72%, transparent);
+  padding: 12px;
+  display: grid;
+  gap: 8px;
+}
+
+.settings-path-card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.settings-path-label {
+  color: var(--text);
+  font-size: var(--fs-14);
+  font-weight: 700;
+}
+
+.settings-path-use {
+  color: var(--text-3);
+  font-size: var(--fs-12);
+  line-height: 1.4;
 }
 
 .settings-notes {
