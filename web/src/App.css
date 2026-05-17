@@ -5777,3 +5777,57 @@ code,
     scroll-behavior: auto;
   }
 }
+
+/* Header alignment pass: align the title tabs with the note body and keep actions right-aligned. */
+.editor-header {
+  --notebook-header-align-offset: 13px;
+}
+
+.editor-header .breadcrumb-row {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  width: 100%;
+}
+
+.editor-header .editor-actions {
+  margin-left: auto;
+  max-width: min(100%, 680px);
+  justify-content: flex-end;
+}
+
+.editor-header .title-row,
+.editor-header .editor-tabs,
+.editor-header .tag-editor {
+  margin-left: var(--notebook-header-align-offset);
+  margin-right: var(--notebook-header-align-offset);
+  max-width: calc(100% - (var(--notebook-header-align-offset) * 2));
+}
+
+.editor-header .editor-toolbar-dock {
+  width: auto;
+  margin-left: 0;
+  margin-right: 0;
+  max-width: 100%;
+}
+
+.editor-header .editor-toolbar {
+  width: 100%;
+  padding-left: var(--notebook-header-align-offset);
+  padding-right: var(--notebook-header-align-offset);
+}
+
+@media (max-width: 900px) {
+  .editor-header {
+    --notebook-header-align-offset: 0px;
+  }
+
+  .editor-header .breadcrumb-row {
+    justify-content: flex-start;
+  }
+
+  .editor-header .editor-actions {
+    margin-left: 0;
+    justify-content: flex-start;
+  }
+}
