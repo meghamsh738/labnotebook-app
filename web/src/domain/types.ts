@@ -201,6 +201,7 @@ export interface Attachment {
   type: 'image' | 'pdf' | 'file' | 'raw'
   filename: string
   filesize: string
+  bytes?: number
   storagePath: string
   thumbnail?: string
   linkedRegionId?: string
@@ -212,12 +213,20 @@ export interface Attachment {
   sourceMessageId?: string
   sourceMediaId?: string
   contentType?: string
+  mimeType?: string
   sha256?: string
+  cacheKey?: string
+  driveFileId?: string
+  syncStatus?: JournalSyncStatus
+  createdAt?: string
+  updatedAt?: string
 }
 
 export type SyncProviderKind = 'google-drive'
 
 export type DevicePlatform = 'desktop' | 'mobile' | 'tablet' | 'web'
+
+export type JournalSyncStatus = 'local' | 'queued' | 'syncing' | 'synced' | 'failed' | 'conflict'
 
 export interface DeviceProfile {
   id: string
@@ -303,6 +312,21 @@ export interface SyncConflict {
   detectedAt: string
   resolution: 'pending' | 'local-won' | 'remote-won' | 'kept-copy'
   summary: string
+  localCopy?: unknown
+  remoteCopy?: unknown
+}
+
+export interface SyncQueueItem {
+  id: string
+  entityKind: SyncEntityEnvelope<unknown>['kind']
+  entityId: string
+  operation: 'upsert' | 'delete'
+  status: JournalSyncStatus
+  queuedAt: string
+  updatedAt: string
+  updatedByDeviceId: string
+  baseVersion?: number
+  lastError?: string
 }
 
 export interface TombstoneRecord {
@@ -368,6 +392,9 @@ export interface Entry {
   linkedFiles: string[]
   pinnedRegions: PinnedRegion[]
   syncPath?: string
+  version?: number
+  updatedByDeviceId?: string
+  syncStatus?: JournalSyncStatus
   source?: 'manual' | 'whatsapp' | 'telegram'
   whatsappCaptures?: WhatsAppCapture[]
   telegramCaptures?: TelegramCapture[]

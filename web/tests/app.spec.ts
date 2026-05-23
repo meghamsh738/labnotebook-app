@@ -810,6 +810,59 @@ test.describe('Lab note taking app', () => {
     await expect(page.getByRole('heading', { name: 'Device-owned sync without an Easylab cloud server' })).toBeVisible()
   })
 
+  test('journal data core migrates local entries into IndexedDB', async ({ page }) => {
+    await boot(page, { noFail: '1' })
+    await page.getByRole('tab', { name: 'Sync' }).click()
+    await expect(page.getByText('Local data core', { exact: true })).toBeVisible()
+
+    await expect
+      .poll(async () => {
+        const counts = await page.evaluate(async () => {
+          if (typeof indexedDB.databases === 'function') {
+            const databases = await indexedDB.databases()
+            if (!databases.some((database) => database.name === 'easylab-journal-core')) return { entries: 0, queue: 0 }
+          }
+          const db = await new Promise<IDBDatabase>((resolve, reject) => {
+            const request = indexedDB.open('easylab-journal-core')
+            request.onsuccess = () => resolve(request.result)
+            request.onerror = () => reject(request.error)
+          })
+          const countStore = (storeName: string) =>
+            new Promise<number>((resolve, reject) => {
+              const tx = db.transaction(storeName, 'readonly')
+              const request = tx.objectStore(storeName).count()
+              request.onsuccess = () => resolve(request.result)
+              request.onerror = () => reject(request.error)
+            })
+          const [entries, queue] = await Promise.all([countStore('entries'), countStore('syncQueue')])
+          db.close()
+          return { entries, queue }
+        })
+        return counts.entries > 0 && counts.queue > 0
+      })
+      .toBe(true)
+
+    const counts = await page.evaluate(async () => {
+      const db = await new Promise<IDBDatabase>((resolve, reject) => {
+        const request = indexedDB.open('easylab-journal-core')
+        request.onsuccess = () => resolve(request.result)
+        request.onerror = () => reject(request.error)
+      })
+      const countStore = (storeName: string) =>
+        new Promise<number>((resolve, reject) => {
+          const tx = db.transaction(storeName, 'readonly')
+          const request = tx.objectStore(storeName).count()
+          request.onsuccess = () => resolve(request.result)
+          request.onerror = () => reject(request.error)
+        })
+      const result = { entries: await countStore('entries'), queue: await countStore('syncQueue') }
+      db.close()
+      return result
+    })
+    expect(counts.entries).toBeGreaterThan(0)
+    expect(counts.queue).toBeGreaterThan(0)
+  })
+
   test('settings shows mobile pairing QR and link status', async ({ page }) => {
     await boot(page, { noFail: '1', stubPicker: true })
     await page.getByTestId('settings-button').click()

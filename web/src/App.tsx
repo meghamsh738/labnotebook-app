@@ -46,6 +46,15 @@ import {
   transferStatusLabel,
   type DriveConnectionState,
 } from './sync/connectedSync'
+import {
+  buildAttachmentDriveFileName,
+  buildAttachmentDriveFolder,
+  buildEntryDriveFileName,
+  hashBlobSha256,
+  hydrateOrMigrateJournalSnapshot,
+  persistJournalSnapshot,
+  type JournalHydrationResult,
+} from './sync/dataCore'
 
 const dateOnly = new Intl.DateTimeFormat('en-US', {
   month: 'short',
@@ -2008,7 +2017,7 @@ function App() {
   const [transferRecords, setTransferRecords] = useState<TransferRecord[]>(() =>
     loadJson<TransferRecord[]>(CONNECTED_STORAGE_KEYS.transfers, [])
   )
-  const [syncConflicts] = useState<SyncConflict[]>(() =>
+  const [syncConflicts, setSyncConflicts] = useState<SyncConflict[]>(() =>
     loadJson<SyncConflict[]>(CONNECTED_STORAGE_KEYS.conflicts, [])
   )
   const [driveConnection, setDriveConnection] = useState<DriveConnectionState>(() =>
@@ -2097,6 +2106,11 @@ function App() {
   const [sharedApiAvailable, setSharedApiAvailable] = useState(false)
   const [sharedStateReady, setSharedStateReady] = useState(false)
   const sharedStateFingerprintRef = useRef('')
+  const journalCoreHydratedRef = useRef(false)
+  const [journalCoreStatus, setJournalCoreStatus] = useState<'loading' | 'ready' | 'fallback' | 'error'>('loading')
+  const [journalCoreSource, setJournalCoreSource] = useState<JournalHydrationResult['source']>('local-fallback')
+  const [journalCoreQueueCount, setJournalCoreQueueCount] = useState(0)
+  const [journalCoreError, setJournalCoreError] = useState('')
 
   useEffect(() => {
     if (!selectedEntryId) return
@@ -2131,6 +2145,52 @@ function App() {
       lastError,
     })
   }, [driveConnection])
+
+  useEffect(() => {
+    if (journalCoreHydratedRef.current || resetSeed) {
+      if (resetSeed) setJournalCoreStatus('ready')
+      return
+    }
+    journalCoreHydratedRef.current = true
+    const run = async () => {
+      try {
+        const result = await hydrateOrMigrateJournalSnapshot(
+          {
+            entries: entryDrafts,
+            attachments: attachmentsStore,
+            fileBoxItems,
+            transfers: transferRecords,
+            conflicts: syncConflicts,
+            tombstones: [],
+            device: deviceProfile,
+          },
+          { device: deviceProfile, lastSyncedAt: driveConnection.lastSyncAt }
+        )
+        const normalizedEntries = Object.fromEntries(
+          Object.entries(result.snapshot.entries).map(([id, entry]) => [
+            id,
+            condenseLegacyDailyEntry(ensureEntryDateBucket(applyLockedTemplateHeadings(entry))),
+          ])
+        )
+        if (Object.keys(normalizedEntries).length) setEntryDrafts(normalizedEntries)
+        setAttachmentsStore(result.snapshot.attachments)
+        setFileBoxItems(result.snapshot.fileBoxItems)
+        setTransferRecords(result.snapshot.transfers)
+        setSyncConflicts(result.snapshot.conflicts)
+        if (result.snapshot.device) setDeviceProfile((prev) => ({ ...prev, ...result.snapshot.device, lastSeenAt: new Date().toISOString() }))
+        setJournalCoreSource(result.source)
+        setJournalCoreQueueCount(result.queueCount)
+        setJournalCoreStatus(result.source === 'local-fallback' ? 'fallback' : 'ready')
+        setJournalCoreError('')
+      } catch (err) {
+        setJournalCoreStatus('error')
+        setJournalCoreError(err instanceof Error ? err.message : String(err))
+      }
+    }
+    void run()
+    // Initial migration deliberately uses the first rendered local snapshot.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   useEffect(() => {
     const loadInfo = async () => {
@@ -3362,6 +3422,44 @@ function App() {
   }, [attachmentsStore])
 
   useEffect(() => {
+    if (typeof window === 'undefined' || resetSeed || journalCoreStatus === 'loading') return
+    const id = window.setTimeout(() => {
+      void persistJournalSnapshot(
+        {
+          entries: entryDrafts,
+          attachments: attachmentsStore,
+          fileBoxItems,
+          transfers: transferRecords,
+          conflicts: syncConflicts,
+          tombstones: [],
+          device: deviceProfile,
+        },
+        { device: deviceProfile, lastSyncedAt: driveConnection.lastSyncAt }
+      )
+        .then((result) => {
+          setJournalCoreQueueCount(result.queueCount)
+          setJournalCoreStatus('ready')
+          setJournalCoreError('')
+        })
+        .catch((err) => {
+          setJournalCoreStatus('error')
+          setJournalCoreError(err instanceof Error ? err.message : String(err))
+        })
+    }, 400)
+    return () => window.clearTimeout(id)
+  }, [
+    attachmentsStore,
+    deviceProfile,
+    driveConnection.lastSyncAt,
+    entryDrafts,
+    fileBoxItems,
+    journalCoreStatus,
+    resetSeed,
+    syncConflicts,
+    transferRecords,
+  ])
+
+  useEffect(() => {
     if (!sharedApiAvailable || !sharedStateReady) return
     const payload = {
       version: SHARED_STATE_VERSION,
@@ -3406,11 +3504,18 @@ function App() {
 
       for (const file of files) {
         const id = `att-${crypto.randomUUID?.() ?? Math.random().toString(36).slice(2)}`
+        const createdAt = new Date().toISOString()
         const type = file.type.startsWith('image')
           ? 'image'
           : file.type === 'application/pdf'
             ? 'pdf'
             : 'file'
+        let sha256 = ''
+        try {
+          sha256 = await hashBlobSha256(file)
+        } catch (err) {
+          console.warn('Unable to hash attachment; sync will use generated id only', err)
+        }
 
         if (sharedApiAvailable) {
           try {
@@ -3434,9 +3539,16 @@ function App() {
                   type,
                   filename: file.name,
                   filesize: `${Math.max(1, Math.round(file.size / 1024))} KB`,
+                  bytes: file.size,
                   storagePath: sharedUrl,
                   pinnedOffline: false,
                   thumbnail: type === 'image' ? sharedUrl : undefined,
+                  contentType: file.type,
+                  mimeType: file.type,
+                  sha256,
+                  syncStatus: 'queued',
+                  createdAt,
+                  updatedAt: createdAt,
                 })
                 continue
               }
@@ -3447,15 +3559,18 @@ function App() {
         }
 
         let cachePath = ''
+        let cacheKey = ''
         try {
           // Try filesystem cache first; fallback to IndexedDB.
           const fsPath = await writeFileToCache(file)
           if (fsPath) {
             cachePath = fsPath
+            cacheKey = fsPath.replace('fs://', '')
             setFsEnabled(true)
           } else {
             const key = await cacheFile(file)
             cachePath = `idb://${key}`
+            cacheKey = key
           }
         } catch (err) {
           // Mobile/private contexts can block IndexedDB or FS APIs.
@@ -3473,10 +3588,18 @@ function App() {
           type,
           filename: file.name,
           filesize: `${Math.max(1, Math.round(file.size / 1024))} KB`,
+          bytes: file.size,
           storagePath,
           cachedPath: cachePath,
+          cacheKey,
           pinnedOffline: type === 'image',
           thumbnail: type === 'image' ? URL.createObjectURL(file) : undefined,
+          contentType: file.type,
+          mimeType: file.type,
+          sha256,
+          syncStatus: 'queued',
+          createdAt,
+          updatedAt: createdAt,
         })
       }
 
@@ -3516,7 +3639,7 @@ function App() {
           contentType: attachment.contentType,
           device: deviceProfile,
           localObjectUrl: attachment.thumbnail,
-          status: 'available',
+          status: 'queued',
         })
       )
       const nextTransfers = saved.map((attachment, index) =>
@@ -3526,7 +3649,7 @@ function App() {
           attachmentId: attachment.id,
           filename: attachment.filename,
           device: deviceProfile,
-          status: 'available',
+          status: 'queued',
           bytesTotal: files[index]?.size,
         })
       )
@@ -3614,37 +3737,91 @@ function App() {
       })
       await provider.signIn()
       const rootId = driveConnection.folderId || await provider.ensureRootFolder()
-      const [entriesFolderId, attachmentsFolderId, fileBoxFolderId, transfersFolderId, devicesFolderId, tombstonesFolderId] = await Promise.all([
+      const [entriesFolderId, attachmentsFolderId, fileBoxFolderId, transfersFolderId, devicesFolderId, tombstonesFolderId, conflictsFolderId] = await Promise.all([
         provider.ensureFolder(rootId, 'entries'),
         provider.ensureFolder(rootId, 'attachments'),
         provider.ensureFolder(rootId, 'filebox'),
         provider.ensureFolder(rootId, 'transfers'),
         provider.ensureFolder(rootId, 'devices'),
         provider.ensureFolder(rootId, 'tombstones'),
+        provider.ensureFolder(rootId, 'conflicts'),
       ])
 
-      const manifest = createManifest({
-        device: deviceProfile,
-        entries: entryDrafts,
-        attachments: attachmentsStore,
-        fileBoxItems,
-        transfers: transferRecords,
-        folderName: driveConnection.folderName || DRIVE_ROOT_FOLDER,
-      })
-      await provider.uploadJson(rootId, 'manifest.json', manifest)
-      await provider.uploadJson(entriesFolderId, 'entries.json', entryDrafts)
-      await provider.uploadJson(fileBoxFolderId, 'filebox.json', fileBoxItems)
-      await provider.uploadJson(transfersFolderId, 'transfers.json', transferRecords)
-      await provider.uploadJson(devicesFolderId, `${deviceProfile.id}.json`, deviceProfile)
-      await provider.uploadJson(tombstonesFolderId, 'tombstones.json', [])
-
+      const lastSyncAt = new Date().toISOString()
+      const uploadedAttachmentDriveIds = new Map<string, string>()
+      const attachmentDateFolderIds = new Map<string, string>()
       for (const attachment of attachmentsStore) {
         const blob = await readAttachmentBlob(attachment, attachmentUrls)
         if (!blob) continue
-        await provider.uploadBlob(attachmentsFolderId, `${attachment.id}-${safeFileName(attachment.filename)}`, blob, attachment.contentType)
+        const entry = entryDrafts[attachment.entryId]
+        const folderName = buildAttachmentDriveFolder(entry)
+        let dayFolderId = attachmentDateFolderIds.get(folderName)
+        if (!dayFolderId) {
+          dayFolderId = await provider.ensureFolder(attachmentsFolderId, folderName)
+          attachmentDateFolderIds.set(folderName, dayFolderId)
+        }
+        const driveFileId = await provider.uploadBlob(dayFolderId, buildAttachmentDriveFileName(attachment), blob, attachment.contentType)
+        uploadedAttachmentDriveIds.set(attachment.id, driveFileId)
       }
 
-      const lastSyncAt = new Date().toISOString()
+      const syncedAttachments = attachmentsStore.map((attachment) =>
+        uploadedAttachmentDriveIds.has(attachment.id)
+          ? {
+              ...attachment,
+              driveFileId: uploadedAttachmentDriveIds.get(attachment.id),
+              syncStatus: 'synced' as const,
+              updatedAt: lastSyncAt,
+            }
+          : attachment
+      )
+      const syncedFileBoxItems = fileBoxItems.map((item) =>
+        item.attachmentId && uploadedAttachmentDriveIds.has(item.attachmentId)
+          ? {
+              ...item,
+              driveFileId: uploadedAttachmentDriveIds.get(item.attachmentId),
+              status: item.status === 'queued' || item.status === 'uploading' ? 'available' as const : item.status,
+              updatedAt: lastSyncAt,
+            }
+          : item
+      )
+      const syncedTransfers = transferRecords.map((transfer) =>
+        transfer.attachmentId && uploadedAttachmentDriveIds.has(transfer.attachmentId)
+          ? {
+              ...transfer,
+              driveFileId: uploadedAttachmentDriveIds.get(transfer.attachmentId),
+              status: transfer.status === 'queued' || transfer.status === 'uploading' ? 'available' as const : transfer.status,
+              updatedAt: lastSyncAt,
+            }
+          : transfer
+      )
+      const manifest = createManifest({
+        device: deviceProfile,
+        entries: entryDrafts,
+        attachments: syncedAttachments,
+        fileBoxItems: syncedFileBoxItems,
+        transfers: syncedTransfers,
+        folderName: driveConnection.folderName || DRIVE_ROOT_FOLDER,
+      })
+      await provider.uploadJson(rootId, 'manifest.json', manifest)
+      await Promise.all(Object.values(entryDrafts).map((entry) =>
+        provider.uploadJson(entriesFolderId, buildEntryDriveFileName(entry, entryDrafts), {
+          id: entry.id,
+          kind: 'entry',
+          version: 1,
+          updatedAt: entry.lastEditedDatetime,
+          updatedByDeviceId: entry.updatedByDeviceId || deviceProfile.id,
+          payload: entry,
+        })
+      ))
+      await Promise.all(syncedFileBoxItems.map((item) => provider.uploadJson(fileBoxFolderId, `${item.id}.json`, item)))
+      await Promise.all(syncedTransfers.map((transfer) => provider.uploadJson(transfersFolderId, `${transfer.id}.json`, transfer)))
+      await provider.uploadJson(devicesFolderId, `${deviceProfile.id}.json`, deviceProfile)
+      await provider.uploadJson(tombstonesFolderId, 'tombstones.json', [])
+      await provider.uploadJson(conflictsFolderId, 'conflicts.json', syncConflicts)
+
+      setAttachmentsStore(syncedAttachments)
+      setFileBoxItems(syncedFileBoxItems)
+      setTransferRecords(syncedTransfers)
       setDriveConnection((prev) => ({
         ...prev,
         folderId: rootId,
@@ -3653,13 +3830,6 @@ function App() {
         lastSyncAt,
         lastError: undefined,
       }))
-      setTransferRecords((prev) =>
-        prev.map((transfer) =>
-          transfer.status === 'queued' || transfer.status === 'uploading'
-            ? { ...transfer, status: 'available', updatedAt: lastSyncAt }
-            : transfer
-        )
-      )
     } catch (err) {
       setDriveConnection((prev) => ({
         ...prev,
@@ -3676,6 +3846,7 @@ function App() {
     driveConnection.folderName,
     entryDrafts,
     fileBoxItems,
+    syncConflicts,
     transferRecords,
   ])
 
@@ -4391,6 +4562,10 @@ function App() {
               folderName: driveConnection.folderName || DRIVE_ROOT_FOLDER,
             })}
             conflicts={syncConflicts}
+            journalCoreStatus={journalCoreStatus}
+            journalCoreSource={journalCoreSource}
+            journalCoreQueueCount={journalCoreQueueCount}
+            journalCoreError={journalCoreError}
           />
         ) : (
           <EditorPane
@@ -6699,6 +6874,10 @@ function SyncPane({
   syncing,
   manifest,
   conflicts,
+  journalCoreStatus,
+  journalCoreSource,
+  journalCoreQueueCount,
+  journalCoreError,
 }: {
   appPaths: AppPaths
   masterSyncPath: string
@@ -6708,6 +6887,10 @@ function SyncPane({
   syncing: boolean
   manifest: SyncManifest
   conflicts: SyncConflict[]
+  journalCoreStatus: 'loading' | 'ready' | 'fallback' | 'error'
+  journalCoreSource: JournalHydrationResult['source']
+  journalCoreQueueCount: number
+  journalCoreError: string
 }) {
   return (
     <main className="panel editor connected-workspace" data-testid="sync-pane">
@@ -6763,12 +6946,22 @@ function SyncPane({
             <div className="settings-path-card"><div className="settings-path-label">Local attachments</div><div className="settings-path">{appPaths.attachmentsRoot}</div></div>
             <div className="settings-path-card"><div className="settings-path-label">Exports</div><div className="settings-path">{appPaths.exportRoot}</div></div>
             <div className="settings-path-card"><div className="settings-path-label">Legacy sync root</div><div className="settings-path">{masterSyncPath || appPaths.syncRoot}</div></div>
-            <div className="settings-path-card"><div className="settings-path-label">Drive layout</div><div className="settings-path">manifest.json, devices, entries, attachments, filebox, transfers, tombstones</div></div>
+            <div className="settings-path-card"><div className="settings-path-label">Drive layout</div><div className="settings-path">manifest.json, devices, entries, attachments, filebox, transfers, conflicts, tombstones</div></div>
           </div>
         </section>
       </div>
 
       <div className="connected-grid two">
+        <section className="connected-card">
+          <div className="section-title">Local data core</div>
+          <div className="connected-table">
+            <div className="connected-table-row"><span>IndexedDB store</span><strong>{journalCoreStatus}</strong></div>
+            <div className="connected-table-row"><span>Hydration source</span><strong>{journalCoreSource}</strong></div>
+            <div className="connected-table-row"><span>Queued entities</span><strong>{journalCoreQueueCount}</strong></div>
+            <div className="connected-table-row"><span>Drive folder</span><strong>{driveConnection.folderId ? 'Ready' : 'Not linked'}</strong></div>
+          </div>
+          {journalCoreError && <div className="settings-error">{journalCoreError}</div>}
+        </section>
         <section className="connected-card">
           <div className="section-title">Sync manifest preview</div>
           <div className="connected-table">

@@ -19,7 +19,8 @@ License: All Rights Reserved. See `LICENSE`.
 - **File Hub**: central view of incoming files and recent transfer records across entries.
 - **Devices**: local device profile with platform, device id, last seen, and Drive presence.
 - **Transfers**: table-first status view for queued, uploaded, attached, failed, conflicted, and removed files.
-- **Sync**: Google Drive folder setup, manifest upload, device metadata upload, attachment blob upload, and clear storage-path reporting.
+- **Sync-safe data core**: entries, attachments, devices, transfers, conflicts, tombstones, and a sync queue are mirrored into IndexedDB while localStorage remains as a compatibility fallback.
+- **Sync**: Google Drive folder setup, per-day entry JSON upload, per-day attachment blob folders, device metadata upload, File Box/transfer metadata upload, conflict/tombstone folders, and clear storage-path reporting.
 - **PWA**: manifest, icon, service worker, standalone display mode, camera/file upload support, and share-target declaration for supported mobile browsers.
 - **Standalone desktop**: Electron shell with filesystem folder-picking IPC, directory creation IPC, and Google OAuth PKCE loopback support.
 
@@ -88,6 +89,18 @@ npm run standalone:build
 ```
 
 `npm --prefix web run screenshots` regenerates PNG screenshots under `screenshots/`.
+
+## First Milestone Status
+
+Implemented in this branch:
+
+- IndexedDB-backed journal core under `easylab-journal-core`.
+- Migration from the existing rendered/localStorage notebook state into sync-safe entity stores.
+- Deterministic Drive file paths for `entries/YYYY-MM-DD.json` and `attachments/YYYY-MM-DD/<attachmentId>-filename`.
+- Attachment SHA-256 hashing, byte counts, MIME metadata, Drive file id slots, and sync status metadata.
+- Pending sync queue generation for changed entries, unsynced attachments, and tombstones.
+- Conflict-copy helpers for competing daily entry edits.
+- Tests for Drive paths, queue generation, conflict preservation, tombstones, hashing, and IndexedDB migration.
 
 ---
 
