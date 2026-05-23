@@ -9,23 +9,15 @@ import type {
   TombstoneRecord,
   TransferRecord,
 } from '../domain/types'
+import { hashBlobSha256 } from './hashing'
+import {
+  createJournalRepositories,
+  JOURNAL_DB_NAME,
+  JOURNAL_DB_VERSION,
+  JOURNAL_STORES,
+} from './repositories'
 
-export const JOURNAL_DB_NAME = 'easylab-journal-core'
-export const JOURNAL_DB_VERSION = 2
-
-const STORES = {
-  entries: 'entries',
-  attachments: 'attachments',
-  fileBoxItems: 'fileBoxItems',
-  transfers: 'transfers',
-  tombstones: 'tombstones',
-  conflicts: 'conflicts',
-  syncQueue: 'syncQueue',
-  devices: 'devices',
-  meta: 'meta',
-} as const
-
-type StoreName = typeof STORES[keyof typeof STORES]
+export { hashBlobSha256, JOURNAL_DB_NAME, JOURNAL_DB_VERSION, JOURNAL_STORES }
 
 export type JournalSnapshot = {
   entries: Record<string, Entry>
@@ -105,13 +97,6 @@ export function buildAttachmentEnvelope(attachment: Attachment, device: DevicePr
     updatedByDeviceId: device.id,
     payload: attachment,
   }
-}
-
-export async function hashBlobSha256(blob: Blob) {
-  const digest = await crypto.subtle.digest('SHA-256', await blob.arrayBuffer())
-  return Array.from(new Uint8Array(digest))
-    .map((byte) => byte.toString(16).padStart(2, '0'))
-    .join('')
 }
 
 export function mergeEntryEnvelopes(
@@ -213,43 +198,6 @@ export function buildPendingSyncQueue(
   return queue
 }
 
-function openJournalDb(): Promise<IDBDatabase> {
-  if (typeof indexedDB === 'undefined') return Promise.reject(new Error('IndexedDB is not available.'))
-  return new Promise((resolve, reject) => {
-    const request = indexedDB.open(JOURNAL_DB_NAME, JOURNAL_DB_VERSION)
-    request.onupgradeneeded = () => {
-      const db = request.result
-      for (const storeName of Object.values(STORES)) {
-        if (!db.objectStoreNames.contains(storeName)) {
-          db.createObjectStore(storeName, { keyPath: 'id' })
-        }
-      }
-    }
-    request.onsuccess = () => resolve(request.result)
-    request.onerror = () => reject(request.error)
-  })
-}
-
-async function getAll<T>(db: IDBDatabase, storeName: StoreName): Promise<T[]> {
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(storeName, 'readonly')
-    const request = tx.objectStore(storeName).getAll()
-    request.onsuccess = () => resolve(request.result as T[])
-    request.onerror = () => reject(request.error)
-  })
-}
-
-async function replaceStore<T extends { id: string }>(db: IDBDatabase, storeName: StoreName, values: T[]) {
-  await new Promise<void>((resolve, reject) => {
-    const tx = db.transaction(storeName, 'readwrite')
-    tx.oncomplete = () => resolve()
-    tx.onerror = () => reject(tx.error)
-    const store = tx.objectStore(storeName)
-    store.clear()
-    values.forEach((value) => store.put(value))
-  })
-}
-
 function fromEnvelopeRecord<T>(envelopes: SyncEntityEnvelope<T>[]) {
   return Object.fromEntries(envelopes.map((envelope) => [envelope.id, envelope.payload]))
 }
@@ -271,15 +219,15 @@ export async function hydrateOrMigrateJournalSnapshot(
   options: { device: DeviceProfile; lastSyncedAt?: string }
 ): Promise<JournalHydrationResult> {
   try {
-    const db = await openJournalDb()
+    const repositories = await createJournalRepositories()
     const [entryEnvelopes, attachmentEnvelopes, fileBoxItems, transfers, conflicts, tombstones, devices] = await Promise.all([
-      getAll<SyncEntityEnvelope<Entry>>(db, STORES.entries),
-      getAll<SyncEntityEnvelope<Attachment>>(db, STORES.attachments),
-      getAll<FileBoxItem>(db, STORES.fileBoxItems),
-      getAll<TransferRecord>(db, STORES.transfers),
-      getAll<SyncConflict>(db, STORES.conflicts),
-      getAll<TombstoneRecord>(db, STORES.tombstones),
-      getAll<DeviceProfile>(db, STORES.devices),
+      repositories.entries.all(),
+      repositories.attachments.all(),
+      repositories.fileBoxItems.all(),
+      repositories.transfers.all(),
+      repositories.conflicts.all(),
+      repositories.tombstones.all(),
+      repositories.devices.all(),
     ])
 
     const hasIndexedData = entryEnvelopes.length > 0 || attachmentEnvelopes.length > 0 || fileBoxItems.length > 0 || transfers.length > 0
@@ -313,19 +261,19 @@ export async function persistJournalSnapshot(
   snapshot: JournalSnapshot,
   options: { device: DeviceProfile; lastSyncedAt?: string }
 ): Promise<JournalPersistResult> {
-  const db = await openJournalDb()
+  const repositories = await createJournalRepositories()
   const normalized = normalizeLocalSnapshot(snapshot)
   const queue = buildPendingSyncQueue(normalized, options.device, options.lastSyncedAt)
   await Promise.all([
-    replaceStore(db, STORES.entries, Object.values(normalized.entries).map((entry) => buildEntryEnvelope(entry, options.device))),
-    replaceStore(db, STORES.attachments, normalized.attachments.map((attachment) => buildAttachmentEnvelope(attachment, options.device))),
-    replaceStore(db, STORES.fileBoxItems, normalized.fileBoxItems),
-    replaceStore(db, STORES.transfers, normalized.transfers),
-    replaceStore(db, STORES.conflicts, normalized.conflicts),
-    replaceStore(db, STORES.tombstones, normalized.tombstones),
-    replaceStore(db, STORES.syncQueue, queue),
-    replaceStore(db, STORES.devices, [options.device]),
-    replaceStore(db, STORES.meta, [
+    repositories.entries.replaceAll(Object.values(normalized.entries).map((entry) => buildEntryEnvelope(entry, options.device))),
+    repositories.attachments.replaceAll(normalized.attachments.map((attachment) => buildAttachmentEnvelope(attachment, options.device))),
+    repositories.fileBoxItems.replaceAll(normalized.fileBoxItems),
+    repositories.transfers.replaceAll(normalized.transfers),
+    repositories.conflicts.replaceAll(normalized.conflicts),
+    repositories.tombstones.replaceAll(normalized.tombstones),
+    repositories.syncQueue.replaceAll(queue),
+    repositories.devices.replaceAll([options.device]),
+    repositories.meta.replaceAll([
       {
         id: 'snapshot',
         updatedAt: nowIso(),

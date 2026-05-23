@@ -9,6 +9,14 @@ import {
   hashBlobSha256,
   mergeEntryEnvelopes,
 } from '../src/sync/dataCore'
+import { hashJsonSha256, stableStringify } from '../src/sync/hashing'
+import {
+  buildInvalidRemoteJsonConflict,
+  validateAttachmentEnvelope,
+  validateEntryEnvelope,
+  validateManifest,
+  validateTombstone,
+} from '../src/sync/schemas'
 
 const device: DeviceProfile = {
   id: 'dev-a',
@@ -124,4 +132,65 @@ test('tombstones remove deleted entries and their attachments from snapshots', (
 
 test('hashes attachment blobs for sync identity', async () => {
   await expect(hashBlobSha256(new Blob(['abc']))).resolves.toBe('ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad')
+})
+
+test('canonical JSON hashing is stable across object key order', async () => {
+  const left = { title: 'May 23', tags: ['qPCR', 'ELISA'], body: { b: 2, a: 1 } }
+  const right = { body: { a: 1, b: 2 }, tags: ['qPCR', 'ELISA'], title: 'May 23' }
+
+  expect(stableStringify(left)).toBe(stableStringify(right))
+  await expect(hashJsonSha256(left)).resolves.toBe(await hashJsonSha256(right))
+})
+
+test('validates sync envelopes and rejects malformed remote JSON', () => {
+  const daily = entry('entry-1', '2026-05-23', '2026-05-23T09:00:00.000Z')
+  const validEntry = validateEntryEnvelope(buildEntryEnvelope(daily, device))
+  const invalidEntry = validateEntryEnvelope({ kind: 'entry', payload: { id: daily.id } })
+  const validAttachment = validateAttachmentEnvelope({
+    id: 'att-1',
+    kind: 'attachment',
+    version: 1,
+    updatedAt: '2026-05-23T09:00:00.000Z',
+    updatedByDeviceId: device.id,
+    payload: attachment('att-1', daily.id, 'raw.csv'),
+  })
+  const validTombstone = validateTombstone({
+    id: 'del-entry-1',
+    entityKind: 'entry',
+    entityId: daily.id,
+    deletedAt: '2026-05-23T10:00:00.000Z',
+    deletedByDeviceId: device.id,
+  })
+  const validManifest = validateManifest({
+    version: 1,
+    provider: 'google-drive',
+    rootFolderName: 'Easylab Lab Notebook',
+    createdAt: '2026-05-23T09:00:00.000Z',
+    updatedAt: '2026-05-23T09:00:00.000Z',
+    devices: [device],
+    entryCount: 1,
+    attachmentCount: 1,
+    fileBoxCount: 0,
+    transferCount: 0,
+  })
+
+  expect(validEntry.ok).toBe(true)
+  expect(invalidEntry.ok).toBe(false)
+  expect(validAttachment.ok).toBe(true)
+  expect(validTombstone.ok).toBe(true)
+  expect(validManifest.ok).toBe(true)
+})
+
+test('builds a conflict record when remote JSON is quarantined', () => {
+  const conflict = buildInvalidRemoteJsonConflict({
+    entityKind: 'entry',
+    entityId: 'entry-1',
+    deviceId: device.id,
+    error: 'Entry payload content must be an array.',
+    remoteCopy: { id: 'entry-1', content: 'bad' },
+  })
+
+  expect(conflict.resolution).toBe('pending')
+  expect(conflict.summary).toContain('Remote JSON was not applied')
+  expect(conflict.remoteCopy).toEqual({ id: 'entry-1', content: 'bad' })
 })
