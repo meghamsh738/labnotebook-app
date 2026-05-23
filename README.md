@@ -1,107 +1,93 @@
-# Lab Note Taking App
+# Lab Notebook Connected Devices Worktree
 
-Offline-first lab notebook built with React + TypeScript (Vite). It combines daily note capture, compact rich-text editing, optional per-entry workbook grids, evidence attachments, local sync/export paths, and phone-message intake when bundled in Easylab Suite.
+This branch is a separate development line for a richer **Easylab Lab Notebook** app. The current installed Easylab Suite bundle stays untouched until this worktree is verified and deliberately promoted.
 
-Typography refresh (neo-brutalist display + mono labels) updated Dec 25, 2025.
+The app is still local-first, but it now has the first pass of a connected-device layer:
 
-Part of **Easylab Suite**: when bundled, it launches from the suite desktop launcher as the **Lab Notebook** module.
+- Standalone Electron desktop shell for Lab Notebook.
+- Installable PWA metadata, service worker shell, camera/file upload, and mobile share-target metadata.
+- TeamViewer-inspired File Hub organization based only on public UX patterns: devices, entry file boxes, transfer activity, and toolbar-style connected panels.
+- Google Drive sync provider with `drive.file` scope, a visible `Easylab Lab Notebook` Drive folder, and entity folders for `manifest.json`, `devices`, `entries`, `attachments`, `filebox`, `transfers`, and `tombstones`.
+- Existing Easylab Suite behavior, WhatsApp intake, Telegram intake, local attachments, workbook entries, and daily note editing remain in place.
 
 License: All Rights Reserved. See `LICENSE`.
 
-## Screenshots
+## Current Features
 
-| Dashboard | Details | Edit mode |
-| --- | --- | --- |
-| ![Dashboard](screenshots/01-dashboard.png) | ![Details](screenshots/02-details.png) | ![Edit mode](screenshots/03-edit-mode.png) |
+- **Notebook**: daily entries, rich text, structured scientific sections, local search, tags, calendar filters, attachments, exports, and optional per-entry workbook grids.
+- **Entry File Box**: drag/drop or choose files for the current entry, then accept, reject, attach into the visible note, and track transfer history.
+- **File Hub**: central view of incoming files and recent transfer records across entries.
+- **Devices**: local device profile with platform, device id, last seen, and Drive presence.
+- **Transfers**: table-first status view for queued, uploaded, attached, failed, conflicted, and removed files.
+- **Sync**: Google Drive folder setup, manifest upload, device metadata upload, attachment blob upload, and clear storage-path reporting.
+- **PWA**: manifest, icon, service worker, standalone display mode, camera/file upload support, and share-target declaration for supported mobile browsers.
+- **Standalone desktop**: Electron shell with filesystem folder-picking IPC, directory creation IPC, and Google OAuth PKCE loopback support.
 
-| Settings | Workbook | Export PDF |
-| --- | --- | --- |
-| ![Settings](screenshots/04-settings.png) | ![Workbook](screenshots/07-workbook.png) | ![Export PDF](screenshots/06-export-pdf.png) |
+## Google Drive OAuth
 
-| Mobile landing |
-| --- |
-| ![Mobile landing](screenshots/08-mobile-landing.png) |
+No client secrets or tokens are committed. The OAuth client ID is user-provided in the app under `Sync`.
 
-## Features
+- **Desktop Electron**: use a Google Cloud OAuth **Desktop app** client ID. The app opens the system browser, listens on a temporary `127.0.0.1` loopback callback, exchanges the PKCE code for an access token, and keeps that token in memory only.
+- **Browser/PWA**: use a Google Cloud OAuth **Web application** client ID. Add the dev/deployed origin, for example `http://127.0.0.1:4173`, to the allowed JavaScript origins.
+- Scope is `https://www.googleapis.com/auth/drive.file`, so the app only manages files it creates or the user explicitly opens with it.
 
-- **Compact workspace**: dark left rail for entries/calendar, focused note canvas, and a collapsible right context panel.
-- **Template notes**: daily entries start with structured scientific prompts for aim, samples, protocol run, deviations, observations, raw data, and next steps.
-- **Optional workbook**: each day can include an Excel-like grid for pasted tabular data. Empty workbooks are not saved.
-- **Insert bar**: add headers, checklists, structured sections, images/files, tables, and file destinations (paths).
-- **Details and files tabs**: tags, assignment, sync queue, attachment metadata, and checksums stay out of the writing surface.
-- **Offline-first sync queue**: per-block change queue with `pending / synced / failed`, retry and clear controls.
-- **Attachments + cache**: drag/drop/paste attachments with IndexedDB storage, plus optional disk cache via the File System Access API.
-- **Export**: Markdown bundle (note + `manifest.json` + attachments paths) and printable PDF export.
-- **Search**: fast local search using Lunr.
+## Install And Run
 
-## Quickstart
-
-### Prereqs
-
-- Node.js 20+ (recommended)
-- npm
+Install dependencies from the repository root:
 
 ```bash
-npm run dev
+npm install
+npm --prefix web ci
 ```
 
-Open the dev server URL Vite prints (usually `http://localhost:5173`).
+Run the web/PWA app in development:
 
-Alternative: on Windows, double-click `run-dev.cmd`.
+```bash
+npm --prefix web run dev -- --host 127.0.0.1 --port 4173 --strictPort
+```
 
-### Tailscale + one-time mobile pairing
+Build the web app:
 
-Use this when you want the same notebook in your phone browser with shared sync/uploads.
+```bash
+npm --prefix web run build
+```
+
+Build the standalone Windows installer:
+
+```bash
+npm run standalone:build
+```
+
+The installer is generated at `desktop/dist/Easylab Lab Notebook Setup 0.1.0.exe`. Build output is ignored by Git.
+
+## Easylab Suite Integration
+
+This branch does not automatically replace the Lab Notebook bundled inside Easylab Suite. After this worktree is accepted, the suite bundle can be refreshed intentionally and smoke-tested separately.
+
+## Tailscale + One-Time Mobile Pairing
+
+The existing local pairing flow is still available for laptop-to-phone use on a trusted network or Tailscale tailnet.
 
 1. Start the app with host binding enabled:
    ```bash
    npm run dev -- --host 0.0.0.0 --port 4173 --strictPort
    ```
-2. On your desktop, open the app and go to an entry `Details` tab.
-3. In `Mobile sync check`, click `Generate one-time pair code`.
-4. Connect your phone to the same Tailscale tailnet, then open the desktop host URL shown in `Mobile sync check`.
-5. Enter the one-time code on mobile (or open the generated pair link). The code is single-use and expires automatically.
-6. After pairing, mobile gets the same app functionality (editing, sync queue, shared uploads, camera capture).
-
-Notes:
-- Pair codes are one-time and time-limited.
-- Shared server endpoints require a paired session token.
-- Use `Unpair this device` in the same panel to revoke the current device session.
-
-### Playwright browsers (for tests/screenshots)
-
-```bash
-cd web
-npx playwright install
-```
-
-### WSL + mounted drive note
-
-If you work from a mounted Windows drive path like `/mnt/<drive>/...`, `npm install` can fail with `EPERM`/`chmod` errors due to Windows filesystem semantics. The simplest fix is to move the repo into the Linux filesystem (for example `~/projects/...`) before installing.
-
-If you must keep the repo on a mounted drive, one workaround is to install dependencies in the Linux filesystem and symlink `web/node_modules` (this path is gitignored):
-
-```bash
-mkdir -p ~/.labnote-modules
-cd ~/.labnote-modules
-npm init -y
-npm install
-ln -s ~/.labnote-modules/node_modules "/mnt/<drive>/coding-projects/lab-note-taking-app/web/node_modules"
-```
+2. Open an entry and use `Details` -> `Mobile sync check`.
+3. Generate a one-time pair code.
+4. Open the displayed URL on the phone and enter the code.
+5. Pair codes are single-use and expire automatically.
 
 ## Tests
 
-From `web/`:
-
 ```bash
-npm run lint
-npm run build
-npm run test:e2e
-npm run screenshots
+npm --prefix web run lint
+npm --prefix web run build
+npm --prefix web run test:e2e -- --project=desktop-chromium
+npm --prefix web run test:e2e -- --project=mobile-chromium
+npm run standalone:build
 ```
 
-- `npm run test:e2e` runs Playwright end-to-end tests.
-- `npm run screenshots` regenerates the PNGs in `screenshots/`.
+`npm --prefix web run screenshots` regenerates PNG screenshots under `screenshots/`.
 
 ---
 

@@ -16,18 +16,36 @@ import { sampleData, seedVersion } from './data/sampleData'
 import type {
   Attachment,
   Block,
+  DeviceProfile,
   Entry,
   Experiment,
+  FileBoxItem,
   Project,
   Protocol,
   ChecklistItem,
   ListItem,
   PinnedRegion,
+  SyncConflict,
+  SyncManifest,
   TextRun,
   ThemeName,
+  TransferRecord,
   ListStyle,
   WorkbookCellStyle,
 } from './domain/types'
+import {
+  CONNECTED_STORAGE_KEYS,
+  DRIVE_ROOT_FOLDER,
+  GoogleDriveProvider,
+  createDeviceProfile,
+  createManifest,
+  loadJson,
+  makeFileBoxItem,
+  makeTransferRecord,
+  saveJson,
+  transferStatusLabel,
+  type DriveConnectionState,
+} from './sync/connectedSync'
 
 const dateOnly = new Intl.DateTimeFormat('en-US', {
   month: 'short',
@@ -53,6 +71,8 @@ type AppPaths = {
   exportRoot: string
   syncRoot: string
 }
+
+type AppPane = 'entries' | 'protocols' | 'file-hub' | 'devices' | 'transfers' | 'sync'
 
 type DateRange = {
   start: string
@@ -1977,7 +1997,28 @@ function App() {
   const [selectedProtocolId, setSelectedProtocolId] = useState(
     protocols[0]?.id ?? ''
   )
-  const [activePane, setActivePane] = useState<'entries' | 'protocols'>('entries')
+  const [activePane, setActivePane] = useState<AppPane>('entries')
+  const [deviceProfile, setDeviceProfile] = useState<DeviceProfile>(() => {
+    const stored = loadJson<Partial<DeviceProfile> | null>(CONNECTED_STORAGE_KEYS.device, null)
+    return createDeviceProfile(stored ?? undefined)
+  })
+  const [fileBoxItems, setFileBoxItems] = useState<FileBoxItem[]>(() =>
+    loadJson<FileBoxItem[]>(CONNECTED_STORAGE_KEYS.fileBox, [])
+  )
+  const [transferRecords, setTransferRecords] = useState<TransferRecord[]>(() =>
+    loadJson<TransferRecord[]>(CONNECTED_STORAGE_KEYS.transfers, [])
+  )
+  const [syncConflicts] = useState<SyncConflict[]>(() =>
+    loadJson<SyncConflict[]>(CONNECTED_STORAGE_KEYS.conflicts, [])
+  )
+  const [driveConnection, setDriveConnection] = useState<DriveConnectionState>(() =>
+    loadJson<DriveConnectionState>(CONNECTED_STORAGE_KEYS.drive, {
+      provider: 'google-drive',
+      clientId: '',
+      folderName: DRIVE_ROOT_FOLDER,
+      status: 'disconnected',
+    })
+  )
   const [openEntryIds, setOpenEntryIds] = useState<string[]>(() =>
     sampleData.entries[0]?.id ? [sampleData.entries[0].id] : []
   )
@@ -2061,6 +2102,35 @@ function App() {
     if (!selectedEntryId) return
     setOpenEntryIds((prev) => (prev.includes(selectedEntryId) ? prev : [selectedEntryId, ...prev].slice(0, 5)))
   }, [selectedEntryId])
+
+  useEffect(() => {
+    setDeviceProfile((prev) => createDeviceProfile(prev))
+  }, [])
+
+  useEffect(() => {
+    saveJson(CONNECTED_STORAGE_KEYS.device, deviceProfile)
+  }, [deviceProfile])
+
+  useEffect(() => {
+    saveJson(CONNECTED_STORAGE_KEYS.fileBox, fileBoxItems)
+  }, [fileBoxItems])
+
+  useEffect(() => {
+    saveJson(CONNECTED_STORAGE_KEYS.transfers, transferRecords)
+  }, [transferRecords])
+
+  useEffect(() => {
+    saveJson(CONNECTED_STORAGE_KEYS.conflicts, syncConflicts)
+  }, [syncConflicts])
+
+  useEffect(() => {
+    const { status, lastError, ...safeConnection } = driveConnection
+    saveJson(CONNECTED_STORAGE_KEYS.drive, {
+      ...safeConnection,
+      status: status === 'syncing' ? 'needs-auth' : status,
+      lastError,
+    })
+  }, [driveConnection])
 
   useEffect(() => {
     const loadInfo = async () => {
@@ -3431,6 +3501,184 @@ function App() {
     [entryDrafts, masterSyncPath, sharedApiAvailable]
   )
 
+  const queueFileBoxFiles = useCallback(
+    async (entryId: string, files: File[]) => {
+      if (!files.length) return
+      const saved = await addAttachments(entryId, files)
+      if (!saved.length) return
+
+      const nextItems = saved.map((attachment) =>
+        makeFileBoxItem({
+          entryId,
+          attachmentId: attachment.id,
+          filename: attachment.filename,
+          filesize: attachment.filesize,
+          contentType: attachment.contentType,
+          device: deviceProfile,
+          localObjectUrl: attachment.thumbnail,
+          status: 'available',
+        })
+      )
+      const nextTransfers = saved.map((attachment, index) =>
+        makeTransferRecord({
+          fileBoxItemId: nextItems[index]?.id,
+          entryId,
+          attachmentId: attachment.id,
+          filename: attachment.filename,
+          device: deviceProfile,
+          status: 'available',
+          bytesTotal: files[index]?.size,
+        })
+      )
+      setFileBoxItems((prev) => [...nextItems, ...prev])
+      setTransferRecords((prev) => [...nextTransfers, ...prev])
+    },
+    [addAttachments, deviceProfile]
+  )
+
+  const attachFileBoxItem = useCallback(
+    (itemId: string) => {
+      const item = fileBoxItems.find((candidate) => candidate.id === itemId)
+      if (!item?.entryId || !item.attachmentId) return
+      const attachment = attachmentsStore.find((candidate) => candidate.id === item.attachmentId)
+      const timestamp = new Date().toISOString()
+      const block: Block = attachment?.type === 'image'
+        ? { id: newId('b-filebox-'), type: 'image', attachmentId: item.attachmentId, caption: item.filename, updatedAt: timestamp, updatedBy: 'filebox' }
+        : { id: newId('b-filebox-'), type: 'file', attachmentId: item.attachmentId, label: item.filename, updatedAt: timestamp, updatedBy: 'filebox' }
+
+      setEntryDrafts((prev) => {
+        const current = prev[item.entryId]
+        if (!current) return prev
+        return {
+          ...prev,
+          [item.entryId]: {
+            ...current,
+            content: [...current.content, block],
+            linkedFiles: Array.from(new Set([...current.linkedFiles, item.attachmentId!])),
+            lastEditedDatetime: timestamp,
+          },
+        }
+      })
+      setFileBoxItems((prev) =>
+        prev.map((candidate) =>
+          candidate.id === itemId ? { ...candidate, status: 'attached', updatedAt: timestamp } : candidate
+        )
+      )
+      setTransferRecords((prev) =>
+        prev.map((transfer) =>
+          transfer.fileBoxItemId === itemId
+            ? { ...transfer, status: 'attached', updatedAt: timestamp, completedAt: timestamp, bytesTransferred: transfer.bytesTotal }
+            : transfer
+        )
+      )
+      setChangeQueue((prev) => [
+        {
+          id: `chg-${timestamp}-${crypto.randomUUID?.() ?? Math.random().toString(36).slice(2)}`,
+          entryId: item.entryId,
+          blocks: [block.id],
+          status: 'pending',
+          updatedAt: timestamp,
+          attempts: 0,
+        },
+        ...prev,
+      ])
+    },
+    [attachmentsStore, fileBoxItems]
+  )
+
+  const rejectFileBoxItem = useCallback((itemId: string) => {
+    const timestamp = new Date().toISOString()
+    setFileBoxItems((prev) =>
+      prev.map((item) =>
+        item.id === itemId ? { ...item, status: 'rejected', updatedAt: timestamp } : item
+      )
+    )
+    setTransferRecords((prev) =>
+      prev.map((transfer) =>
+        transfer.fileBoxItemId === itemId ? { ...transfer, status: 'removed', updatedAt: timestamp } : transfer
+      )
+    )
+  }, [])
+
+  const runGoogleDriveSync = useCallback(async () => {
+    if (!driveConnection.clientId.trim()) {
+      setDriveConnection((prev) => ({ ...prev, status: 'needs-auth', lastError: 'Add a Google OAuth client ID before connecting.' }))
+      return
+    }
+
+    setDriveConnection((prev) => ({ ...prev, status: 'syncing', lastError: undefined }))
+    try {
+      const provider = new GoogleDriveProvider({
+        clientId: driveConnection.clientId.trim(),
+        folderName: driveConnection.folderName || DRIVE_ROOT_FOLDER,
+      })
+      await provider.signIn()
+      const rootId = driveConnection.folderId || await provider.ensureRootFolder()
+      const [entriesFolderId, attachmentsFolderId, fileBoxFolderId, transfersFolderId, devicesFolderId, tombstonesFolderId] = await Promise.all([
+        provider.ensureFolder(rootId, 'entries'),
+        provider.ensureFolder(rootId, 'attachments'),
+        provider.ensureFolder(rootId, 'filebox'),
+        provider.ensureFolder(rootId, 'transfers'),
+        provider.ensureFolder(rootId, 'devices'),
+        provider.ensureFolder(rootId, 'tombstones'),
+      ])
+
+      const manifest = createManifest({
+        device: deviceProfile,
+        entries: entryDrafts,
+        attachments: attachmentsStore,
+        fileBoxItems,
+        transfers: transferRecords,
+        folderName: driveConnection.folderName || DRIVE_ROOT_FOLDER,
+      })
+      await provider.uploadJson(rootId, 'manifest.json', manifest)
+      await provider.uploadJson(entriesFolderId, 'entries.json', entryDrafts)
+      await provider.uploadJson(fileBoxFolderId, 'filebox.json', fileBoxItems)
+      await provider.uploadJson(transfersFolderId, 'transfers.json', transferRecords)
+      await provider.uploadJson(devicesFolderId, `${deviceProfile.id}.json`, deviceProfile)
+      await provider.uploadJson(tombstonesFolderId, 'tombstones.json', [])
+
+      for (const attachment of attachmentsStore) {
+        const blob = await readAttachmentBlob(attachment, attachmentUrls)
+        if (!blob) continue
+        await provider.uploadBlob(attachmentsFolderId, `${attachment.id}-${safeFileName(attachment.filename)}`, blob, attachment.contentType)
+      }
+
+      const lastSyncAt = new Date().toISOString()
+      setDriveConnection((prev) => ({
+        ...prev,
+        folderId: rootId,
+        status: 'ready',
+        connectedAt: prev.connectedAt ?? lastSyncAt,
+        lastSyncAt,
+        lastError: undefined,
+      }))
+      setTransferRecords((prev) =>
+        prev.map((transfer) =>
+          transfer.status === 'queued' || transfer.status === 'uploading'
+            ? { ...transfer, status: 'available', updatedAt: lastSyncAt }
+            : transfer
+        )
+      )
+    } catch (err) {
+      setDriveConnection((prev) => ({
+        ...prev,
+        status: 'error',
+        lastError: err instanceof Error ? err.message : String(err),
+      }))
+    }
+  }, [
+    attachmentUrls,
+    attachmentsStore,
+    deviceProfile,
+    driveConnection.clientId,
+    driveConnection.folderId,
+    driveConnection.folderName,
+    entryDrafts,
+    fileBoxItems,
+    transferRecords,
+  ])
+
   const addFileDestination = useCallback((entryId: string, val: { path: string; label?: string }): Attachment => {
     const rawPath = val.path.trim()
     if (!rawPath) {
@@ -4031,6 +4279,10 @@ function App() {
           selectedProtocolId={selectedProtocolId}
           mode={activePane}
           onModeChange={setActivePane}
+          deviceName={deviceProfile.name}
+          fileBoxCount={fileBoxItems.filter((item) => item.status !== 'attached' && item.status !== 'rejected').length}
+          transferCount={transferRecords.filter((transfer) => transfer.status === 'queued' || transfer.status === 'uploading').length}
+          driveStatus={driveConnection.status}
           selectedProjectTags={selectedProjectTags}
           selectedExperimentTags={selectedExperimentTags}
           projectTagOptions={projectTagOptions}
@@ -4093,6 +4345,53 @@ function App() {
               )
             }
           />
+        ) : activePane === 'file-hub' ? (
+          <FileHubPane
+            entries={entryDrafts}
+            attachments={attachmentsStore}
+            fileBoxItems={fileBoxItems}
+            transfers={transferRecords}
+            onSelectEntry={(entryId) => {
+              handleSelectEntry(entryId)
+              setActivePane('entries')
+            }}
+            onAttachItem={attachFileBoxItem}
+            onRejectItem={rejectFileBoxItem}
+          />
+        ) : activePane === 'devices' ? (
+          <DevicesPane
+            device={deviceProfile}
+            onRenameDevice={(name) => setDeviceProfile((prev) => ({ ...prev, name, lastSeenAt: new Date().toISOString() }))}
+            driveConnection={driveConnection}
+            transferRecords={transferRecords}
+          />
+        ) : activePane === 'transfers' ? (
+          <TransfersPane
+            transfers={transferRecords}
+            fileBoxItems={fileBoxItems}
+            onOpenEntry={(entryId) => {
+              handleSelectEntry(entryId)
+              setActivePane('entries')
+            }}
+          />
+        ) : activePane === 'sync' ? (
+          <SyncPane
+            appPaths={appPaths}
+            masterSyncPath={masterSyncPath}
+            driveConnection={driveConnection}
+            onDriveConnectionChange={setDriveConnection}
+            onRunDriveSync={runGoogleDriveSync}
+            syncing={driveConnection.status === 'syncing'}
+            manifest={createManifest({
+              device: deviceProfile,
+              entries: entryDrafts,
+              attachments: attachmentsStore,
+              fileBoxItems,
+              transfers: transferRecords,
+              folderName: driveConnection.folderName || DRIVE_ROOT_FOLDER,
+            })}
+            conflicts={syncConflicts}
+          />
         ) : (
           <EditorPane
             entry={entry}
@@ -4141,6 +4440,11 @@ function App() {
               })
             }
             onAddAttachments={addAttachments}
+            fileBoxItems={fileBoxItems.filter((item) => item.entryId === selectedEntryId)}
+            transferRecords={transferRecords.filter((transfer) => transfer.entryId === selectedEntryId)}
+            onQueueFileBoxFiles={queueFileBoxFiles}
+            onAttachFileBoxItem={attachFileBoxItem}
+            onRejectFileBoxItem={rejectFileBoxItem}
             onAddFileDestination={addFileDestination}
             onDeleteEntry={handleDeleteEntry}
             onEnqueueChange={(entryId, blockIds, ts) =>
@@ -4235,8 +4539,12 @@ interface SidebarProps {
   selectedEntryId: string
   protocols: Protocol[]
   selectedProtocolId: string
-  mode: 'entries' | 'protocols'
-  onModeChange: (val: 'entries' | 'protocols') => void
+  mode: AppPane
+  onModeChange: (val: AppPane) => void
+  deviceName: string
+  fileBoxCount: number
+  transferCount: number
+  driveStatus: DriveConnectionState['status']
   selectedProjectTags: string[]
   selectedExperimentTags: string[]
   projectTagOptions: string[]
@@ -4278,6 +4586,10 @@ function Sidebar({
   selectedProtocolId,
   mode,
   onModeChange,
+  deviceName,
+  fileBoxCount,
+  transferCount,
+  driveStatus,
   selectedProjectTags,
   selectedExperimentTags,
   projectTagOptions,
@@ -4310,6 +4622,7 @@ function Sidebar({
   const projectLookup = useMemo(() => new Map(projects.map((p) => [p.id, p])), [projects])
   const experimentLookup = useMemo(() => new Map(experiments.map((e) => [e.id, e])), [experiments])
   const isEntriesMode = mode === 'entries'
+  const isProtocolsMode = mode === 'protocols'
   const calendarLabel = useMemo(() => {
     return new Intl.DateTimeFormat('en-US', { month: 'long', year: 'numeric' }).format(calendarMonth)
   }, [calendarMonth])
@@ -4408,7 +4721,7 @@ function Sidebar({
             </div>
           </div>
 
-          <div className="mode-toggle" role="tablist" aria-label="Entries and protocols">
+          <div className="mode-toggle connected-mode-toggle" role="tablist" aria-label="Notebook sections">
             <button
               className={`pill soft ${isEntriesMode ? 'active-pill' : ''}`}
               type="button"
@@ -4419,13 +4732,49 @@ function Sidebar({
               Entries
             </button>
             <button
-              className={`pill soft ${!isEntriesMode ? 'active-pill' : ''}`}
+              className={`pill soft ${isProtocolsMode ? 'active-pill' : ''}`}
               type="button"
               role="tab"
-              aria-selected={!isEntriesMode}
+              aria-selected={isProtocolsMode}
               onClick={() => onModeChange('protocols')}
             >
               Protocols
+            </button>
+            <button
+              className={`pill soft ${mode === 'file-hub' ? 'active-pill' : ''}`}
+              type="button"
+              role="tab"
+              aria-selected={mode === 'file-hub'}
+              onClick={() => onModeChange('file-hub')}
+            >
+              File Hub
+            </button>
+            <button
+              className={`pill soft ${mode === 'devices' ? 'active-pill' : ''}`}
+              type="button"
+              role="tab"
+              aria-selected={mode === 'devices'}
+              onClick={() => onModeChange('devices')}
+            >
+              Devices
+            </button>
+            <button
+              className={`pill soft ${mode === 'transfers' ? 'active-pill' : ''}`}
+              type="button"
+              role="tab"
+              aria-selected={mode === 'transfers'}
+              onClick={() => onModeChange('transfers')}
+            >
+              Transfers
+            </button>
+            <button
+              className={`pill soft ${mode === 'sync' ? 'active-pill' : ''}`}
+              type="button"
+              role="tab"
+              aria-selected={mode === 'sync'}
+              onClick={() => onModeChange('sync')}
+            >
+              Sync
             </button>
           </div>
 
@@ -4436,12 +4785,31 @@ function Sidebar({
                 Today's Entry
               </button>
             </div>
-          ) : (
+          ) : isProtocolsMode ? (
             <div className="quick-actions">
               <button className="accent" onClick={onNewProtocol} data-testid="new-protocol">
                 <span className="icon"><UiIcon name="book" /></span>
                 New Protocol
               </button>
+            </div>
+          ) : (
+            <div className="connected-sidebar-summary">
+              <div>
+                <span className="muted tiny">Device</span>
+                <strong>{deviceName}</strong>
+              </div>
+              <div>
+                <span className="muted tiny">File Box</span>
+                <strong>{fileBoxCount} open</strong>
+              </div>
+              <div>
+                <span className="muted tiny">Transfers</span>
+                <strong>{transferCount} active</strong>
+              </div>
+              <div>
+                <span className="muted tiny">Drive</span>
+                <strong>{driveStatus === 'ready' ? 'Ready' : driveStatus === 'syncing' ? 'Syncing' : 'Setup'}</strong>
+              </div>
             </div>
           )}
 
@@ -4666,7 +5034,7 @@ function Sidebar({
                 </div>
               </section>
             </>
-          ) : (
+          ) : isProtocolsMode ? (
             <section className="sidebar-section">
               <div className="section-title">Protocols</div>
               <div className="muted tiny" style={{ marginBottom: 6 }}>
@@ -4695,6 +5063,42 @@ function Sidebar({
                     )}
                   </button>
                 ))}
+              </div>
+            </section>
+          ) : (
+            <section className="sidebar-section">
+              <div className="section-title">Connected workspace</div>
+              <div className="entry-list connected-nav-list">
+                <button className={`entry-item ${mode === 'file-hub' ? 'active' : ''}`} type="button" onClick={() => onModeChange('file-hub')}>
+                  <div>
+                    <div className="title-sm">Entry File Box</div>
+                    <p className="muted tiny">Accept, reject, and attach incoming files.</p>
+                  </div>
+                  <span className="entry-signal summary">{fileBoxCount}</span>
+                </button>
+                <button className={`entry-item ${mode === 'devices' ? 'active' : ''}`} type="button" onClick={() => onModeChange('devices')}>
+                  <div>
+                    <div className="title-sm">Devices</div>
+                    <p className="muted tiny">Desktop, mobile PWA, and Drive identity.</p>
+                  </div>
+                  <span className="entry-signal success">1</span>
+                </button>
+                <button className={`entry-item ${mode === 'transfers' ? 'active' : ''}`} type="button" onClick={() => onModeChange('transfers')}>
+                  <div>
+                    <div className="title-sm">Transfers</div>
+                    <p className="muted tiny">Recent file movements and status.</p>
+                  </div>
+                  <span className="entry-signal summary">{transferCount}</span>
+                </button>
+                <button className={`entry-item ${mode === 'sync' ? 'active' : ''}`} type="button" onClick={() => onModeChange('sync')}>
+                  <div>
+                    <div className="title-sm">Google Drive Sync</div>
+                    <p className="muted tiny">OAuth, folder layout, and storage paths.</p>
+                  </div>
+                  <span className={`entry-signal ${driveStatus === 'error' ? 'danger' : driveStatus === 'ready' ? 'success' : 'warning'}`}>
+                    {driveStatus === 'ready' ? 'Ready' : driveStatus === 'syncing' ? 'Syncing' : 'Setup'}
+                  </span>
+                </button>
               </div>
             </section>
           )}
@@ -4737,9 +5141,14 @@ interface EditorPaneProps {
   labStoragePath: string
   attachments: Attachment[]
   attachmentUrls: Record<string, string>
+  fileBoxItems: FileBoxItem[]
+  transferRecords: TransferRecord[]
   onUpdateEntry: (entryId: string, content: Block[]) => void
   onUpdateEntryMeta: (entryId: string, updates: Partial<Entry>) => void
   onAddAttachments: (entryId: string, files: File[]) => Promise<Attachment[]>
+  onQueueFileBoxFiles: (entryId: string, files: File[]) => Promise<void>
+  onAttachFileBoxItem: (itemId: string) => void
+  onRejectFileBoxItem: (itemId: string) => void
   onAddFileDestination: (entryId: string, val: { path: string; label?: string }) => Attachment
   onDeleteEntry: (entryId: string) => void
   onEnqueueChange: (entryId: string, blockIds: string[], timestamp: string) => void
@@ -4776,9 +5185,14 @@ function EditorPane({
   labStoragePath,
   attachments,
   attachmentUrls,
+  fileBoxItems,
+  transferRecords,
   onUpdateEntry,
   onUpdateEntryMeta,
   onAddAttachments,
+  onQueueFileBoxFiles,
+  onAttachFileBoxItem,
+  onRejectFileBoxItem,
   onAddFileDestination,
   onDeleteEntry,
   onEnqueueChange,
@@ -4792,7 +5206,7 @@ function EditorPane({
 }: EditorPaneProps) {
   const [exporting, setExporting] = useState(false)
   const [isEditing, setIsEditing] = useState(false)
-  const [activeTab, setActiveTab] = useState<'note' | 'workbook' | 'files' | 'details'>('note')
+  const [activeTab, setActiveTab] = useState<'note' | 'workbook' | 'filebox' | 'files' | 'details'>('note')
   const [headerCollapsed, setHeaderCollapsed] = useState(false)
   const [contextCollapsed, setContextCollapsed] = useState(false)
   const [editor] = useState<HistoryReactEditor>(() =>
@@ -5355,6 +5769,20 @@ function EditorPane({
             </button>
             <button
               type="button"
+              className={`tab-button ${activeTab === 'filebox' ? 'active' : ''}`}
+              onClick={() => setActiveTab('filebox')}
+              role="tab"
+              aria-selected={activeTab === 'filebox'}
+              data-testid="editor-tab-filebox"
+            >
+              <span className="icon"><UiIcon name="paperclip" /></span>
+              File Box
+              {fileBoxItems.some((item) => item.status === 'available' || item.status === 'queued') && (
+                <span className="tab-count">{fileBoxItems.filter((item) => item.status === 'available' || item.status === 'queued').length}</span>
+              )}
+            </button>
+            <button
+              type="button"
               className={`tab-button ${activeTab === 'files' ? 'active' : ''}`}
               onClick={() => setActiveTab('files')}
               role="tab"
@@ -5644,6 +6072,17 @@ function EditorPane({
         </div>
       )}
 
+      {activeTab === 'filebox' && (
+        <EntryFileBoxPanel
+          entry={entry}
+          fileBoxItems={fileBoxItems}
+          transfers={transferRecords}
+          onQueueFiles={onQueueFileBoxFiles}
+          onAttachItem={onAttachFileBoxItem}
+          onRejectItem={onRejectFileBoxItem}
+        />
+      )}
+
       {activeTab === 'files' && (
         <div className="tab-panel">
           <div className="panel-card">
@@ -5931,6 +6370,446 @@ function EditorPane({
         </aside>
       </div>
     </main>
+  )
+}
+
+function EntryFileBoxPanel({
+  entry,
+  fileBoxItems,
+  transfers,
+  onQueueFiles,
+  onAttachItem,
+  onRejectItem,
+}: {
+  entry: Entry
+  fileBoxItems: FileBoxItem[]
+  transfers: TransferRecord[]
+  onQueueFiles: (entryId: string, files: File[]) => Promise<void>
+  onAttachItem: (itemId: string) => void
+  onRejectItem: (itemId: string) => void
+}) {
+  const inputRef = useRef<HTMLInputElement | null>(null)
+  const [busy, setBusy] = useState(false)
+  const activeItems = fileBoxItems.filter((item) => item.status !== 'rejected' && item.status !== 'removed')
+
+  const submitFiles = useCallback(
+    async (files: File[]) => {
+      if (!files.length) return
+      setBusy(true)
+      try {
+        await onQueueFiles(entry.id, files)
+      } finally {
+        setBusy(false)
+      }
+    },
+    [entry.id, onQueueFiles]
+  )
+
+  return (
+    <div className="tab-panel connected-panel" data-testid="entry-filebox-panel">
+      <div className="connected-hero">
+        <div>
+          <div className="section-title">Entry File Box</div>
+          <h2>{entry.title}</h2>
+          <p className="muted">
+            Drop files from desktop, mobile share sheets, camera captures, or Drive-connected devices. Files stay in the box until you attach them to the entry.
+          </p>
+        </div>
+        <button className="accent icon-btn" type="button" onClick={() => inputRef.current?.click()} disabled={busy}>
+          <span className="icon"><UiIcon name="plus" /></span>
+          Add files
+        </button>
+        <input
+          ref={inputRef}
+          type="file"
+          multiple
+          hidden
+          onChange={(event) => {
+            void submitFiles(Array.from(event.target.files ?? []))
+            event.currentTarget.value = ''
+          }}
+        />
+      </div>
+
+      <div
+        className={`filebox-drop ${busy ? 'is-busy' : ''}`}
+        onDragOver={(event) => event.preventDefault()}
+        onDrop={(event) => {
+          event.preventDefault()
+          void submitFiles(Array.from(event.dataTransfer.files ?? []))
+        }}
+      >
+        <UiIcon name="paperclip" />
+        <strong>{busy ? 'Adding files…' : 'Drop files into this entry file box'}</strong>
+        <span>Images, PDFs, CSV/TSV, spreadsheets, Word docs, and raw instrument exports are accepted.</span>
+      </div>
+
+      <div className="connected-grid two">
+        <section className="connected-card">
+          <div className="connected-card-head">
+            <div>
+              <div className="section-title">Open items</div>
+              <div className="muted tiny">{activeItems.length} item{activeItems.length === 1 ? '' : 's'} linked to this entry</div>
+            </div>
+          </div>
+          <div className="connected-list">
+            {activeItems.length === 0 && <div className="connected-empty">No files waiting. Add one from this device or a mobile PWA share sheet.</div>}
+            {activeItems.map((item) => (
+              <div className="connected-row" key={item.id}>
+                <div className="connected-row-icon"><UiIcon name={item.contentType?.startsWith('image') ? 'image' : 'file'} /></div>
+                <div className="connected-row-main">
+                  <strong>{item.filename}</strong>
+                  <span>{item.filesize} · {item.sourceDeviceName} · {item.status}</span>
+                </div>
+                <div className="connected-row-actions">
+                  {item.status !== 'attached' && (
+                    <button className="pill soft" type="button" onClick={() => onAttachItem(item.id)} disabled={!item.attachmentId}>
+                      Attach
+                    </button>
+                  )}
+                  {item.status !== 'attached' && (
+                    <button className="ghost subtle" type="button" onClick={() => onRejectItem(item.id)}>
+                      Reject
+                    </button>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <section className="connected-card">
+          <div className="section-title">Entry transfer history</div>
+          <div className="connected-list">
+            {transfers.length === 0 && <div className="connected-empty">No transfer history yet.</div>}
+            {transfers.map((transfer) => (
+              <TransferRow key={transfer.id} transfer={transfer} compact />
+            ))}
+          </div>
+        </section>
+      </div>
+    </div>
+  )
+}
+
+function FileHubPane({
+  entries,
+  attachments,
+  fileBoxItems,
+  transfers,
+  onSelectEntry,
+  onAttachItem,
+  onRejectItem,
+}: {
+  entries: Record<string, Entry>
+  attachments: Attachment[]
+  fileBoxItems: FileBoxItem[]
+  transfers: TransferRecord[]
+  onSelectEntry: (entryId: string) => void
+  onAttachItem: (itemId: string) => void
+  onRejectItem: (itemId: string) => void
+}) {
+  const attachmentsById = useMemo(() => new Map(attachments.map((att) => [att.id, att])), [attachments])
+  const openItems = fileBoxItems.filter((item) => item.status !== 'attached' && item.status !== 'rejected' && item.status !== 'removed')
+  const attachedItems = fileBoxItems.filter((item) => item.status === 'attached')
+
+  return (
+    <main className="panel editor connected-workspace" data-testid="file-hub-pane">
+      <div className="connected-page-head">
+        <div>
+          <div className="eyebrow">File Hub</div>
+          <h1>Entry file boxes and incoming lab files</h1>
+          <p className="muted">A TeamViewer-style file transfer layer for Lab Notebook entries: send, accept, attach, and track files without leaving the notebook.</p>
+        </div>
+        <div className="connected-metrics">
+          <div><strong>{openItems.length}</strong><span>Open</span></div>
+          <div><strong>{attachedItems.length}</strong><span>Attached</span></div>
+          <div><strong>{transfers.length}</strong><span>Transfers</span></div>
+        </div>
+      </div>
+
+      <div className="connected-grid two">
+        <section className="connected-card">
+          <div className="connected-card-head">
+            <div>
+              <div className="section-title">Inbox</div>
+              <div className="muted tiny">Files waiting to be attached to entries.</div>
+            </div>
+          </div>
+          <div className="connected-list">
+            {openItems.length === 0 && <div className="connected-empty">No waiting files. Drop files into an entry File Box to start.</div>}
+            {openItems.map((item) => {
+              const entry = entries[item.entryId]
+              const attachment = item.attachmentId ? attachmentsById.get(item.attachmentId) : undefined
+              return (
+                <div className="connected-row" key={item.id}>
+                  <div className="connected-row-icon"><UiIcon name={attachment?.type === 'image' ? 'image' : 'file'} /></div>
+                  <div className="connected-row-main">
+                    <strong>{item.filename}</strong>
+                    <span>{entry?.title ?? 'Entry'} · {item.filesize} · {item.status}</span>
+                  </div>
+                  <div className="connected-row-actions">
+                    <button className="pill soft" type="button" onClick={() => onSelectEntry(item.entryId)}>Open</button>
+                    <button className="accent" type="button" onClick={() => onAttachItem(item.id)} disabled={!item.attachmentId}>Attach</button>
+                    <button className="ghost subtle" type="button" onClick={() => onRejectItem(item.id)}>Reject</button>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </section>
+
+        <section className="connected-card">
+          <div className="section-title">Recent transfer activity</div>
+          <div className="connected-list">
+            {transfers.length === 0 && <div className="connected-empty">Transfer activity appears here after files are added or synced.</div>}
+            {transfers.slice(0, 12).map((transfer) => (
+              <TransferRow key={transfer.id} transfer={transfer} />
+            ))}
+          </div>
+        </section>
+      </div>
+    </main>
+  )
+}
+
+function DevicesPane({
+  device,
+  onRenameDevice,
+  driveConnection,
+  transferRecords,
+}: {
+  device: DeviceProfile
+  onRenameDevice: (name: string) => void
+  driveConnection: DriveConnectionState
+  transferRecords: TransferRecord[]
+}) {
+  return (
+    <main className="panel editor connected-workspace" data-testid="devices-pane">
+      <div className="connected-page-head">
+        <div>
+          <div className="eyebrow">Devices</div>
+          <h1>Connected Lab Notebook devices</h1>
+          <p className="muted">This first version registers the current desktop/PWA device locally and publishes it into the Google Drive manifest during sync.</p>
+        </div>
+      </div>
+      <div className="connected-grid two">
+        <section className="connected-card">
+          <div className="section-title">This device</div>
+          <div className="settings-grid">
+            <label className="field">
+              <span>Device name</span>
+              <input
+                value={device.name}
+                onChange={(event) => onRenameDevice(event.target.value)}
+                onBlur={(event) => {
+                  if (!event.target.value.trim()) onRenameDevice(createDeviceProfile({ id: device.id }).name)
+                }}
+              />
+            </label>
+            <label className="field">
+              <span>Platform</span>
+              <input value={device.platform} readOnly />
+            </label>
+            <label className="field">
+              <span>Device id</span>
+              <input value={device.id} readOnly />
+            </label>
+            <label className="field">
+              <span>Last seen</span>
+              <input value={new Date(device.lastSeenAt).toLocaleString()} readOnly />
+            </label>
+          </div>
+        </section>
+        <section className="connected-card">
+          <div className="section-title">Drive presence</div>
+          <div className="settings-output-grid compact">
+            <div className="settings-path-card">
+              <div className="settings-path-label">Google Drive folder</div>
+              <div className="settings-path">{driveConnection.folderName || DRIVE_ROOT_FOLDER}</div>
+            </div>
+            <div className="settings-path-card">
+              <div className="settings-path-label">Status</div>
+              <div className="settings-path">{driveConnection.status}</div>
+            </div>
+            <div className="settings-path-card">
+              <div className="settings-path-label">Transfers from this device</div>
+              <div className="settings-path">{transferRecords.filter((transfer) => transfer.fromDeviceId === device.id).length}</div>
+            </div>
+          </div>
+        </section>
+      </div>
+    </main>
+  )
+}
+
+function TransfersPane({
+  transfers,
+  fileBoxItems,
+  onOpenEntry,
+}: {
+  transfers: TransferRecord[]
+  fileBoxItems: FileBoxItem[]
+  onOpenEntry: (entryId: string) => void
+}) {
+  const itemById = useMemo(() => new Map(fileBoxItems.map((item) => [item.id, item])), [fileBoxItems])
+  return (
+    <main className="panel editor connected-workspace" data-testid="transfers-pane">
+      <div className="connected-page-head">
+        <div>
+          <div className="eyebrow">Transfers</div>
+          <h1>File transfer activity</h1>
+          <p className="muted">Every file-box action creates an auditable transfer row that can later be synced through Google Drive.</p>
+        </div>
+      </div>
+      <section className="connected-card">
+        <div className="connected-table">
+          <div className="connected-table-row head">
+            <span>File</span>
+            <span>From</span>
+            <span>Status</span>
+            <span>Updated</span>
+            <span>Entry</span>
+          </div>
+          {transfers.length === 0 && <div className="connected-empty">No transfers yet.</div>}
+          {transfers.map((transfer) => {
+            const item = transfer.fileBoxItemId ? itemById.get(transfer.fileBoxItemId) : undefined
+            return (
+              <div className="connected-table-row" key={transfer.id}>
+                <span>{transfer.filename}</span>
+                <span>{transfer.fromDeviceName}</span>
+                <span><span className={`status-chip ${transfer.status === 'failed' || transfer.status === 'conflict' ? 'danger' : transfer.status === 'attached' || transfer.status === 'available' ? 'success' : 'warning'}`}>{transferStatusLabel(transfer.status)}</span></span>
+                <span>{new Date(transfer.updatedAt).toLocaleString()}</span>
+                <span>{transfer.entryId ? <button className="ghost subtle" type="button" onClick={() => onOpenEntry(transfer.entryId!)}>Open</button> : item?.entryId ? <button className="ghost subtle" type="button" onClick={() => onOpenEntry(item.entryId)}>Open</button> : '—'}</span>
+              </div>
+            )
+          })}
+        </div>
+      </section>
+    </main>
+  )
+}
+
+function SyncPane({
+  appPaths,
+  masterSyncPath,
+  driveConnection,
+  onDriveConnectionChange,
+  onRunDriveSync,
+  syncing,
+  manifest,
+  conflicts,
+}: {
+  appPaths: AppPaths
+  masterSyncPath: string
+  driveConnection: DriveConnectionState
+  onDriveConnectionChange: React.Dispatch<React.SetStateAction<DriveConnectionState>>
+  onRunDriveSync: () => Promise<void>
+  syncing: boolean
+  manifest: SyncManifest
+  conflicts: SyncConflict[]
+}) {
+  return (
+    <main className="panel editor connected-workspace" data-testid="sync-pane">
+      <div className="connected-page-head">
+        <div>
+          <div className="eyebrow">Google Drive Sync</div>
+          <h1>Device-owned sync without an Easylab cloud server</h1>
+          <p className="muted">Lab Notebook writes manifests, entries, file-box metadata, transfers, and attachments into a user-owned Google Drive folder.</p>
+        </div>
+        <button className="accent icon-btn" type="button" onClick={() => void onRunDriveSync()} disabled={syncing}>
+          <span className="icon"><UiIcon name="refresh" /></span>
+          {syncing ? 'Syncing…' : 'Connect / Sync Drive'}
+        </button>
+      </div>
+
+      <div className="connected-grid two">
+        <section className="connected-card">
+          <div className="section-title">Google Drive OAuth</div>
+          <div className="settings-grid">
+            <label className="field">
+              <span>OAuth client ID</span>
+              <input
+                value={driveConnection.clientId}
+                onChange={(event) => onDriveConnectionChange((prev) => ({ ...prev, clientId: event.target.value, status: event.target.value.trim() ? 'needs-auth' : 'disconnected' }))}
+                placeholder="Google OAuth web client ID"
+                spellCheck={false}
+              />
+            </label>
+            <label className="field">
+              <span>Drive folder name</span>
+              <input
+                value={driveConnection.folderName}
+                onChange={(event) => onDriveConnectionChange((prev) => ({ ...prev, folderName: event.target.value || DRIVE_ROOT_FOLDER }))}
+                placeholder={DRIVE_ROOT_FOLDER}
+              />
+            </label>
+            <label className="field">
+              <span>Drive folder id</span>
+              <input value={driveConnection.folderId ?? 'Created after first successful sync'} readOnly />
+            </label>
+            <label className="field">
+              <span>Last sync</span>
+              <input value={driveConnection.lastSyncAt ? new Date(driveConnection.lastSyncAt).toLocaleString() : 'Not synced yet'} readOnly />
+            </label>
+          </div>
+          {driveConnection.lastError && <div className="settings-error">{driveConnection.lastError}</div>}
+        </section>
+
+        <section className="connected-card">
+          <div className="section-title">Where files go</div>
+          <div className="settings-output-grid compact">
+            <div className="settings-path-card"><div className="settings-path-label">Local data</div><div className="settings-path">{appPaths.dataRoot}</div></div>
+            <div className="settings-path-card"><div className="settings-path-label">Local attachments</div><div className="settings-path">{appPaths.attachmentsRoot}</div></div>
+            <div className="settings-path-card"><div className="settings-path-label">Exports</div><div className="settings-path">{appPaths.exportRoot}</div></div>
+            <div className="settings-path-card"><div className="settings-path-label">Legacy sync root</div><div className="settings-path">{masterSyncPath || appPaths.syncRoot}</div></div>
+            <div className="settings-path-card"><div className="settings-path-label">Drive layout</div><div className="settings-path">manifest.json, devices, entries, attachments, filebox, transfers, tombstones</div></div>
+          </div>
+        </section>
+      </div>
+
+      <div className="connected-grid two">
+        <section className="connected-card">
+          <div className="section-title">Sync manifest preview</div>
+          <div className="connected-table">
+            <div className="connected-table-row"><span>Entries</span><strong>{manifest.entryCount}</strong></div>
+            <div className="connected-table-row"><span>Attachments</span><strong>{manifest.attachmentCount}</strong></div>
+            <div className="connected-table-row"><span>File Box</span><strong>{manifest.fileBoxCount}</strong></div>
+            <div className="connected-table-row"><span>Transfers</span><strong>{manifest.transferCount}</strong></div>
+          </div>
+        </section>
+        <section className="connected-card">
+          <div className="section-title">Conflicts</div>
+          <div className="connected-list">
+            {conflicts.length === 0 && <div className="connected-empty">No conflicts detected locally.</div>}
+            {conflicts.map((conflict) => (
+              <div className="connected-row" key={conflict.id}>
+                <div className="connected-row-icon"><UiIcon name="alert" /></div>
+                <div className="connected-row-main">
+                  <strong>{conflict.entityKind} · {conflict.entityId}</strong>
+                  <span>{conflict.summary}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      </div>
+    </main>
+  )
+}
+
+function TransferRow({ transfer, compact = false }: { transfer: TransferRecord; compact?: boolean }) {
+  return (
+    <div className={`connected-row ${compact ? 'compact' : ''}`}>
+      <div className="connected-row-icon"><UiIcon name="refresh" /></div>
+      <div className="connected-row-main">
+        <strong>{transfer.filename}</strong>
+        <span>{transfer.fromDeviceName} · {new Date(transfer.updatedAt).toLocaleString()}</span>
+      </div>
+      <span className={`status-chip ${transfer.status === 'failed' || transfer.status === 'conflict' ? 'danger' : transfer.status === 'attached' || transfer.status === 'available' ? 'success' : 'warning'}`}>
+        {transferStatusLabel(transfer.status)}
+      </span>
+    </div>
   )
 }
 

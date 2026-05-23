@@ -12,6 +12,12 @@ declare global {
         source: 'none' | 'tailscale' | 'lan'
       }>
       setZoomFactor?: (factor: number) => Promise<number | null>
+      requestGoogleDriveAccessToken?: (options: { clientId: string; scope: string }) => Promise<{
+        accessToken: string
+        expiresIn?: number
+        scope?: string
+        tokenType?: string
+      }>
       ensureDirectories?: (paths: {
         dataRoot: string
         attachmentsRoot: string

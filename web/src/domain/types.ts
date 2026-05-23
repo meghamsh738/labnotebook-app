@@ -215,6 +215,105 @@ export interface Attachment {
   sha256?: string
 }
 
+export type SyncProviderKind = 'google-drive'
+
+export type DevicePlatform = 'desktop' | 'mobile' | 'tablet' | 'web'
+
+export interface DeviceProfile {
+  id: string
+  name: string
+  platform: DevicePlatform
+  createdAt: string
+  lastSeenAt: string
+  userAgent?: string
+  appVersion?: string
+}
+
+export interface SyncManifest {
+  version: 1
+  provider: SyncProviderKind
+  rootFolderName: string
+  createdAt: string
+  updatedAt: string
+  devices: DeviceProfile[]
+  entryCount: number
+  attachmentCount: number
+  fileBoxCount: number
+  transferCount: number
+}
+
+export interface SyncEntityEnvelope<T> {
+  id: string
+  kind: 'entry' | 'attachment' | 'fileBoxItem' | 'transfer' | 'device' | 'tombstone'
+  version: 1
+  updatedAt: string
+  updatedByDeviceId: string
+  deletedAt?: string
+  payload: T
+}
+
+export type FileBoxStatus = 'queued' | 'uploading' | 'available' | 'attached' | 'rejected' | 'failed' | 'removed'
+
+export interface FileBoxItem {
+  id: string
+  entryId: string
+  attachmentId?: string
+  filename: string
+  filesize: string
+  contentType?: string
+  sourceDeviceId: string
+  sourceDeviceName: string
+  status: FileBoxStatus
+  createdAt: string
+  updatedAt: string
+  driveFileId?: string
+  localObjectUrl?: string
+  lastError?: string
+}
+
+export type TransferStatus = 'queued' | 'uploading' | 'available' | 'attached' | 'failed' | 'conflict' | 'removed'
+
+export interface TransferRecord {
+  id: string
+  fileBoxItemId?: string
+  entryId?: string
+  attachmentId?: string
+  filename: string
+  fromDeviceId: string
+  fromDeviceName: string
+  toDeviceId?: string
+  toDeviceName?: string
+  provider: SyncProviderKind
+  status: TransferStatus
+  bytesTotal?: number
+  bytesTransferred?: number
+  createdAt: string
+  updatedAt: string
+  completedAt?: string
+  driveFileId?: string
+  lastError?: string
+}
+
+export interface SyncConflict {
+  id: string
+  entityKind: SyncEntityEnvelope<unknown>['kind']
+  entityId: string
+  localUpdatedAt: string
+  remoteUpdatedAt: string
+  detectedAt: string
+  resolution: 'pending' | 'local-won' | 'remote-won' | 'kept-copy'
+  summary: string
+}
+
+export interface TombstoneRecord {
+  id: string
+  entityKind: SyncEntityEnvelope<unknown>['kind']
+  entityId: string
+  deletedAt: string
+  deletedByDeviceId: string
+  reason?: string
+}
+
 export interface PinnedRegion {
   id: string
   entryId: string

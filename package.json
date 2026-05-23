@@ -1,11 +1,23 @@
 {
   "name": "labnotebook-app",
+  "version": "0.1.0",
+  "description": "Standalone Easylab Lab Notebook desktop and PWA worktree.",
+  "author": "Meghamsh Teja Konda",
+  "main": "desktop/main.cjs",
   "private": true,
   "scripts": {
     "dev": "npm --prefix web run dev",
     "build": "npm --prefix web run build",
     "lint": "npm --prefix web run lint",
     "test:e2e": "npm --prefix web run test:e2e",
-    "screenshots": "npm --prefix web run screenshots"
+    "screenshots": "npm --prefix web run screenshots",
+    "standalone:dev": "set EASYLAB_LABNOTE_DEV=1&& concurrently \"npm --prefix web run dev -- --host 127.0.0.1\" \"wait-on http://127.0.0.1:5173 && electron desktop/main.cjs\"",
+    "standalone:build": "npm --prefix web run build && electron-builder --config electron-builder.json"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1",
+    "electron": "^38.4.0",
+    "electron-builder": "^26.0.12",
+    "wait-on": "^8.0.5"
   }
 }

@@ -1,0 +1,27 @@
+{
+  "appId": "com.easylab.labnotebook",
+  "productName": "Easylab Lab Notebook",
+  "directories": {
+    "output": "desktop/dist"
+  },
+  "files": [
+    "desktop/**/*",
+    "!desktop/dist/**",
+    "package.json"
+  ],
+  "extraResources": [
+    {
+      "from": ".labnote-dist/web",
+      "to": "web"
+    }
+  ],
+  "win": {
+    "target": "nsis"
+  },
+  "nsis": {
+    "oneClick": false,
+    "allowToChangeInstallationDirectory": true,
+    "createDesktopShortcut": true,
+    "createStartMenuShortcut": true
+  }
+}

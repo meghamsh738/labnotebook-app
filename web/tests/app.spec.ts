@@ -783,8 +783,31 @@ test.describe('Lab note taking app', () => {
     await expect(dialog.getByText('Disk cache', { exact: true })).toBeVisible()
     await expect(dialog.getByTestId('import-legacy')).toBeVisible()
     await expect(dialog.getByTestId('import-legacy-file')).toBeVisible()
-    await expect(dialog.getByText('Notes and metadata:', { exact: false })).toBeVisible()
-    await expect(dialog.getByText('Uploaded files and cached attachments:', { exact: false })).toBeVisible()
+    await expect(dialog.getByText('Notebook data and state', { exact: true })).toBeVisible()
+    await expect(dialog.getByText('Attachment intake and uploads', { exact: true })).toBeVisible()
+    await expect(dialog.getByText('Generated exports', { exact: true })).toBeVisible()
+  })
+
+  test('connected file hub panes are reachable', async ({ page }) => {
+    await boot(page, { noFail: '1' })
+
+    await page.getByTestId('editor-tab-filebox').click()
+    await expect(page.getByTestId('entry-filebox-panel')).toBeVisible()
+    await expect(page.getByText('Entry File Box', { exact: true })).toBeVisible()
+
+    await page.getByRole('tab', { name: 'File Hub' }).click()
+    await expect(page.getByTestId('file-hub-pane')).toBeVisible()
+    await expect(page.getByText('Entry file boxes and incoming lab files', { exact: true })).toBeVisible()
+
+    await page.getByRole('tab', { name: 'Devices' }).click()
+    await expect(page.getByTestId('devices-pane')).toBeVisible()
+
+    await page.getByRole('tab', { name: 'Transfers' }).click()
+    await expect(page.getByTestId('transfers-pane')).toBeVisible()
+
+    await page.getByRole('tab', { name: 'Sync' }).click()
+    await expect(page.getByTestId('sync-pane')).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Device-owned sync without an Easylab cloud server' })).toBeVisible()
   })
 
   test('settings shows mobile pairing QR and link status', async ({ page }) => {
