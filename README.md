@@ -110,9 +110,12 @@ npm --prefix web run test:e2e -- --project=desktop-chromium
 npm --prefix web run test:e2e -- --project=mobile-chromium
 npm --prefix web run screenshots
 npm run standalone:build
+npm run smoke:pixel-pwa
 ```
 
 `npm --prefix web run screenshots` regenerates PNG screenshots under `screenshots/`.
+
+`npm run smoke:pixel-pwa` uses the connected Pixel 7a/WebAPK, `adb reverse tcp:4173 tcp:4173`, and a real device screenshot. It writes ignored evidence under `.labnote-device-smoke/pixel-pwa/` and fails rather than accepting black lockscreen/NotificationShade captures.
 
 The packaged OAuth smoke requires a local-only desktop OAuth client ID. Either set shell environment variables or place a downloaded Google OAuth desktop JSON at `.labnote-local/oauth.desktop.json`; `.labnote-local/` is ignored by Git. In the app, open **Sync > Advanced OAuth client IDs** and use **Import Google OAuth JSON** to fill the Desktop or Web/PWA client fields from a downloaded Google client JSON. The importer reads only client IDs and the optional desktop client secret. Never commit OAuth JSON files, access tokens, refresh tokens, or user Drive data.
 
