@@ -1,10 +1,12 @@
 import type {
   Attachment,
   Entry,
+  FileBoxItem,
   SyncConflict,
   SyncEntityEnvelope,
   SyncManifest,
   TombstoneRecord,
+  TransferRecord,
 } from '../domain/types'
 
 export type ValidationResult<T> = { ok: true; value: T } | { ok: false; error: string }
@@ -51,6 +53,35 @@ export function validateAttachmentEnvelope(value: unknown): ValidationResult<Syn
   if (!hasString(payload, 'entryId')) return fail('Attachment payload entryId is required.')
   if (!hasString(payload, 'filename')) return fail('Attachment payload filename is required.')
   return { ok: true, value: value as unknown as SyncEntityEnvelope<Attachment> }
+}
+
+export function validateFileBoxEnvelope(value: unknown): ValidationResult<SyncEntityEnvelope<FileBoxItem>> {
+  if (!isRecord(value)) return fail('File Box envelope must be an object.')
+  if (value.kind !== 'fileBoxItem') return fail('File Box envelope kind must be fileBoxItem.')
+  if (!hasString(value, 'id')) return fail('File Box envelope id is required.')
+  if (!hasString(value, 'updatedAt')) return fail('File Box envelope updatedAt is required.')
+  if (!hasString(value, 'updatedByDeviceId')) return fail('File Box envelope updatedByDeviceId is required.')
+  const payload = value.payload
+  if (!isRecord(payload)) return fail('File Box envelope payload must be an object.')
+  if (!hasString(payload, 'id')) return fail('File Box payload id is required.')
+  if (!hasString(payload, 'entryId')) return fail('File Box payload entryId is required.')
+  if (!hasString(payload, 'filename')) return fail('File Box payload filename is required.')
+  if (!hasString(payload, 'status')) return fail('File Box payload status is required.')
+  return { ok: true, value: value as unknown as SyncEntityEnvelope<FileBoxItem> }
+}
+
+export function validateTransferEnvelope(value: unknown): ValidationResult<SyncEntityEnvelope<TransferRecord>> {
+  if (!isRecord(value)) return fail('Transfer envelope must be an object.')
+  if (value.kind !== 'transfer') return fail('Transfer envelope kind must be transfer.')
+  if (!hasString(value, 'id')) return fail('Transfer envelope id is required.')
+  if (!hasString(value, 'updatedAt')) return fail('Transfer envelope updatedAt is required.')
+  if (!hasString(value, 'updatedByDeviceId')) return fail('Transfer envelope updatedByDeviceId is required.')
+  const payload = value.payload
+  if (!isRecord(payload)) return fail('Transfer envelope payload must be an object.')
+  if (!hasString(payload, 'id')) return fail('Transfer payload id is required.')
+  if (!hasString(payload, 'filename')) return fail('Transfer payload filename is required.')
+  if (!hasString(payload, 'status')) return fail('Transfer payload status is required.')
+  return { ok: true, value: value as unknown as SyncEntityEnvelope<TransferRecord> }
 }
 
 export function validateTombstone(value: unknown): ValidationResult<TombstoneRecord> {

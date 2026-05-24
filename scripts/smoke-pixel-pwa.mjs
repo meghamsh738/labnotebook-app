@@ -69,6 +69,12 @@ function getPowerAndWindowState() {
   }
 }
 
+function hasExpectedForeground(state) {
+  const focus = `${state.currentFocus} ${state.focusedApp}`
+  if (focus.includes(packageName) || focus.includes(activityName)) return true
+  return /com\.android\.chrome/.test(focus) && /WebApk|SameTaskWebApkActivity|webapp/i.test(focus)
+}
+
 function tryWakeAndLaunch() {
   const safe = (args) => {
     try {
@@ -140,10 +146,26 @@ try {
       state,
     })
   }
+  if (!hasExpectedForeground(state)) {
+    fail('Pixel PWA smoke cannot proceed because Lab Notebook is not the foreground app after launch.', {
+      adb,
+      packageName,
+      activityName,
+      state,
+    })
+  }
 
   tapRequestedPane()
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1500)
   state = getPowerAndWindowState()
+  if (!hasExpectedForeground(state)) {
+    fail('Pixel PWA smoke cannot accept evidence because Lab Notebook is no longer the foreground app.', {
+      adb,
+      packageName,
+      activityName,
+      state,
+    })
+  }
   captureEvidence()
 
   const screenshotSize = fs.existsSync(screenshotFile) ? fs.statSync(screenshotFile).size : 0
@@ -160,7 +182,7 @@ try {
   }
 
   const uiText = fs.existsSync(uiDumpFile) ? fs.readFileSync(uiDumpFile, 'utf8') : ''
-  const hasLabNotebookUi = /Lab Notebook|Today|Sync|Settings|Capture|Google Drive|Offline storage/i.test(uiText)
+  const hasLabNotebookUi = /Lab Notebook|Easylab Lab Notebook|Google Drive Sync|Device-owned sync without an Easylab cloud server|Connect \/ Sync Drive|Offline storage/i.test(uiText)
   if (!hasLabNotebookUi) {
     fail('Pixel UI dump did not contain Lab Notebook navigation text, so the capture was not accepted as app evidence.', {
       adb,

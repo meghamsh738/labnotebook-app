@@ -2,9 +2,11 @@ import type {
   Attachment,
   DeviceProfile,
   Entry,
+  FileBoxItem,
   SyncConflict,
   SyncEntityEnvelope,
   TombstoneRecord,
+  TransferRecord,
 } from '../domain/types'
 import { createManifest } from './connectedSync'
 import {
@@ -20,7 +22,9 @@ import {
   buildInvalidRemoteJsonConflict,
   validateAttachmentEnvelope,
   validateEntryEnvelope,
+  validateFileBoxEnvelope,
   validateTombstone,
+  validateTransferEnvelope,
 } from './schemas'
 import type { BlobStore } from './blobStore'
 import { createJournalRepositories, type JournalRepositories } from './repositories'
@@ -29,6 +33,8 @@ import type { SyncProvider } from './syncProvider'
 export type SyncEngineMeta = {
   entryHashes: Record<string, string>
   attachmentHashes: Record<string, string>
+  fileBoxHashes: Record<string, string>
+  transferHashes: Record<string, string>
   lastSyncedAt?: string
   driveChangesToken?: string
 }
@@ -62,7 +68,7 @@ function clone<T>(value: T): T {
 }
 
 function defaultMeta(): SyncEngineMeta {
-  return { entryHashes: {}, attachmentHashes: {} }
+  return { entryHashes: {}, attachmentHashes: {}, fileBoxHashes: {}, transferHashes: {} }
 }
 
 function isSyncEngineMeta(value: unknown): value is SyncEngineMeta {
@@ -189,6 +195,45 @@ export async function attachmentMetadataHash(attachment: Attachment) {
   })
 }
 
+async function fileBoxMetadataHash(item: FileBoxItem) {
+  return hashJsonSha256({
+    id: item.id,
+    entryId: item.entryId,
+    attachmentId: item.attachmentId,
+    filename: item.filename,
+    filesize: item.filesize,
+    contentType: item.contentType,
+    sourceDeviceId: item.sourceDeviceId,
+    sourceDeviceName: item.sourceDeviceName,
+    status: item.status,
+    driveFileId: item.driveFileId,
+    lastError: item.lastError,
+    updatedAt: item.updatedAt,
+  })
+}
+
+async function transferMetadataHash(transfer: TransferRecord) {
+  return hashJsonSha256({
+    id: transfer.id,
+    fileBoxItemId: transfer.fileBoxItemId,
+    entryId: transfer.entryId,
+    attachmentId: transfer.attachmentId,
+    filename: transfer.filename,
+    fromDeviceId: transfer.fromDeviceId,
+    fromDeviceName: transfer.fromDeviceName,
+    toDeviceId: transfer.toDeviceId,
+    toDeviceName: transfer.toDeviceName,
+    provider: transfer.provider,
+    status: transfer.status,
+    bytesTotal: transfer.bytesTotal,
+    bytesTransferred: transfer.bytesTransferred,
+    completedAt: transfer.completedAt,
+    driveFileId: transfer.driveFileId,
+    lastError: transfer.lastError,
+    updatedAt: transfer.updatedAt,
+  })
+}
+
 function mergeConflictId(entityKind: SyncConflict['entityKind'], entityId: string) {
   return `conf-${entityKind}-${entityId}`
 }
@@ -243,6 +288,36 @@ function attachmentBlobKey(attachment: Attachment) {
   return attachment.cacheKey || `attachment-${attachment.id}`
 }
 
+function buildFileBoxEnvelope(item: FileBoxItem, device: DeviceProfile): SyncEntityEnvelope<FileBoxItem> {
+  return {
+    id: item.id,
+    kind: 'fileBoxItem',
+    version: 1,
+    updatedAt: item.updatedAt || nowIso(),
+    updatedByDeviceId: device.id,
+    payload: item,
+  }
+}
+
+function buildTransferEnvelope(transfer: TransferRecord, device: DeviceProfile): SyncEntityEnvelope<TransferRecord> {
+  return {
+    id: transfer.id,
+    kind: 'transfer',
+    version: 1,
+    updatedAt: transfer.updatedAt || nowIso(),
+    updatedByDeviceId: device.id,
+    payload: transfer,
+  }
+}
+
+function fileBoxPath(item: FileBoxItem) {
+  return `filebox/${item.id}.json`
+}
+
+function transferPath(transfer: TransferRecord) {
+  return `transfers/${transfer.id}.json`
+}
+
 export async function syncOnce(params: {
   provider: SyncProvider
   store: LocalJournalStore
@@ -257,6 +332,8 @@ export async function syncOnce(params: {
 
   let snapshot = await store.getSnapshot()
   const meta = { ...defaultMeta(), ...(await store.getMeta()) }
+  meta.fileBoxHashes = meta.fileBoxHashes ?? {}
+  meta.transferHashes = meta.transferHashes ?? {}
   let pulledEntries = 0
   let pulledAttachments = 0
   let pushedEntries = 0
@@ -375,6 +452,64 @@ export async function syncOnce(params: {
     }
   }
 
+  const remoteFileBoxItems = await readRemoteFileBoxItems(provider, device.id)
+  snapshot.conflicts = [...snapshot.conflicts, ...remoteFileBoxItems.invalid]
+  for (const remoteEnvelope of remoteFileBoxItems.valid) {
+    const remoteItem = remoteEnvelope.payload
+    if (tombstonedEntries.has(remoteItem.entryId) || tombstonedAttachments.has(remoteItem.attachmentId || '')) continue
+    const localIndex = snapshot.fileBoxItems.findIndex((item) => item.id === remoteItem.id)
+    const remoteHash = await fileBoxMetadataHash(remoteItem)
+    const baseHash = meta.fileBoxHashes[remoteItem.id]
+
+    if (localIndex < 0) {
+      snapshot.fileBoxItems.push(remoteItem)
+      meta.fileBoxHashes[remoteItem.id] = remoteHash
+      continue
+    }
+
+    const localHash = await fileBoxMetadataHash(snapshot.fileBoxItems[localIndex])
+    if (localHash === remoteHash) {
+      meta.fileBoxHashes[remoteItem.id] = remoteHash
+      continue
+    }
+
+    const localTime = Date.parse(snapshot.fileBoxItems[localIndex].updatedAt) || 0
+    const remoteTime = Date.parse(remoteItem.updatedAt) || 0
+    if (localHash === baseHash || remoteTime >= localTime) {
+      snapshot.fileBoxItems[localIndex] = remoteItem
+      meta.fileBoxHashes[remoteItem.id] = remoteHash
+    }
+  }
+
+  const remoteTransfers = await readRemoteTransfers(provider, device.id)
+  snapshot.conflicts = [...snapshot.conflicts, ...remoteTransfers.invalid]
+  for (const remoteEnvelope of remoteTransfers.valid) {
+    const remoteTransfer = remoteEnvelope.payload
+    if (tombstonedEntries.has(remoteTransfer.entryId || '') || tombstonedAttachments.has(remoteTransfer.attachmentId || '')) continue
+    const localIndex = snapshot.transfers.findIndex((transfer) => transfer.id === remoteTransfer.id)
+    const remoteHash = await transferMetadataHash(remoteTransfer)
+    const baseHash = meta.transferHashes[remoteTransfer.id]
+
+    if (localIndex < 0) {
+      snapshot.transfers.push(remoteTransfer)
+      meta.transferHashes[remoteTransfer.id] = remoteHash
+      continue
+    }
+
+    const localHash = await transferMetadataHash(snapshot.transfers[localIndex])
+    if (localHash === remoteHash) {
+      meta.transferHashes[remoteTransfer.id] = remoteHash
+      continue
+    }
+
+    const localTime = Date.parse(snapshot.transfers[localIndex].updatedAt) || 0
+    const remoteTime = Date.parse(remoteTransfer.updatedAt) || 0
+    if (localHash === baseHash || remoteTime >= localTime) {
+      snapshot.transfers[localIndex] = remoteTransfer
+      meta.transferHashes[remoteTransfer.id] = remoteHash
+    }
+  }
+
   for (const tombstone of snapshot.tombstones) {
     await provider.putJson(tombstonePath(tombstone), tombstone, {
       appProperties: { entityType: 'tombstone', entityId: tombstone.entityId },
@@ -419,6 +554,28 @@ export async function syncOnce(params: {
     await provider.putJson(`conflicts/${conflict.id}.json`, conflict, {
       appProperties: { entityType: 'conflict', entityId: conflict.entityId },
     })
+  }
+
+  for (const item of snapshot.fileBoxItems) {
+    if (tombstonedEntries.has(item.entryId) || tombstonedAttachments.has(item.attachmentId || '')) continue
+    const hash = await fileBoxMetadataHash(item)
+    if (hash !== meta.fileBoxHashes[item.id]) {
+      await provider.putJson(fileBoxPath(item), buildFileBoxEnvelope(item, device), {
+        appProperties: { entityType: 'fileBoxItem', entityId: item.id, contentHash: hash },
+      })
+      meta.fileBoxHashes[item.id] = hash
+    }
+  }
+
+  for (const transfer of snapshot.transfers) {
+    if (tombstonedEntries.has(transfer.entryId || '') || tombstonedAttachments.has(transfer.attachmentId || '')) continue
+    const hash = await transferMetadataHash(transfer)
+    if (hash !== meta.transferHashes[transfer.id]) {
+      await provider.putJson(transferPath(transfer), buildTransferEnvelope(transfer, device), {
+        appProperties: { entityType: 'transfer', entityId: transfer.id, contentHash: hash },
+      })
+      meta.transferHashes[transfer.id] = hash
+    }
   }
 
   await provider.putManifest(createManifest({
@@ -556,6 +713,44 @@ async function readRemoteAttachments(provider: SyncProvider, deviceId: string) {
     if (result.ok) valid.push(result.value)
     else invalid.push(buildInvalidRemoteJsonConflict({
       entityKind: 'attachment',
+      entityId: file.path,
+      deviceId,
+      error: result.error,
+      remoteCopy: remote?.value,
+    }))
+  }
+  return { valid, invalid }
+}
+
+async function readRemoteFileBoxItems(provider: SyncProvider, deviceId: string) {
+  const files = await provider.listManagedFiles({ prefix: 'filebox/' })
+  const valid: SyncEntityEnvelope<FileBoxItem>[] = []
+  const invalid: SyncConflict[] = []
+  for (const file of files) {
+    const remote = await provider.getJson<unknown>(file.path)
+    const result = validateFileBoxEnvelope(remote?.value)
+    if (result.ok) valid.push(result.value)
+    else invalid.push(buildInvalidRemoteJsonConflict({
+      entityKind: 'fileBoxItem',
+      entityId: file.path,
+      deviceId,
+      error: result.error,
+      remoteCopy: remote?.value,
+    }))
+  }
+  return { valid, invalid }
+}
+
+async function readRemoteTransfers(provider: SyncProvider, deviceId: string) {
+  const files = await provider.listManagedFiles({ prefix: 'transfers/' })
+  const valid: SyncEntityEnvelope<TransferRecord>[] = []
+  const invalid: SyncConflict[] = []
+  for (const file of files) {
+    const remote = await provider.getJson<unknown>(file.path)
+    const result = validateTransferEnvelope(remote?.value)
+    if (result.ok) valid.push(result.value)
+    else invalid.push(buildInvalidRemoteJsonConflict({
+      entityKind: 'transfer',
       entityId: file.path,
       deviceId,
       error: result.error,
