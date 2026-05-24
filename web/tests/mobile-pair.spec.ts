@@ -132,6 +132,11 @@ test('mobile layout shows QR pairing and keeps camera capture support', async ({
   await ensureNoteEditMode(page)
   await expect(page.getByTestId('camera-input')).toHaveAttribute('accept', 'image/*')
   await expect(page.getByTestId('camera-input')).toHaveAttribute('capture', 'environment')
+  await expect(page.getByTestId('mobile-capture-input')).toHaveAttribute(
+    'accept',
+    'image/*,.pdf,.csv,.tsv,.xlsx,.xls,.doc,.docx,text/*'
+  )
+  await expect(page.getByTestId('mobile-capture-input')).toHaveAttribute('capture', 'environment')
 })
 
 test('mobile File Hub shows Drive files as on-demand until opened', async ({ page }) => {

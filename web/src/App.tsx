@@ -5805,6 +5805,25 @@ function MobileCaptureAction({
   const inputRef = useRef<HTMLInputElement | null>(null)
   const [busy, setBusy] = useState(false)
 
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    if (window.localStorage.getItem('labnote.enableSmokeHooks') !== '1') return
+    ;(window as unknown as { __labnoteSmokeCaptureReady?: boolean }).__labnoteSmokeCaptureReady = true
+    const handleSmokeCapture = (event: Event) => {
+      if (disabled) return
+      const detail = (event as CustomEvent<{ files?: File[] }>).detail
+      const files = Array.isArray(detail?.files) ? detail.files.filter((file) => file instanceof File) : []
+      if (!files.length) return
+      setBusy(true)
+      void onCaptureFiles(files).finally(() => setBusy(false))
+    }
+    window.addEventListener('labnote:mobile-capture-files', handleSmokeCapture)
+    return () => {
+      window.removeEventListener('labnote:mobile-capture-files', handleSmokeCapture)
+      ;(window as unknown as { __labnoteSmokeCaptureReady?: boolean }).__labnoteSmokeCaptureReady = false
+    }
+  }, [disabled, onCaptureFiles])
+
   return (
     <div className="mobile-capture-dock" aria-label="Mobile capture actions">
       <button className="mobile-capture-secondary" type="button" onClick={onQuickNote} disabled={disabled || busy}>
@@ -5817,6 +5836,7 @@ function MobileCaptureAction({
       </button>
       <input
         ref={inputRef}
+        data-testid="mobile-capture-input"
         type="file"
         accept="image/*,.pdf,.csv,.tsv,.xlsx,.xls,.doc,.docx,text/*"
         capture="environment"

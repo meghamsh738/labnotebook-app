@@ -3,6 +3,8 @@ let cacheHandle: FileSystemDirectoryHandle | null = null
 
 const DB_NAME = 'labnote-cache'
 const HANDLE_STORE = 'handles'
+const FILE_STORE = 'files'
+const DB_VERSION = 3
 
 type FsPermissionMode = 'read' | 'readwrite'
 type DirectoryPickerOptions = { mode: FsPermissionMode; id?: string }
@@ -15,11 +17,14 @@ type FsDirectoryWithPerm = FileSystemDirectoryHandle & {
 
 async function openDB(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB_NAME, 2)
+    const req = indexedDB.open(DB_NAME, DB_VERSION)
     req.onupgradeneeded = () => {
       const db = req.result
       if (!db.objectStoreNames.contains(HANDLE_STORE)) {
         db.createObjectStore(HANDLE_STORE)
+      }
+      if (!db.objectStoreNames.contains(FILE_STORE)) {
+        db.createObjectStore(FILE_STORE)
       }
     }
     req.onsuccess = () => resolve(req.result)
@@ -32,7 +37,10 @@ async function saveHandle(handle: FileSystemDirectoryHandle) {
     const db = await openDB()
     await new Promise<void>((resolve, reject) => {
       const tx = db.transaction(HANDLE_STORE, 'readwrite')
-      tx.oncomplete = () => resolve()
+      tx.oncomplete = () => {
+        db.close()
+        resolve()
+      }
       tx.onerror = () => reject(tx.error)
       tx.objectStore(HANDLE_STORE).put(handle, 'dir')
     })
@@ -47,7 +55,10 @@ export async function clearCacheHandle(): Promise<void> {
     const db = await openDB()
     await new Promise<void>((resolve, reject) => {
       const tx = db.transaction(HANDLE_STORE, 'readwrite')
-      tx.oncomplete = () => resolve()
+      tx.oncomplete = () => {
+        db.close()
+        resolve()
+      }
       tx.onerror = () => reject(tx.error)
       tx.objectStore(HANDLE_STORE).delete('dir')
     })
@@ -64,6 +75,7 @@ export async function restoreCacheHandle(): Promise<FileSystemDirectoryHandle | 
       const req = tx.objectStore(HANDLE_STORE).get('dir')
       req.onsuccess = () => resolve(req.result ?? null)
       req.onerror = () => reject(req.error)
+      tx.oncomplete = () => db.close()
     })
   } catch (err) {
     console.warn('Unable to load cache handle', err)
@@ -83,7 +95,7 @@ export async function pickCacheDir(): Promise<FileSystemDirectoryHandle | null> 
   }
 }
 
-export async function ensureCacheDir(): Promise<FileSystemDirectoryHandle | null> {
+export async function ensureCacheDir(options: { prompt?: boolean } = {}): Promise<FileSystemDirectoryHandle | null> {
   if (cacheHandle) return cacheHandle
   cacheHandle = await restoreCacheHandle()
   if (cacheHandle) {
@@ -100,6 +112,7 @@ export async function ensureCacheDir(): Promise<FileSystemDirectoryHandle | null
       if (req === 'granted') return cacheHandle
     }
   }
+  if (options.prompt === false) return null
   const picker = (window as unknown as DirectoryPickerWindow).showDirectoryPicker
   if (typeof picker !== 'function') return null
   try {
@@ -112,7 +125,7 @@ export async function ensureCacheDir(): Promise<FileSystemDirectoryHandle | null
 }
 
 export async function writeFileToCache(file: File): Promise<string | null> {
-  const dir = await ensureCacheDir()
+  const dir = await ensureCacheDir({ prompt: false })
   if (!dir) return null
   const name = `${Date.now()}-${file.name}`
   try {
