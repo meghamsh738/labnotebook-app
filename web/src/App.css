@@ -6203,6 +6203,10 @@ code,
   overflow-wrap: anywhere;
 }
 
+.storage-health-table .connected-table-row {
+  grid-template-columns: minmax(150px, 1fr) minmax(120px, 1fr);
+}
+
 .settings-output-grid.compact {
   grid-template-columns: 1fr;
 }

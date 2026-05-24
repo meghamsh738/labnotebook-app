@@ -44,6 +44,7 @@ import {
   normalizeDriveConnection,
   parseGoogleOAuthClientConfig,
   resolveDriveClientId,
+  fileSizeLabel,
   saveJson,
   transferStatusLabel,
   type DriveConnectionState,
@@ -106,6 +107,15 @@ type BackupStatus = {
   message: string
   result?: JournalBackupRestoreResult
 } | null
+
+type StorageHealth = {
+  checked: boolean
+  supported: boolean
+  persisted?: boolean
+  usage?: number
+  quota?: number
+  error?: string
+}
 
 type DateRange = {
   start: string
@@ -7615,10 +7625,79 @@ function SyncPane({
   const backupInputRef = useRef<HTMLInputElement | null>(null)
   const oauthImportInputRef = useRef<HTMLInputElement | null>(null)
   const [oauthImportMessage, setOauthImportMessage] = useState('')
+  const [storageHealth, setStorageHealth] = useState<StorageHealth>({ checked: false, supported: false })
+  const [storagePersisting, setStoragePersisting] = useState(false)
   const driveOAuthClient = resolveDriveClientId(driveConnection)
   const activeOAuthLabel = driveOAuthClient.preferredKind === 'desktop' ? 'Desktop app' : 'Web/PWA'
   const hasActiveOAuthClient = Boolean(driveOAuthClient.clientId)
   const hasLegacyOAuthClient = Boolean(driveConnection.clientId.trim())
+
+  const refreshStorageHealth = useCallback(async () => {
+    const storage = typeof navigator !== 'undefined' ? navigator.storage : undefined
+    if (!storage) {
+      setStorageHealth({ checked: true, supported: false, error: 'This browser does not expose storage health APIs.' })
+      return
+    }
+    try {
+      const [persisted, estimate] = await Promise.all([
+        typeof storage.persisted === 'function' ? storage.persisted() : Promise.resolve(undefined),
+        typeof storage.estimate === 'function' ? storage.estimate() : Promise.resolve({} as StorageEstimate),
+      ])
+      setStorageHealth({
+        checked: true,
+        supported: true,
+        persisted,
+        usage: estimate.usage,
+        quota: estimate.quota,
+      })
+    } catch (error) {
+      setStorageHealth({
+        checked: true,
+        supported: true,
+        error: error instanceof Error ? error.message : String(error),
+      })
+    }
+  }, [])
+
+  useEffect(() => {
+    void refreshStorageHealth()
+  }, [refreshStorageHealth])
+
+  const requestPersistentStorage = async () => {
+    const storage = typeof navigator !== 'undefined' ? navigator.storage : undefined
+    if (!storage || typeof storage.persist !== 'function') {
+      setStorageHealth((prev) => ({
+        ...prev,
+        checked: true,
+        supported: Boolean(storage),
+        error: 'Persistent storage cannot be requested in this browser.',
+      }))
+      return
+    }
+    setStoragePersisting(true)
+    try {
+      const persisted = await storage.persist()
+      const estimate = typeof storage.estimate === 'function' ? await storage.estimate() : {}
+      setStorageHealth((prev) => ({
+        ...prev,
+        checked: true,
+        supported: true,
+        persisted,
+        usage: estimate.usage ?? prev.usage,
+        quota: estimate.quota ?? prev.quota,
+        error: persisted ? undefined : 'The browser kept this install in best-effort storage. Open the app periodically so it can sync local changes.',
+      }))
+    } catch (error) {
+      setStorageHealth((prev) => ({
+        ...prev,
+        checked: true,
+        supported: true,
+        error: error instanceof Error ? error.message : String(error),
+      }))
+    } finally {
+      setStoragePersisting(false)
+    }
+  }
 
   const handleOAuthJsonImport = async (file: File | undefined) => {
     if (!file) return
@@ -7643,6 +7722,18 @@ function SyncPane({
       setOauthImportMessage(error instanceof Error ? error.message : String(error))
     }
   }
+
+  const persistenceLabel = !storageHealth.checked
+    ? 'Checking'
+    : !storageHealth.supported
+      ? 'Not available'
+      : storageHealth.persisted
+        ? 'Persistent'
+        : 'Best effort'
+  const canRequestPersistentStorage =
+    storageHealth.supported &&
+    typeof navigator !== 'undefined' &&
+    typeof navigator.storage?.persist === 'function'
 
   return (
     <main className="panel editor connected-workspace" data-testid="sync-pane">
@@ -7795,6 +7886,30 @@ function SyncPane({
             <div className="connected-table-row"><span>Drive folder</span><strong>{driveConnection.folderId ? 'Ready' : 'Not linked'}</strong></div>
           </div>
           {journalCoreError && <div className="settings-error">{journalCoreError}</div>}
+        </section>
+        <section className="connected-card" data-testid="storage-health-card">
+          <div className="section-title">Offline storage health</div>
+          <p className="muted">Daily entries, metadata, queues, conflicts, and tombstones stay in IndexedDB. Attachment metadata syncs automatically; large attachment blobs are downloaded only when opened or requested.</p>
+          <div className="connected-table storage-health-table">
+            <div className="connected-table-row"><span>Browser storage API</span><strong>{storageHealth.supported ? 'Available' : storageHealth.checked ? 'Not available' : 'Checking'}</strong></div>
+            <div className="connected-table-row"><span>Persistence</span><strong data-testid="storage-persistence-status">{persistenceLabel}</strong></div>
+            <div className="connected-table-row"><span>Estimated local usage</span><strong>{storageHealth.usage == null ? 'Unknown' : fileSizeLabel(storageHealth.usage)}</strong></div>
+            <div className="connected-table-row"><span>Estimated quota</span><strong>{storageHealth.quota == null ? 'Unknown' : fileSizeLabel(storageHealth.quota)}</strong></div>
+            <div className="connected-table-row"><span>Attachment blob policy</span><strong>On demand</strong></div>
+          </div>
+          <div className="settings-actions" style={{ marginTop: 10 }}>
+            <button
+              className="ghost icon-btn"
+              type="button"
+              onClick={() => void requestPersistentStorage()}
+              disabled={!canRequestPersistentStorage || storagePersisting}
+              data-testid="storage-persist-button"
+            >
+              <span className="icon"><UiIcon name="save" /></span>
+              {storagePersisting ? 'Requesting...' : 'Request persistent storage'}
+            </button>
+          </div>
+          {storageHealth.error && <div className="settings-note warning-note" data-testid="storage-health-note">{storageHealth.error}</div>}
         </section>
         <section className="connected-card">
           <div className="section-title">Local backup and restore</div>

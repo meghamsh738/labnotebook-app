@@ -21,6 +21,7 @@ License: All Rights Reserved. See `LICENSE`.
 - **Transfers**: table-first status view for queued, uploaded, attached, failed, conflicted, and removed files.
 - **Sync-safe data core**: entries, attachments, devices, transfers, conflicts, tombstones, and a sync queue are mirrored into IndexedDB while localStorage remains as a compatibility fallback.
 - **Sync**: Google Drive folder setup, per-day entry JSON upload, per-day attachment blob folders, device metadata upload, File Box/transfer metadata upload, conflict/tombstone folders, on-demand attachment blobs, and clear storage-path reporting.
+- **Offline/PWA safety**: Sync settings include local storage health, estimated usage/quota, persistent-storage request support, and clear messaging that metadata syncs automatically while large blobs remain on-demand.
 - **PWA**: manifest, icon, service worker, standalone display mode, native Android install flow, camera/file upload support, and share-target declaration for supported mobile browsers.
 - **Standalone desktop**: Electron shell with filesystem folder-picking IPC, directory creation IPC, and Google OAuth PKCE loopback support.
 

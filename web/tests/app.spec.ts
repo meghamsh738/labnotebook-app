@@ -844,6 +844,34 @@ test.describe('Lab note taking app', () => {
     await expect(page.getByRole('button', { name: 'Restore backup' })).toBeVisible()
   })
 
+  test('sync pane reports PWA storage health and can request persistence', async ({ page }) => {
+    await page.addInitScript(() => {
+      let persisted = false
+      Object.defineProperty(navigator, 'storage', {
+        configurable: true,
+        value: {
+          persisted: async () => persisted,
+          persist: async () => {
+            persisted = true
+            return true
+          },
+          estimate: async () => ({ usage: 4096, quota: 1024 * 1024 * 64 }),
+        },
+      })
+    })
+    await boot(page, { noFail: '1' })
+
+    await page.getByRole('tab', { name: 'Sync' }).click()
+    await expect(page.getByTestId('storage-health-card')).toBeVisible()
+    await expect(page.getByText('Attachment metadata syncs automatically')).toBeVisible()
+    await expect(page.getByTestId('storage-persistence-status')).toHaveText('Best effort')
+    await expect(page.getByText('4 KB')).toBeVisible()
+    await expect(page.getByText('64 MB')).toBeVisible()
+
+    await page.getByTestId('storage-persist-button').click()
+    await expect(page.getByTestId('storage-persistence-status')).toHaveText('Persistent')
+  })
+
   test('file hub shows actionable recovery for failed transfers', async ({ page }) => {
     const entry = {
       id: 'entry-recovery-day',
