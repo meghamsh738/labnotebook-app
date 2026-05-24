@@ -7,7 +7,7 @@ import { Slate, Editable, withReact, ReactEditor, useSlateStatic } from 'slate-r
 import { PDFDocument, StandardFonts, rgb, type PDFFont } from 'pdf-lib'
 import type { RenderElementProps, RenderLeafProps } from 'slate-react'
 import { toDataURL as toQrDataUrl } from 'qrcode'
-import { cacheFile, getCachedFile } from './idb'
+import { cacheFile, deleteCachedFile, getCachedFile } from './idb'
 import { writeFileToCache, restoreCacheHandle, ensureCacheDir, pickCacheDir, clearCacheHandle } from './fileCache'
 import { GuidedTutorial, type TutorialStep } from './GuidedTutorial'
 import './App.css'
@@ -57,6 +57,7 @@ import { IndexedDbBlobStore } from './sync/blobStore'
 import { createJournalRepositories } from './sync/repositories'
 import {
   createIndexedDbJournalStore,
+  downloadAttachmentBlob,
   syncOnce,
   type SyncEngineResult,
 } from './sync/syncEngine'
@@ -1298,6 +1299,22 @@ function downloadBlob(filename: string, blob: Blob) {
   window.setTimeout(() => URL.revokeObjectURL(url), 500)
 }
 
+function attachmentIsRemoteAvailable(attachment: Attachment, localUrl?: string) {
+  return (
+    attachment.syncStatus === 'remote-available' ||
+    (Boolean(attachment.driveFileId) && !attachment.cacheKey && !attachment.cachedPath && !localUrl)
+  )
+}
+
+function attachmentStorageLabel(attachment: Attachment, localUrl?: string) {
+  if (attachment.syncStatus === 'failed') return 'Sync failed'
+  if (attachmentIsRemoteAvailable(attachment, localUrl)) return 'Remote available'
+  if (attachment.driveFileId && (attachment.cacheKey || attachment.cachedPath || localUrl)) return 'Local + Drive'
+  if (attachment.driveFileId) return 'Drive metadata'
+  if (attachment.cacheKey || attachment.cachedPath || localUrl) return 'Local only'
+  return 'Metadata only'
+}
+
 function readFileAsDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader()
@@ -2171,6 +2188,7 @@ function App() {
   const [fsNeedsPermission, setFsNeedsPermission] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false)
   const [autoImportAttempted, setAutoImportAttempted] = useState(false)
   const canPickPaths = typeof window !== 'undefined' && !!window.electronAPI?.selectDirectory
   const [sharedApiAvailable, setSharedApiAvailable] = useState(false)
@@ -3876,7 +3894,7 @@ function App() {
       const store = await createIndexedDbJournalStore(deviceProfile, repositories)
       await store.saveSnapshot(snapshot)
       logDriveSyncDebug('snapshot-saved')
-      const syncResult = await syncOnce({ provider, store, device: deviceProfile, blobStore })
+      const syncResult = await syncOnce({ provider, store, device: deviceProfile, blobStore, downloadRemoteBlobs: false })
       logDriveSyncDebug('sync-once-complete', syncResult)
       const workspace = await provider.ensureWorkspace()
       logDriveSyncDebug('workspace-ready', { folderId: workspace.id })
@@ -3935,6 +3953,161 @@ function App() {
     driveConnection,
     prepareJournalCoreSnapshot,
   ])
+
+  const downloadAttachmentFromDrive = useCallback(
+    async (attachmentId: string) => {
+      const attachment = attachmentsStore.find((candidate) => candidate.id === attachmentId)
+      if (!attachment) return null
+
+      const driveOAuthClient = resolveDriveClientId(driveConnection)
+      if (!driveOAuthClient.clientId) {
+        const label = driveOAuthClient.preferredKind === 'desktop' ? 'desktop' : 'web/PWA'
+        setDriveConnection((prev) => ({
+          ...prev,
+          status: 'needs-auth',
+          lastError: `Add a Google OAuth ${label} client ID before downloading Drive files.`,
+        }))
+        return null
+      }
+
+      const startedAt = new Date().toISOString()
+      setAttachmentsStore((prev) =>
+        prev.map((candidate) =>
+          candidate.id === attachmentId ? { ...candidate, syncStatus: 'syncing', updatedAt: startedAt } : candidate
+        )
+      )
+
+      try {
+        const provider = new GoogleDriveSyncProvider({
+          clientId: driveOAuthClient.clientId,
+          clientSecret: driveOAuthClient.preferredKind === 'desktop' ? driveConnection.desktopClientSecret?.trim() : undefined,
+          folderName: driveConnection.folderName || DRIVE_ROOT_FOLDER,
+          folderId: driveConnection.folderId,
+        })
+        await provider.signIn()
+        const workspace = await provider.ensureWorkspace()
+        const repositories = await createJournalRepositories()
+        const blobStore = new IndexedDbBlobStore(repositories)
+        const result = await downloadAttachmentBlob({
+          attachment,
+          entries: entryDrafts,
+          provider,
+          blobStore,
+        })
+
+        if (!result.attachment.cacheKey) {
+          throw new Error('Drive metadata exists, but the attachment blob was not found in the Drive folder.')
+        }
+
+        const updatedAt = new Date().toISOString()
+        const nextAttachment = { ...result.attachment, syncStatus: 'synced' as const, updatedAt }
+        setAttachmentsStore((prev) =>
+          prev.map((candidate) => (candidate.id === attachmentId ? nextAttachment : candidate))
+        )
+        setFileBoxItems((prev) =>
+          prev.map((item) =>
+            item.attachmentId === attachmentId
+              ? { ...item, driveFileId: nextAttachment.driveFileId ?? item.driveFileId, status: item.status === 'failed' ? 'available' : item.status, updatedAt }
+              : item
+          )
+        )
+        setTransferRecords((prev) =>
+          prev.map((transfer) =>
+            transfer.attachmentId === attachmentId
+              ? { ...transfer, driveFileId: nextAttachment.driveFileId ?? transfer.driveFileId, status: transfer.status === 'failed' ? 'available' : transfer.status, updatedAt }
+              : transfer
+          )
+        )
+        setDriveConnection((prev) => ({
+          ...prev,
+          folderId: workspace.id,
+          status: 'ready',
+          lastError: undefined,
+        }))
+        return nextAttachment
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        setAttachmentsStore((prev) =>
+          prev.map((candidate) =>
+            candidate.id === attachmentId ? { ...candidate, syncStatus: 'failed', updatedAt: new Date().toISOString() } : candidate
+          )
+        )
+        setDriveConnection((prev) => ({ ...prev, status: 'error', lastError: message }))
+        return null
+      }
+    },
+    [attachmentsStore, driveConnection, entryDrafts]
+  )
+
+  const openAttachment = useCallback(
+    async (attachmentId: string) => {
+      const existing = attachmentsStore.find((candidate) => candidate.id === attachmentId)
+      const attachment = existing && (await readAttachmentBlob(existing, attachmentUrls))
+        ? existing
+        : await downloadAttachmentFromDrive(attachmentId)
+      if (!attachment) return
+
+      const blob = await readAttachmentBlob(attachment, attachmentUrls)
+      if (!blob) return
+      const url = URL.createObjectURL(blob)
+      if (attachment.type === 'image' || (attachment.contentType || '').startsWith('image')) {
+        window.open(url, '_blank', 'noopener,noreferrer')
+        window.setTimeout(() => URL.revokeObjectURL(url), 15_000)
+        return
+      }
+      downloadBlob(attachment.filename, blob)
+      window.setTimeout(() => URL.revokeObjectURL(url), 500)
+    },
+    [attachmentUrls, attachmentsStore, downloadAttachmentFromDrive]
+  )
+
+  const removeLocalAttachmentCopy = useCallback(
+    async (attachmentId: string) => {
+      const attachment = attachmentsStore.find((candidate) => candidate.id === attachmentId)
+      if (!attachment) return
+      try {
+        if (attachment.cacheKey) {
+          const repositories = await createJournalRepositories()
+          const blobStore = new IndexedDbBlobStore(repositories)
+          await blobStore.delete(attachment.cacheKey)
+        }
+        if (attachment.cachedPath?.startsWith('idb://')) {
+          await deleteCachedFile(attachment.cachedPath.replace('idb://', ''))
+        }
+        if (attachment.cachedPath?.startsWith('fs://')) {
+          const handle = await restoreCacheHandle()
+          if (handle?.removeEntry) {
+            await handle.removeEntry(attachment.cachedPath.replace('fs://', ''))
+          }
+        }
+      } catch (err) {
+        console.warn('Unable to remove local attachment copy', err)
+      }
+
+      setAttachmentsStore((prev) =>
+        prev.map((candidate) =>
+          candidate.id === attachmentId
+            ? {
+                ...candidate,
+                cacheKey: undefined,
+                cachedPath: undefined,
+                thumbnail: undefined,
+                syncStatus: candidate.driveFileId ? 'remote-available' : 'local',
+                updatedAt: new Date().toISOString(),
+              }
+            : candidate
+        )
+      )
+      setAttachmentUrls((prev) => {
+        const next = { ...prev }
+        const url = next[attachmentId]
+        delete next[attachmentId]
+        if (url) URL.revokeObjectURL(url)
+        return next
+      })
+    },
+    [attachmentsStore]
+  )
 
   const exportLocalBackup = useCallback(async () => {
     setBackupStatus(null)
@@ -4710,6 +4883,8 @@ function App() {
           onCreateEntryForDate={handleCreateEntryForDate}
           calendarMonth={calendarMonth}
           onCalendarMonthChange={setCalendarMonth}
+          mobileOpen={mobileSidebarOpen}
+          onCloseMobile={() => setMobileSidebarOpen(false)}
         />
         {activePane === 'protocols' ? (
           <ProtocolPane
@@ -4747,6 +4922,9 @@ function App() {
             onAttachItem={attachFileBoxItem}
             onRejectItem={rejectFileBoxItem}
             onRetrySync={() => void runGoogleDriveSync()}
+            onDownloadAttachment={(attachmentId) => void downloadAttachmentFromDrive(attachmentId)}
+            onOpenAttachment={(attachmentId) => void openAttachment(attachmentId)}
+            onRemoveLocalAttachmentCopy={(attachmentId) => void removeLocalAttachmentCopy(attachmentId)}
           />
         ) : activePane === 'devices' ? (
           <DevicesPane
@@ -4846,6 +5024,9 @@ function App() {
             onRejectFileBoxItem={rejectFileBoxItem}
             onRunDriveSync={() => void runGoogleDriveSync()}
             onAddFileDestination={addFileDestination}
+            onDownloadAttachment={(attachmentId) => void downloadAttachmentFromDrive(attachmentId)}
+            onOpenAttachment={(attachmentId) => void openAttachment(attachmentId)}
+            onRemoveLocalAttachmentCopy={(attachmentId) => void removeLocalAttachmentCopy(attachmentId)}
             onDeleteEntry={handleDeleteEntry}
             onEnqueueChange={(entryId, blockIds, ts) =>
               setChangeQueue((prev) => [
@@ -4870,6 +5051,35 @@ function App() {
           />
         )}
       </div>
+      <MobilePwaNav
+        activePane={activePane}
+        onToday={() => {
+          handleOpenToday()
+          setMobileSidebarOpen(false)
+        }}
+        onDays={() => setMobileSidebarOpen(true)}
+        onFiles={() => {
+          setActivePane('file-hub')
+          setMobileSidebarOpen(false)
+        }}
+        onSync={() => {
+          setActivePane('sync')
+          setMobileSidebarOpen(false)
+        }}
+        onSettings={() => setSettingsOpen(true)}
+      />
+      <MobileCaptureAction
+        disabled={!selectedEntryId}
+        onQuickNote={() => {
+          if (selectedEntryId) setAutoEditEntryId(selectedEntryId)
+          setActivePane('entries')
+        }}
+        onCaptureFiles={(files) => {
+          if (!selectedEntryId) return Promise.resolve()
+          setActivePane('entries')
+          return queueFileBoxFiles(selectedEntryId, files)
+        }}
+      />
       {newProtocolOpen && (
         <NewProtocolModal
           onClose={() => setNewProtocolOpen(false)}
@@ -4972,6 +5182,8 @@ interface SidebarProps {
   onCreateEntryForDate: (dateBucket: string) => void
   calendarMonth: Date
   onCalendarMonthChange: (next: Date) => void
+  mobileOpen: boolean
+  onCloseMobile: () => void
 }
 
 function Sidebar({
@@ -5017,6 +5229,8 @@ function Sidebar({
   onCreateEntryForDate,
   calendarMonth,
   onCalendarMonthChange,
+  mobileOpen,
+  onCloseMobile,
 }: SidebarProps) {
   const activeLab = labs[0]
   const projectLookup = useMemo(() => new Map(projects.map((p) => [p.id, p])), [projects])
@@ -5091,7 +5305,7 @@ function Sidebar({
   const todayIso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`
 
   return (
-    <aside className={`panel sidebar ${collapsed ? 'collapsed' : ''}`} aria-label="Lab navigation">
+    <aside className={`panel sidebar ${collapsed ? 'collapsed' : ''} ${mobileOpen ? 'mobile-open' : ''}`} aria-label="Lab navigation">
       <div className="sidebar-header">
         <div className="brand-row">
           <img src={logoMark} alt={`${APP_NAME} logo`} className="brand-mark" />
@@ -5102,6 +5316,10 @@ function Sidebar({
         </div>
         <div className="sidebar-header-actions">
           <div className="status-chip success">Sync ready</div>
+          <button className="pill soft icon-button mobile-close-sidebar" onClick={onCloseMobile} type="button">
+            <span className="icon"><UiIcon name="x" /></span>
+            <span className="icon-label">Close</span>
+          </button>
           <button className="pill soft icon-button" onClick={onOpenSettings} type="button" data-testid="settings-button">
             <span className="icon"><UiIcon name="settings" /></span>
             <span className="icon-label">Settings</span>
@@ -5180,7 +5398,7 @@ function Sidebar({
 
           {isEntriesMode ? (
             <div className="quick-actions">
-              <button className="accent" onClick={onTodayEntry} data-testid="today-entry">
+              <button className="accent" onClick={() => { onTodayEntry(); onCloseMobile() }} data-testid="today-entry">
                 <span className="icon"><UiIcon name="plus" /></span>
                 Today's Entry
               </button>
@@ -5376,7 +5594,7 @@ function Sidebar({
                       <button
                         className="accent"
                         type="button"
-                        onClick={() => onCreateEntryForDate(selectedDate)}
+                        onClick={() => { onCreateEntryForDate(selectedDate); onCloseMobile() }}
                         data-testid="calendar-create-entry"
                       >
                         <span className="icon"><UiIcon name="plus" /></span>
@@ -5413,7 +5631,7 @@ function Sidebar({
                       <button
                         key={e.id}
                         className={`entry-item ${selectedEntryId === e.id ? 'active' : ''}`}
-                        onClick={() => onSelectEntry(e.id)}
+                    onClick={() => { onSelectEntry(e.id); onCloseMobile() }}
                         data-testid={`entry-list-item-${e.id}`}
                         style={{ '--row-index': index } as React.CSSProperties}
                       >
@@ -5448,7 +5666,7 @@ function Sidebar({
                   <button
                     key={protocol.id}
                     className={`entry-item ${selectedProtocolId === protocol.id ? 'active' : ''}`}
-                    onClick={() => onSelectProtocol(protocol.id)}
+                    onClick={() => { onSelectProtocol(protocol.id); onCloseMobile() }}
                     data-testid={`protocol-list-item-${protocol.id}`}
                     style={{ '--row-index': index } as React.CSSProperties}
                   >
@@ -5523,6 +5741,88 @@ function Sidebar({
   )
 }
 
+function MobilePwaNav({
+  activePane,
+  onToday,
+  onDays,
+  onFiles,
+  onSync,
+  onSettings,
+}: {
+  activePane: AppPane
+  onToday: () => void
+  onDays: () => void
+  onFiles: () => void
+  onSync: () => void
+  onSettings: () => void
+}) {
+  return (
+    <nav className="mobile-pwa-nav" aria-label="Mobile notebook navigation">
+      <button className={activePane === 'entries' ? 'active' : ''} type="button" onClick={onToday} data-testid="mobile-nav-today">
+        <UiIcon name="note" />
+        <span>Today</span>
+      </button>
+      <button type="button" onClick={onDays} data-testid="mobile-nav-days">
+        <UiIcon name="list" />
+        <span>Days</span>
+      </button>
+      <button className={activePane === 'file-hub' ? 'active' : ''} type="button" onClick={onFiles} data-testid="mobile-nav-files">
+        <UiIcon name="folder" />
+        <span>Files</span>
+      </button>
+      <button className={activePane === 'sync' ? 'active' : ''} type="button" onClick={onSync} data-testid="mobile-nav-sync">
+        <UiIcon name="refresh" />
+        <span>Sync</span>
+      </button>
+      <button type="button" onClick={onSettings} data-testid="mobile-nav-settings">
+        <UiIcon name="settings" />
+        <span>Settings</span>
+      </button>
+    </nav>
+  )
+}
+
+function MobileCaptureAction({
+  disabled,
+  onQuickNote,
+  onCaptureFiles,
+}: {
+  disabled: boolean
+  onQuickNote: () => void
+  onCaptureFiles: (files: File[]) => Promise<void>
+}) {
+  const inputRef = useRef<HTMLInputElement | null>(null)
+  const [busy, setBusy] = useState(false)
+
+  return (
+    <div className="mobile-capture-dock" aria-label="Mobile capture actions">
+      <button className="mobile-capture-secondary" type="button" onClick={onQuickNote} disabled={disabled || busy}>
+        <UiIcon name="edit" />
+        <span>Note</span>
+      </button>
+      <button className="mobile-capture-primary" type="button" onClick={() => inputRef.current?.click()} disabled={disabled || busy}>
+        <UiIcon name="camera" />
+        <span>{busy ? 'Adding...' : 'Capture'}</span>
+      </button>
+      <input
+        ref={inputRef}
+        type="file"
+        accept="image/*,.pdf,.csv,.tsv,.xlsx,.xls,.doc,.docx,text/*"
+        capture="environment"
+        multiple
+        hidden
+        onChange={(event) => {
+          const files = Array.from(event.currentTarget.files ?? [])
+          event.currentTarget.value = ''
+          if (!files.length) return
+          setBusy(true)
+          void onCaptureFiles(files).finally(() => setBusy(false))
+        }}
+      />
+    </div>
+  )
+}
+
 interface EditorPaneProps {
   entry?: Entry
   project?: Project
@@ -5551,6 +5851,9 @@ interface EditorPaneProps {
   onRejectFileBoxItem: (itemId: string) => void
   onRunDriveSync: () => void
   onAddFileDestination: (entryId: string, val: { path: string; label?: string }) => Attachment
+  onDownloadAttachment: (attachmentId: string) => void
+  onOpenAttachment: (attachmentId: string) => void
+  onRemoveLocalAttachmentCopy: (attachmentId: string) => void
   onDeleteEntry: (entryId: string) => void
   onEnqueueChange: (entryId: string, blockIds: string[], timestamp: string) => void
   onAutoSaveEntry: (entryId: string, content: Block[]) => Promise<void>
@@ -5596,6 +5899,9 @@ function EditorPane({
   onRejectFileBoxItem,
   onRunDriveSync,
   onAddFileDestination,
+  onDownloadAttachment,
+  onOpenAttachment,
+  onRemoveLocalAttachmentCopy,
   onDeleteEntry,
   onEnqueueChange,
   onAutoSaveEntry,
@@ -6477,12 +6783,16 @@ function EditorPane({
       {activeTab === 'filebox' && (
         <EntryFileBoxPanel
           entry={entry}
+          attachments={attachments}
           fileBoxItems={fileBoxItems}
           transfers={transferRecords}
           onQueueFiles={onQueueFileBoxFiles}
           onAttachItem={onAttachFileBoxItem}
           onRejectItem={onRejectFileBoxItem}
           onRetrySync={onRunDriveSync}
+          onDownloadAttachment={onDownloadAttachment}
+          onOpenAttachment={onOpenAttachment}
+          onRemoveLocalAttachmentCopy={onRemoveLocalAttachmentCopy}
         />
       )}
 
@@ -6531,8 +6841,11 @@ function EditorPane({
             )}
             {attachments.length > 0 && (
               <div className="attachment-list">
-                {attachments.map((file) => (
-                  <div key={file.id} className="attachment-row">
+                {attachments.map((file) => {
+                  const localUrl = attachmentUrls[file.id]
+                  const isRemoteOnly = attachmentIsRemoteAvailable(file, localUrl)
+                  return (
+                  <div key={file.id} className={`attachment-row ${isRemoteOnly ? 'remote-only' : ''}`}>
                     <div className="attachment-icon"><UiIcon name="paperclip" /></div>
                     <div className="attachment-body">
                       <div className="title-sm">{file.filename}</div>
@@ -6541,15 +6854,33 @@ function EditorPane({
                         <span>Source: {file.source ? file.source : 'manual'}</span>
                         <span>{file.contentType ? `Type: ${file.contentType}` : `Kind: ${file.type}`}</span>
                         <span>{file.sha256 ? `Checksum: ${file.sha256.slice(0, 12)}...` : 'Checksum: pending'}</span>
+                        <span>Status: {attachmentStorageLabel(file, localUrl)}</span>
                       </div>
                     </div>
                     <span className="pill soft">{file.type.toUpperCase()}</span>
                     <span className="pill soft">{file.filesize}</span>
-                    <span className={`pill soft ${file.sha256 ? 'verified-pill' : 'warning-pill'}`}>
-                      {file.sha256 ? 'Verified' : 'Needs hash'}
-                    </span>
+                    <div className="attachment-actions">
+                      {isRemoteOnly ? (
+                        <button className="pill soft" type="button" onClick={() => onDownloadAttachment(file.id)}>
+                          Download
+                        </button>
+                      ) : (
+                        <button className="pill soft" type="button" onClick={() => onOpenAttachment(file.id)}>
+                          Open
+                        </button>
+                      )}
+                      {(file.cacheKey || file.cachedPath || localUrl) && file.driveFileId && (
+                        <button className="ghost subtle" type="button" onClick={() => onRemoveLocalAttachmentCopy(file.id)}>
+                          Remove local
+                        </button>
+                      )}
+                      <span className={`pill soft ${file.sha256 ? 'verified-pill' : 'warning-pill'}`}>
+                        {isRemoteOnly ? 'On demand' : file.sha256 ? 'Verified' : 'Needs hash'}
+                      </span>
+                    </div>
                   </div>
-                ))}
+                  )
+                })}
               </div>
             )}
           </div>
@@ -6826,7 +7157,7 @@ function fileBoxRecoveryHint({
   if ((attachment?.driveFileId || item.driveFileId || transfer?.driveFileId) && !attachment?.cacheKey && !attachment?.cachedPath && item.status !== 'attached') {
     return {
       label: 'Remote only',
-      detail: 'This item is visible from Drive but the local blob cache is missing. Retry sync to restore the local copy before attaching.',
+      detail: 'Metadata is synced from Drive. Download the file only when you need to open or attach the local blob.',
       tone: 'warning',
       canRetry: true,
     }
@@ -6852,25 +7183,34 @@ function fileBoxRecoveryHint({
 
 function EntryFileBoxPanel({
   entry,
+  attachments,
   fileBoxItems,
   transfers,
   onQueueFiles,
   onAttachItem,
   onRejectItem,
   onRetrySync,
+  onDownloadAttachment,
+  onOpenAttachment,
+  onRemoveLocalAttachmentCopy,
 }: {
   entry: Entry
+  attachments: Attachment[]
   fileBoxItems: FileBoxItem[]
   transfers: TransferRecord[]
   onQueueFiles: (entryId: string, files: File[]) => Promise<void>
   onAttachItem: (itemId: string) => void
   onRejectItem: (itemId: string) => void
   onRetrySync: () => void
+  onDownloadAttachment: (attachmentId: string) => void
+  onOpenAttachment: (attachmentId: string) => void
+  onRemoveLocalAttachmentCopy: (attachmentId: string) => void
 }) {
   const inputRef = useRef<HTMLInputElement | null>(null)
   const [busy, setBusy] = useState(false)
   const activeItems = fileBoxItems.filter((item) => item.status !== 'rejected' && item.status !== 'removed')
   const linkedAttachmentIds = useMemo(() => new Set(entry.linkedFiles), [entry.linkedFiles])
+  const attachmentsById = useMemo(() => new Map(attachments.map((attachment) => [attachment.id, attachment])), [attachments])
 
   const submitFiles = useCallback(
     async (files: File[]) => {
@@ -6936,11 +7276,14 @@ function EntryFileBoxPanel({
             {activeItems.length === 0 && <div className="connected-empty">No files waiting. Add one from this device or a mobile PWA share sheet.</div>}
             {activeItems.map((item) => {
               const transfer = transfers.find((candidate) => candidate.fileBoxItemId === item.id)
+              const attachment = item.attachmentId ? attachmentsById.get(item.attachmentId) : undefined
               const recovery = fileBoxRecoveryHint({
                 item,
+                attachment,
                 transfer,
                 isLinkedToEntry: Boolean(item.attachmentId && linkedAttachmentIds.has(item.attachmentId)),
               })
+              const isRemoteOnly = attachment ? attachmentIsRemoteAvailable(attachment) : false
               return (
                 <div className={`connected-row filebox-row ${recovery ? `has-recovery ${recovery.tone}` : ''}`} key={item.id}>
                 <div className="connected-row-icon"><UiIcon name={item.contentType?.startsWith('image') ? 'image' : 'file'} /></div>
@@ -6955,9 +7298,25 @@ function EntryFileBoxPanel({
                   )}
                 </div>
                 <div className="connected-row-actions">
+                  {attachment && (
+                    isRemoteOnly ? (
+                      <button className="pill soft" type="button" onClick={() => onDownloadAttachment(attachment.id)}>
+                        Download
+                      </button>
+                    ) : (
+                      <button className="pill soft" type="button" onClick={() => onOpenAttachment(attachment.id)}>
+                        Open
+                      </button>
+                    )
+                  )}
                   {item.status !== 'attached' && (
                     <button className="pill soft" type="button" onClick={() => onAttachItem(item.id)} disabled={!item.attachmentId || item.status === 'failed'}>
                       Attach
+                    </button>
+                  )}
+                  {attachment?.driveFileId && (attachment.cacheKey || attachment.cachedPath) && (
+                    <button className="ghost subtle" type="button" onClick={() => onRemoveLocalAttachmentCopy(attachment.id)}>
+                      Remove local
                     </button>
                   )}
                   {recovery?.canRetry && (
@@ -7000,6 +7359,9 @@ function FileHubPane({
   onAttachItem,
   onRejectItem,
   onRetrySync,
+  onDownloadAttachment,
+  onOpenAttachment,
+  onRemoveLocalAttachmentCopy,
 }: {
   entries: Record<string, Entry>
   attachments: Attachment[]
@@ -7009,6 +7371,9 @@ function FileHubPane({
   onAttachItem: (itemId: string) => void
   onRejectItem: (itemId: string) => void
   onRetrySync: () => void
+  onDownloadAttachment: (attachmentId: string) => void
+  onOpenAttachment: (attachmentId: string) => void
+  onRemoveLocalAttachmentCopy: (attachmentId: string) => void
 }) {
   const attachmentsById = useMemo(() => new Map(attachments.map((att) => [att.id, att])), [attachments])
   const openItems = fileBoxItems.filter((item) => item.status !== 'attached' && item.status !== 'rejected' && item.status !== 'removed')
@@ -7044,6 +7409,7 @@ function FileHubPane({
               const attachment = item.attachmentId ? attachmentsById.get(item.attachmentId) : undefined
               const transfer = transfers.find((candidate) => candidate.fileBoxItemId === item.id)
               const recovery = fileBoxRecoveryHint({ item, attachment, transfer })
+              const isRemoteOnly = attachment ? attachmentIsRemoteAvailable(attachment) : false
               return (
                 <div className={`connected-row filebox-row ${recovery ? `has-recovery ${recovery.tone}` : ''}`} key={item.id}>
                   <div className="connected-row-icon"><UiIcon name={attachment?.type === 'image' ? 'image' : 'file'} /></div>
@@ -7059,8 +7425,16 @@ function FileHubPane({
                   </div>
                   <div className="connected-row-actions">
                     <button className="pill soft" type="button" onClick={() => onSelectEntry(item.entryId)}>Open</button>
+                    {attachment && (
+                      isRemoteOnly ? (
+                        <button className="pill soft" type="button" onClick={() => onDownloadAttachment(attachment.id)}>Download</button>
+                      ) : (
+                        <button className="pill soft" type="button" onClick={() => onOpenAttachment(attachment.id)}>View</button>
+                      )
+                    )}
                     <button className="accent" type="button" onClick={() => onAttachItem(item.id)} disabled={!item.attachmentId || item.status === 'failed'}>Attach</button>
                     {recovery?.canRetry && <button className="ghost subtle" type="button" onClick={onRetrySync}>Retry sync</button>}
+                    {attachment?.driveFileId && (attachment.cacheKey || attachment.cachedPath) && <button className="ghost subtle" type="button" onClick={() => onRemoveLocalAttachmentCopy(attachment.id)}>Remove local</button>}
                     <button className="ghost subtle" type="button" onClick={() => onRejectItem(item.id)}>Reject</button>
                   </div>
                 </div>

@@ -9,7 +9,7 @@
     "verify:pwa": "node scripts/verify-pwa-build.mjs",
     "lint": "eslint .",
     "test:e2e": "playwright test",
-    "screenshots": "GENERATE_SCREENSHOTS=1 playwright test screenshots.spec.ts",
+    "screenshots": "node scripts/run-screenshots.mjs",
     "preview": "vite preview"
   },
   "dependencies": {

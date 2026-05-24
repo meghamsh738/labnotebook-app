@@ -20,9 +20,30 @@ License: All Rights Reserved. See `LICENSE`.
 - **Devices**: local device profile with platform, device id, last seen, and Drive presence.
 - **Transfers**: table-first status view for queued, uploaded, attached, failed, conflicted, and removed files.
 - **Sync-safe data core**: entries, attachments, devices, transfers, conflicts, tombstones, and a sync queue are mirrored into IndexedDB while localStorage remains as a compatibility fallback.
-- **Sync**: Google Drive folder setup, per-day entry JSON upload, per-day attachment blob folders, device metadata upload, File Box/transfer metadata upload, conflict/tombstone folders, and clear storage-path reporting.
-- **PWA**: manifest, icon, service worker, standalone display mode, camera/file upload support, and share-target declaration for supported mobile browsers.
+- **Sync**: Google Drive folder setup, per-day entry JSON upload, per-day attachment blob folders, device metadata upload, File Box/transfer metadata upload, conflict/tombstone folders, on-demand attachment blobs, and clear storage-path reporting.
+- **PWA**: manifest, icon, service worker, standalone display mode, native Android install flow, camera/file upload support, and share-target declaration for supported mobile browsers.
 - **Standalone desktop**: Electron shell with filesystem folder-picking IPC, directory creation IPC, and Google OAuth PKCE loopback support.
+
+## Screenshots
+
+<table>
+  <tr>
+    <td width="50%"><img src="screenshots/01-dashboard.png" alt="Daily notebook workspace" width="100%"></td>
+    <td width="50%"><img src="screenshots/06-file-hub.png" alt="Entry File Hub and transfer flow" width="100%"></td>
+  </tr>
+  <tr>
+    <td><strong>Daily workspace</strong><br>Warm notebook editor, entry tabs, workbook/files/details, and local sync status.</td>
+    <td><strong>File Hub</strong><br>Entry-level file box, transfer status, recovery actions, and on-demand file availability.</td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="screenshots/07-sync-pane.png" alt="Google Drive sync pane" width="100%"></td>
+    <td width="50%"><img src="screenshots/08-mobile-landing.png" alt="Mobile PWA layout" width="100%"></td>
+  </tr>
+  <tr>
+    <td><strong>Google Drive sync</strong><br>Provider setup, storage paths, queue status, devices, transfers, and conflict surfaces.</td>
+    <td><strong>Android PWA</strong><br>Mobile-first Today screen with bottom navigation and quick capture controls.</td>
+  </tr>
+</table>
 
 ## Google Drive OAuth
 
@@ -83,12 +104,16 @@ The existing local pairing flow is still available for laptop-to-phone use on a 
 ```bash
 npm --prefix web run lint
 npm --prefix web run build
+npm --prefix web run verify:pwa
 npm --prefix web run test:e2e -- --project=desktop-chromium
 npm --prefix web run test:e2e -- --project=mobile-chromium
+npm --prefix web run screenshots
 npm run standalone:build
 ```
 
 `npm --prefix web run screenshots` regenerates PNG screenshots under `screenshots/`.
+
+The packaged OAuth smoke requires local-only desktop OAuth environment variables. Set them in your shell only, never commit them, then run `npm run smoke:packaged-oauth`.
 
 ## First Milestone Status
 

@@ -148,6 +148,44 @@ test('attachment blobs upload to Drive paths and restore into another device cac
   expect(await restoredBlob?.text()).toBe('image bytes')
 })
 
+test('attachment metadata can sync without downloading remote blobs', async () => {
+  const provider = new MockSyncProvider()
+  const desktop = device('dev-desktop', 'Desktop')
+  const mobile = device('dev-mobile', 'Mobile')
+  const dailyEntry = entry({ id: 'entry-2026-05-23', date: '2026-05-23', text: 'has image', deviceId: desktop.id })
+  const desktopBlobStore = new MemoryBlobStore()
+  const localBlob = await desktopBlobStore.put('cache-att-image', new Blob(['image bytes'], { type: 'image/png' }))
+  const desktopStore = new MemoryJournalStore(snapshot(desktop, [dailyEntry], [
+    {
+      ...attachment({ id: 'att-image', entryId: dailyEntry.id, filename: 'image.png', sha256: localBlob.sha256 }),
+      cacheKey: localBlob.id,
+      contentType: localBlob.mimeType,
+    },
+  ]))
+  const mobileStore = new MemoryJournalStore(snapshot(mobile))
+  const mobileBlobStore = new MemoryBlobStore()
+
+  await syncOnce({ provider, store: desktopStore, device: desktop, blobStore: desktopBlobStore })
+  const pulled = await syncOnce({
+    provider,
+    store: mobileStore,
+    device: mobile,
+    blobStore: mobileBlobStore,
+    downloadRemoteBlobs: false,
+  })
+  const mobileSnapshot = await mobileStore.getSnapshot()
+  const restoredBlob = await mobileBlobStore.get('cache-att-image')
+
+  expect(pulled.downloadedBlobs).toBe(0)
+  expect(mobileSnapshot.attachments[0]).toMatchObject({
+    id: 'att-image',
+    sha256: localBlob.sha256,
+    syncStatus: 'remote-available',
+  })
+  expect(mobileSnapshot.attachments[0].cacheKey).toBeUndefined()
+  expect(restoredBlob).toBeUndefined()
+})
+
 test('same-day competing edits create a conflict and keep the local copy visible', async () => {
   const provider = new MockSyncProvider()
   const desktop = device('dev-desktop', 'Desktop')

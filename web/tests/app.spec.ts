@@ -405,7 +405,7 @@ test.describe('Lab note taking app', () => {
 
     await page.setViewportSize({ width: 390, height: 844 })
     await boot(page, { noFail: '1' })
-    await page.getByTestId('today-entry').click()
+    await page.getByTestId('mobile-nav-today').click()
     await ensureEditMode(page)
 
     const imageInput = page.locator('input[type="file"][accept="image/*"]:not([capture])').first()

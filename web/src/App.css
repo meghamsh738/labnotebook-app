@@ -6220,3 +6220,436 @@ code,
     display: none;
   }
 }
+
+.mobile-pwa-nav,
+.mobile-capture-dock,
+.mobile-close-sidebar {
+  display: none;
+}
+
+.attachment-row.remote-only {
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--accent) 7%, transparent), transparent 42%),
+    rgba(255, 252, 245, 0.9);
+}
+
+.attachment-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 7px;
+  flex-wrap: wrap;
+}
+
+@media (max-width: 760px) {
+  .app-bg {
+    padding: 0;
+    overflow: hidden;
+  }
+
+  .app-shell {
+    display: block;
+    height: 100%;
+    min-height: 100dvh;
+  }
+
+  .panel.editor,
+  .connected-workspace {
+    width: 100%;
+    height: 100dvh;
+    min-height: 100dvh;
+    border: 0;
+    border-radius: 0;
+    padding: 12px 10px 108px;
+    overflow-x: hidden;
+    overflow-y: auto;
+    scroll-padding-bottom: 128px;
+  }
+
+  .panel.editor::-webkit-scrollbar,
+  .connected-workspace::-webkit-scrollbar,
+  .sidebar-content::-webkit-scrollbar {
+    width: 0;
+    height: 0;
+  }
+
+  .sidebar {
+    position: fixed;
+    z-index: 80;
+    top: 10px;
+    bottom: 92px;
+    left: 10px;
+    width: min(88vw, 340px);
+    height: auto;
+    max-height: none;
+    transform: translateX(calc(-100% - 18px));
+    opacity: 0;
+    pointer-events: none;
+    transition: transform 180ms ease, opacity 180ms ease;
+    box-shadow: 0 24px 60px rgba(0, 47, 38, 0.28);
+  }
+
+  .sidebar.mobile-open {
+    transform: translateX(0);
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  .sidebar.collapsed {
+    width: min(88vw, 340px);
+  }
+
+  .sidebar.collapsed .sidebar-content,
+  .sidebar.collapsed .brand-meta,
+  .sidebar.collapsed .sidebar-header-actions,
+  .sidebar.collapsed .sidebar-footer-meta {
+    display: flex;
+  }
+
+  .mobile-close-sidebar {
+    display: inline-flex;
+  }
+
+  .sidebar-header {
+    padding: 12px;
+  }
+
+  .sidebar-content {
+    padding: 10px 12px 92px;
+    gap: 9px;
+  }
+
+  .sidebar-footer {
+    padding: 10px 12px;
+  }
+
+  .editor-header {
+    position: sticky;
+    top: 0;
+    z-index: 30;
+    margin: -12px -10px 8px;
+    padding: 10px;
+    background: rgba(255, 252, 245, 0.96);
+    backdrop-filter: blur(10px);
+  }
+
+  .editor-header .entry-tabs-row,
+  .editor-header .breadcrumbs,
+  .editor-header .meta-row {
+    display: none;
+  }
+
+  .editor-header .breadcrumb-row {
+    display: flex;
+    justify-content: flex-end;
+  }
+
+  .editor-header .editor-actions {
+    display: flex;
+    justify-content: flex-end;
+    flex-wrap: nowrap;
+    gap: 6px;
+    max-width: 100%;
+    overflow-x: auto;
+    padding-bottom: 2px;
+    scrollbar-width: none;
+  }
+
+  .editor-header .editor-actions::-webkit-scrollbar {
+    display: none;
+  }
+
+  .editor-header .editor-actions .ghost.icon-btn,
+  .editor-header .editor-actions .accent.icon-btn {
+    white-space: nowrap;
+    flex: 0 0 auto;
+  }
+
+  .title-row {
+    align-items: center;
+    gap: 8px;
+    margin: 6px 0;
+  }
+
+  .title-row h1 {
+    font-size: 22px;
+    line-height: 1.1;
+  }
+
+  .tag-editor,
+  .editor-tabs {
+    overflow-x: auto;
+    flex-wrap: nowrap;
+    scrollbar-width: none;
+  }
+
+  .tag-editor::-webkit-scrollbar,
+  .editor-tabs::-webkit-scrollbar {
+    display: none;
+  }
+
+  .editor-tabs .tab-button {
+    flex: 0 0 auto;
+  }
+
+  .editor-toolbar-dock {
+    margin-top: 8px;
+  }
+
+  .editor-toolbar {
+    overflow-x: auto;
+    flex-wrap: nowrap;
+    scrollbar-width: none;
+  }
+
+  .editor-toolbar::-webkit-scrollbar {
+    display: none;
+  }
+
+  .toolbar-group {
+    flex: 0 0 auto;
+  }
+
+  .editor-workspace {
+    display: block;
+  }
+
+  .entry-browser-rail,
+  .entry-context-panel {
+    display: none;
+  }
+
+  .editor-main-stack {
+    padding-bottom: 112px;
+  }
+
+  .content-section,
+  .panel-card,
+  .workbook-card,
+  .editor-surface {
+    padding: 16px;
+    border-radius: 10px;
+  }
+
+  .workbook-tab-panel,
+  .tab-panel {
+    overflow: visible;
+  }
+
+  .connected-page-head,
+  .connected-hero {
+    display: block;
+  }
+
+  .connected-page-head h1,
+  .connected-hero h2 {
+    font-size: 23px;
+  }
+
+  .connected-metrics,
+  .connected-grid.two {
+    grid-template-columns: 1fr;
+  }
+
+  .connected-row,
+  .attachment-row {
+    align-items: flex-start;
+  }
+
+  .connected-row-actions,
+  .attachment-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .mobile-pwa-nav {
+    position: fixed;
+    z-index: 90;
+    left: 10px;
+    right: 10px;
+    bottom: max(8px, env(safe-area-inset-bottom));
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 2px;
+    padding: 6px;
+    border: 1px solid rgba(32, 48, 42, 0.14);
+    border-radius: 18px;
+    background: rgba(255, 252, 245, 0.96);
+    box-shadow: 0 20px 50px rgba(20, 38, 32, 0.18);
+    backdrop-filter: blur(16px);
+  }
+
+  .mobile-pwa-nav button {
+    display: grid;
+    place-items: center;
+    gap: 3px;
+    min-width: 0;
+    min-height: 52px;
+    border: 0;
+    border-radius: 13px;
+    background: transparent;
+    color: var(--text-3);
+    font: 600 11px/1.1 var(--font-body);
+  }
+
+  .mobile-pwa-nav button.active {
+    background: color-mix(in srgb, var(--accent) 12%, transparent);
+    color: var(--accent);
+  }
+
+  .mobile-pwa-nav .ui-icon {
+    width: 19px;
+    height: 19px;
+  }
+
+  .mobile-capture-dock {
+    position: fixed;
+    z-index: 91;
+    right: 18px;
+    bottom: max(74px, calc(env(safe-area-inset-bottom) + 74px));
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .mobile-capture-dock button {
+    border: 1px solid rgba(32, 48, 42, 0.14);
+    border-radius: 999px;
+    box-shadow: 0 16px 36px rgba(20, 38, 32, 0.18);
+    font: 700 13px/1 var(--font-body);
+  }
+
+  .mobile-capture-secondary {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 10px 12px;
+    background: rgba(255, 252, 245, 0.94);
+    color: var(--text-2);
+  }
+
+  .mobile-capture-primary {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 13px 16px;
+    background: var(--accent);
+    color: #fffaf0;
+  }
+
+  .editor-header .editor-actions {
+    display: flex !important;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 7px;
+    min-width: 0;
+  }
+
+  .editor-header .editor-actions > [data-testid='export-pdf'],
+  .editor-header .editor-actions > [data-testid='export-md'],
+  .editor-header .editor-actions > [data-testid='header-toggle'] {
+    display: none;
+  }
+
+  .editor-header .edit-actions {
+    width: auto;
+    display: flex !important;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 7px;
+  }
+
+  .editor-header .editor-actions .icon-btn,
+  .editor-header .edit-actions .icon-btn {
+    width: auto;
+    min-width: 0;
+    min-height: 38px;
+    justify-content: center;
+    flex: 0 0 auto;
+    padding: 8px 12px;
+    border-radius: 12px;
+  }
+
+  .editor-header .edit-actions .accent.icon-btn {
+    min-width: 92px;
+  }
+
+  .editor-header .title-row {
+    align-items: flex-start;
+    margin-top: 4px;
+  }
+
+  .editor-header .title-row h1 {
+    font-size: 24px;
+    line-height: 1.1;
+  }
+
+  .editor-header .tag-editor,
+  .editor-header .editor-tabs {
+    display: flex !important;
+    flex-wrap: nowrap;
+    max-width: 100%;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: none;
+  }
+
+  .editor-header .tag-editor::-webkit-scrollbar,
+  .editor-header .editor-tabs::-webkit-scrollbar {
+    display: none;
+  }
+
+  .editor-header .tag-editor {
+    gap: 6px;
+    padding: 2px 2px 6px;
+  }
+
+  .editor-header .tag-picker.inline {
+    flex: 0 0 auto;
+    width: max-content;
+    max-width: none;
+  }
+
+  .editor-header .tag-picker.inline .chip-row {
+    display: flex;
+    flex-wrap: nowrap;
+    overflow: visible;
+    max-height: none;
+  }
+
+  .editor-header .tag-picker.inline .pill {
+    flex: 0 0 auto;
+  }
+
+  .editor-header .editor-tabs {
+    gap: 7px;
+    padding: 3px 2px 7px;
+  }
+
+  .editor-header .editor-tabs .tab-button {
+    width: auto;
+    min-width: max-content;
+    flex: 0 0 auto;
+    padding: 8px 13px;
+    border-radius: 999px;
+  }
+
+  .editor-toolbar {
+    min-height: 44px;
+    max-height: 54px;
+    flex-wrap: nowrap !important;
+    overflow-x: auto !important;
+    overflow-y: hidden !important;
+    scrollbar-width: none;
+  }
+
+  .editor-toolbar::-webkit-scrollbar {
+    display: none;
+  }
+
+  .editor-toolbar .toolbar-group {
+    flex: 0 0 auto;
+    flex-wrap: nowrap;
+    min-width: max-content;
+  }
+}

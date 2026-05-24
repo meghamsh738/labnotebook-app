@@ -14,6 +14,7 @@ pnpm-debug.log*
 .labnote-data/
 .labnote-dist/
 .labnote-smoke/
+.labnote-device-smoke/
 
 # Playwright artifacts
 web/test-results/

@@ -168,7 +168,9 @@ export function buildPendingSyncQueue(
 
   for (const attachment of snapshot.attachments) {
     const updatedAt = attachment.updatedAt || attachment.createdAt || queuedAt
-    if (attachment.syncStatus !== 'synced' || !attachment.driveFileId || !threshold || (Date.parse(updatedAt) || 0) > threshold) {
+    const remoteMetadataSynced =
+      (attachment.syncStatus === 'synced' || attachment.syncStatus === 'remote-available') && Boolean(attachment.driveFileId)
+    if (!remoteMetadataSynced || !threshold || (Date.parse(updatedAt) || 0) > threshold) {
       queue.push({
         id: `attachment-${attachment.id}`,
         entityKind: 'attachment',

@@ -226,7 +226,7 @@ export type SyncProviderKind = 'google-drive'
 
 export type DevicePlatform = 'desktop' | 'mobile' | 'tablet' | 'web'
 
-export type JournalSyncStatus = 'local' | 'queued' | 'syncing' | 'synced' | 'failed' | 'conflict'
+export type JournalSyncStatus = 'local' | 'queued' | 'syncing' | 'synced' | 'remote-available' | 'failed' | 'conflict'
 
 export interface DeviceProfile {
   id: string

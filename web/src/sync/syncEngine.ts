@@ -248,8 +248,9 @@ export async function syncOnce(params: {
   store: LocalJournalStore
   device: DeviceProfile
   blobStore?: BlobStore
+  downloadRemoteBlobs?: boolean
 }): Promise<SyncEngineResult> {
-  const { provider, store, device, blobStore } = params
+  const { provider, store, device, blobStore, downloadRemoteBlobs = true } = params
   await provider.signIn()
   await provider.ensureWorkspace()
   await provider.ensureDeviceRecord(device)
@@ -352,7 +353,7 @@ export async function syncOnce(params: {
     const localHash = localIndex >= 0 ? await attachmentMetadataHash(snapshot.attachments[localIndex]) : undefined
 
     if (localIndex < 0) {
-      const restoredAttachment = await restoreRemoteAttachmentBlob(remoteAttachment, snapshot.entries, provider, blobStore)
+      const restoredAttachment = await restoreRemoteAttachmentBlob(remoteAttachment, snapshot.entries, provider, blobStore, downloadRemoteBlobs)
       if (restoredAttachment.downloaded) downloadedBlobs += 1
       snapshot.attachments.push(restoredAttachment.attachment)
       meta.attachmentHashes[remoteAttachment.id] = remoteHash
@@ -366,7 +367,7 @@ export async function syncOnce(params: {
     }
 
     if (localHash === baseHash || !baseHash) {
-      const restoredAttachment = await restoreRemoteAttachmentBlob(remoteAttachment, snapshot.entries, provider, blobStore)
+      const restoredAttachment = await restoreRemoteAttachmentBlob(remoteAttachment, snapshot.entries, provider, blobStore, downloadRemoteBlobs)
       if (restoredAttachment.downloaded) downloadedBlobs += 1
       snapshot.attachments[localIndex] = restoredAttachment.attachment
       meta.attachmentHashes[remoteAttachment.id] = remoteHash
@@ -480,9 +481,21 @@ async function restoreRemoteAttachmentBlob(
   attachment: Attachment,
   entries: Record<string, Entry>,
   provider: SyncProvider,
-  blobStore?: BlobStore
+  blobStore?: BlobStore,
+  downloadRemoteBlobs = true
 ): Promise<{ attachment: Attachment; downloaded: boolean }> {
-  if (!blobStore) return { attachment, downloaded: false }
+  if (!blobStore || !downloadRemoteBlobs) {
+    return {
+      attachment: {
+        ...attachment,
+        cacheKey: undefined,
+        cachedPath: undefined,
+        thumbnail: undefined,
+        syncStatus: attachment.driveFileId ? 'remote-available' : attachment.syncStatus,
+      },
+      downloaded: false,
+    }
+  }
   const key = attachmentBlobKey(attachment)
   if (await blobStore.has(key)) return { attachment: { ...attachment, cacheKey: key }, downloaded: false }
   const remoteBlob = await provider.getBlob(attachmentBlobPath(attachment, entries))
@@ -503,6 +516,15 @@ async function restoreRemoteAttachmentBlob(
     },
     downloaded: true,
   }
+}
+
+export async function downloadAttachmentBlob(params: {
+  attachment: Attachment
+  entries: Record<string, Entry>
+  provider: SyncProvider
+  blobStore: BlobStore
+}): Promise<{ attachment: Attachment; downloaded: boolean }> {
+  return restoreRemoteAttachmentBlob(params.attachment, params.entries, params.provider, params.blobStore, true)
 }
 
 async function readRemoteEntries(provider: SyncProvider, deviceId: string) {
