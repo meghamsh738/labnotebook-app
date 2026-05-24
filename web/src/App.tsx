@@ -36,7 +36,6 @@ import type {
 import {
   CONNECTED_STORAGE_KEYS,
   DRIVE_ROOT_FOLDER,
-  GoogleDriveProvider,
   createDeviceProfile,
   createManifest,
   loadJson,
@@ -47,14 +46,19 @@ import {
   type DriveConnectionState,
 } from './sync/connectedSync'
 import {
-  buildAttachmentDriveFileName,
-  buildAttachmentDriveFolder,
-  buildEntryDriveFileName,
   hashBlobSha256,
   hydrateOrMigrateJournalSnapshot,
   persistJournalSnapshot,
   type JournalHydrationResult,
 } from './sync/dataCore'
+import { IndexedDbBlobStore } from './sync/blobStore'
+import { createJournalRepositories } from './sync/repositories'
+import {
+  createIndexedDbJournalStore,
+  syncOnce,
+  type SyncEngineResult,
+} from './sync/syncEngine'
+import { GoogleDriveSyncProvider } from './sync/syncProvider'
 
 const dateOnly = new Intl.DateTimeFormat('en-US', {
   month: 'short',
@@ -82,6 +86,10 @@ type AppPaths = {
 }
 
 type AppPane = 'entries' | 'protocols' | 'file-hub' | 'devices' | 'transfers' | 'sync'
+
+type DriveSyncSummary = SyncEngineResult & {
+  syncedAt: string
+}
 
 type DateRange = {
   start: string
@@ -1746,9 +1754,10 @@ async function readAttachmentBlob(
   if (attachment.cachedPath?.startsWith('idb://')) {
     const key = attachment.cachedPath.replace('idb://', '')
     try {
-      return (await getCachedFile(key)) ?? null
+      const cached = await getCachedFile(key)
+      if (cached) return cached
     } catch {
-      return null
+      // Fall through to the journal blob store or thumbnail URL.
     }
   }
 
@@ -1758,15 +1767,27 @@ async function readAttachmentBlob(
     const dirWithPerm = dir ? (dir as FsDirectoryWithPerm) : null
     if (dirWithPerm?.queryPermission) {
       const perm = await dirWithPerm.queryPermission({ mode: 'read' })
-      if (perm !== 'granted') return null
+      if (perm !== 'granted') {
+        // Fall through to the journal blob store or thumbnail URL.
+      }
     }
     if (dir) {
       try {
         const handle = await dir.getFileHandle(name)
         return await handle.getFile()
       } catch {
-        return null
+        // Fall through to the journal blob store or thumbnail URL.
       }
+    }
+  }
+
+  if (attachment.cacheKey) {
+    try {
+      const repositories = await createJournalRepositories()
+      const blobStore = new IndexedDbBlobStore(repositories)
+      return (await blobStore.get(attachment.cacheKey)) ?? null
+    } catch {
+      // Older browsers or restricted private contexts can block IndexedDB.
     }
   }
 
@@ -1781,6 +1802,12 @@ async function readAttachmentBlob(
   }
 
   return null
+}
+
+async function writeAttachmentBlobToJournalCore(key: string, blob: Blob) {
+  const repositories = await createJournalRepositories()
+  const blobStore = new IndexedDbBlobStore(repositories)
+  return blobStore.put(key, blob)
 }
 
 async function writeBlobToDir(dir: FileSystemDirectoryHandle, filename: string, blob: Blob) {
@@ -2028,6 +2055,7 @@ function App() {
       status: 'disconnected',
     })
   )
+  const [driveSyncSummary, setDriveSyncSummary] = useState<DriveSyncSummary | null>(null)
   const [openEntryIds, setOpenEntryIds] = useState<string[]>(() =>
     sampleData.entries[0]?.id ? [sampleData.entries[0].id] : []
   )
@@ -3578,6 +3606,14 @@ function App() {
           console.warn('Attachment cache failed; keeping metadata-only attachment', err)
         }
 
+        try {
+          const journalBlobKey = cacheKey || `attachment-${id}`
+          await writeAttachmentBlobToJournalCore(journalBlobKey, file)
+          cacheKey = journalBlobKey
+        } catch (err) {
+          console.warn('Journal blob cache failed; Drive sync will try legacy attachment cache', err)
+        }
+
         const exportName = `${id}-${safeFileName(file.name)}`
         const relativePath = `${bundleFolder}/attachments/${exportName}`
         const storagePath = syncRoot ? resolveRelativePath(syncRoot, relativePath) : cachePath || file.name
@@ -3731,100 +3767,78 @@ function App() {
 
     setDriveConnection((prev) => ({ ...prev, status: 'syncing', lastError: undefined }))
     try {
-      const provider = new GoogleDriveProvider({
+      const repositories = await createJournalRepositories()
+      const blobStore = new IndexedDbBlobStore(repositories)
+      const preparedAttachments = await Promise.all(attachmentsStore.map(async (attachment) => {
+        if (attachment.cacheKey && await blobStore.has(attachment.cacheKey)) return attachment
+        const cacheKey =
+          attachment.cacheKey ||
+          (attachment.cachedPath?.startsWith('idb://') ? attachment.cachedPath.replace('idb://', '') : '') ||
+          (attachment.cachedPath?.startsWith('fs://') ? attachment.cachedPath.replace('fs://', '') : '') ||
+          `attachment-${attachment.id}`
+        const blob = await readAttachmentBlob(attachment, attachmentUrls)
+        if (!blob) return attachment
+        try {
+          await blobStore.put(cacheKey, blob)
+          return { ...attachment, cacheKey }
+        } catch (err) {
+          console.warn('Unable to stage attachment blob for Drive sync', attachment.id, err)
+          return attachment
+        }
+      }))
+      const store = await createIndexedDbJournalStore(deviceProfile, repositories)
+      await store.saveSnapshot({
+        entries: entryDrafts,
+        attachments: preparedAttachments,
+        fileBoxItems,
+        transfers: transferRecords,
+        conflicts: syncConflicts,
+        tombstones: [],
+        device: deviceProfile,
+      })
+      const provider = new GoogleDriveSyncProvider({
         clientId: driveConnection.clientId.trim(),
         folderName: driveConnection.folderName || DRIVE_ROOT_FOLDER,
+        folderId: driveConnection.folderId,
       })
-      await provider.signIn()
-      const rootId = driveConnection.folderId || await provider.ensureRootFolder()
-      const [entriesFolderId, attachmentsFolderId, fileBoxFolderId, transfersFolderId, devicesFolderId, tombstonesFolderId, conflictsFolderId] = await Promise.all([
-        provider.ensureFolder(rootId, 'entries'),
-        provider.ensureFolder(rootId, 'attachments'),
-        provider.ensureFolder(rootId, 'filebox'),
-        provider.ensureFolder(rootId, 'transfers'),
-        provider.ensureFolder(rootId, 'devices'),
-        provider.ensureFolder(rootId, 'tombstones'),
-        provider.ensureFolder(rootId, 'conflicts'),
-      ])
-
+      const syncResult = await syncOnce({ provider, store, device: deviceProfile, blobStore })
+      const workspace = await provider.ensureWorkspace()
+      const syncedSnapshot = await store.getSnapshot()
       const lastSyncAt = new Date().toISOString()
-      const uploadedAttachmentDriveIds = new Map<string, string>()
-      const attachmentDateFolderIds = new Map<string, string>()
-      for (const attachment of attachmentsStore) {
-        const blob = await readAttachmentBlob(attachment, attachmentUrls)
-        if (!blob) continue
-        const entry = entryDrafts[attachment.entryId]
-        const folderName = buildAttachmentDriveFolder(entry)
-        let dayFolderId = attachmentDateFolderIds.get(folderName)
-        if (!dayFolderId) {
-          dayFolderId = await provider.ensureFolder(attachmentsFolderId, folderName)
-          attachmentDateFolderIds.set(folderName, dayFolderId)
+      const attachmentById = new Map(syncedSnapshot.attachments.map((attachment) => [attachment.id, attachment]))
+      const syncedFileBoxItems = syncedSnapshot.fileBoxItems.map((item) => {
+        const attachment = item.attachmentId ? attachmentById.get(item.attachmentId) : undefined
+        if (!attachment?.driveFileId) return item
+        return {
+          ...item,
+          driveFileId: attachment.driveFileId,
+          status: item.status === 'queued' || item.status === 'uploading' ? 'available' as const : item.status,
+          updatedAt: lastSyncAt,
         }
-        const driveFileId = await provider.uploadBlob(dayFolderId, buildAttachmentDriveFileName(attachment), blob, attachment.contentType)
-        uploadedAttachmentDriveIds.set(attachment.id, driveFileId)
-      }
-
-      const syncedAttachments = attachmentsStore.map((attachment) =>
-        uploadedAttachmentDriveIds.has(attachment.id)
-          ? {
-              ...attachment,
-              driveFileId: uploadedAttachmentDriveIds.get(attachment.id),
-              syncStatus: 'synced' as const,
-              updatedAt: lastSyncAt,
-            }
-          : attachment
-      )
-      const syncedFileBoxItems = fileBoxItems.map((item) =>
-        item.attachmentId && uploadedAttachmentDriveIds.has(item.attachmentId)
-          ? {
-              ...item,
-              driveFileId: uploadedAttachmentDriveIds.get(item.attachmentId),
-              status: item.status === 'queued' || item.status === 'uploading' ? 'available' as const : item.status,
-              updatedAt: lastSyncAt,
-            }
-          : item
-      )
-      const syncedTransfers = transferRecords.map((transfer) =>
-        transfer.attachmentId && uploadedAttachmentDriveIds.has(transfer.attachmentId)
-          ? {
-              ...transfer,
-              driveFileId: uploadedAttachmentDriveIds.get(transfer.attachmentId),
-              status: transfer.status === 'queued' || transfer.status === 'uploading' ? 'available' as const : transfer.status,
-              updatedAt: lastSyncAt,
-            }
-          : transfer
-      )
-      const manifest = createManifest({
-        device: deviceProfile,
-        entries: entryDrafts,
-        attachments: syncedAttachments,
-        fileBoxItems: syncedFileBoxItems,
-        transfers: syncedTransfers,
-        folderName: driveConnection.folderName || DRIVE_ROOT_FOLDER,
       })
-      await provider.uploadJson(rootId, 'manifest.json', manifest)
-      await Promise.all(Object.values(entryDrafts).map((entry) =>
-        provider.uploadJson(entriesFolderId, buildEntryDriveFileName(entry, entryDrafts), {
-          id: entry.id,
-          kind: 'entry',
-          version: 1,
-          updatedAt: entry.lastEditedDatetime,
-          updatedByDeviceId: entry.updatedByDeviceId || deviceProfile.id,
-          payload: entry,
-        })
-      ))
-      await Promise.all(syncedFileBoxItems.map((item) => provider.uploadJson(fileBoxFolderId, `${item.id}.json`, item)))
-      await Promise.all(syncedTransfers.map((transfer) => provider.uploadJson(transfersFolderId, `${transfer.id}.json`, transfer)))
-      await provider.uploadJson(devicesFolderId, `${deviceProfile.id}.json`, deviceProfile)
-      await provider.uploadJson(tombstonesFolderId, 'tombstones.json', [])
-      await provider.uploadJson(conflictsFolderId, 'conflicts.json', syncConflicts)
+      const syncedTransfers = syncedSnapshot.transfers.map((transfer) => {
+        const attachment = transfer.attachmentId ? attachmentById.get(transfer.attachmentId) : undefined
+        if (!attachment?.driveFileId) return transfer
+        return {
+          ...transfer,
+          driveFileId: attachment.driveFileId,
+          status: transfer.status === 'queued' || transfer.status === 'uploading' ? 'available' as const : transfer.status,
+          updatedAt: lastSyncAt,
+        }
+      })
 
-      setAttachmentsStore(syncedAttachments)
+      setEntryDrafts(syncedSnapshot.entries)
+      setAttachmentsStore(syncedSnapshot.attachments)
       setFileBoxItems(syncedFileBoxItems)
       setTransferRecords(syncedTransfers)
+      setSyncConflicts(syncedSnapshot.conflicts)
+      setDriveSyncSummary({ ...syncResult, syncedAt: lastSyncAt })
+      setJournalCoreQueueCount(0)
+      setJournalCoreStatus('ready')
+      setJournalCoreError('')
       setDriveConnection((prev) => ({
         ...prev,
-        folderId: rootId,
+        folderId: workspace.id,
         status: 'ready',
         connectedAt: prev.connectedAt ?? lastSyncAt,
         lastSyncAt,
@@ -3957,6 +3971,7 @@ function App() {
         !fsDirWithPerm?.queryPermission
           ? !!fsDir
           : (await fsDirWithPerm.queryPermission({ mode: 'read' })) === 'granted'
+      let journalBlobStore: IndexedDbBlobStore | null = null
 
       for (const att of attachmentsStore) {
         if (att.cachedPath?.startsWith('idb://')) {
@@ -3984,6 +3999,22 @@ function App() {
             urlMap[att.id] = att.thumbnail
           }
         } else if (att.thumbnail) {
+          urlMap[att.id] = att.thumbnail
+        }
+
+        if (!urlMap[att.id] && att.cacheKey) {
+          try {
+            if (!journalBlobStore) {
+              journalBlobStore = new IndexedDbBlobStore(await createJournalRepositories())
+            }
+            const blob = await journalBlobStore.get(att.cacheKey)
+            if (blob) urlMap[att.id] = URL.createObjectURL(blob)
+          } catch (err) {
+            console.warn('Unable to load journal blob cache', att.id, err)
+          }
+        }
+
+        if (!urlMap[att.id] && att.thumbnail) {
           urlMap[att.id] = att.thumbnail
         }
       }
@@ -4562,6 +4593,7 @@ function App() {
               folderName: driveConnection.folderName || DRIVE_ROOT_FOLDER,
             })}
             conflicts={syncConflicts}
+            syncSummary={driveSyncSummary}
             journalCoreStatus={journalCoreStatus}
             journalCoreSource={journalCoreSource}
             journalCoreQueueCount={journalCoreQueueCount}
@@ -6874,6 +6906,7 @@ function SyncPane({
   syncing,
   manifest,
   conflicts,
+  syncSummary,
   journalCoreStatus,
   journalCoreSource,
   journalCoreQueueCount,
@@ -6887,6 +6920,7 @@ function SyncPane({
   syncing: boolean
   manifest: SyncManifest
   conflicts: SyncConflict[]
+  syncSummary: DriveSyncSummary | null
   journalCoreStatus: 'loading' | 'ready' | 'fallback' | 'error'
   journalCoreSource: JournalHydrationResult['source']
   journalCoreQueueCount: number
@@ -6952,6 +6986,19 @@ function SyncPane({
       </div>
 
       <div className="connected-grid two">
+        {syncSummary && (
+          <section className="connected-card">
+            <div className="section-title">Last sync result</div>
+            <div className="connected-table">
+              <div className="connected-table-row"><span>Completed</span><strong>{new Date(syncSummary.syncedAt).toLocaleString()}</strong></div>
+              <div className="connected-table-row"><span>Entries</span><strong>{syncSummary.pulledEntries} pulled / {syncSummary.pushedEntries} pushed</strong></div>
+              <div className="connected-table-row"><span>Attachments</span><strong>{syncSummary.pulledAttachments} pulled / {syncSummary.pushedAttachments} metadata pushed</strong></div>
+              <div className="connected-table-row"><span>Blobs</span><strong>{syncSummary.downloadedBlobs} downloaded / {syncSummary.uploadedBlobs} uploaded</strong></div>
+              <div className="connected-table-row"><span>Tombstones</span><strong>{syncSummary.pushedTombstones} published</strong></div>
+              <div className="connected-table-row"><span>Conflicts</span><strong>{syncSummary.conflicts}</strong></div>
+            </div>
+          </section>
+        )}
         <section className="connected-card">
           <div className="section-title">Local data core</div>
           <div className="connected-table">

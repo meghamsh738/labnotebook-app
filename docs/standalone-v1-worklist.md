@@ -272,11 +272,13 @@ Implemented in this branch:
 - Google Drive adapter that implements the new `SyncProvider` path contract over the existing OAuth/Drive folder client.
 - Repository-backed `IndexedDbJournalStore` for snapshots, devices, and sync engine checkpoints.
 - `syncOnce()` engine for entry pull/push, attachment metadata, attachment blob upload/download, tombstones, and conflicts.
+- Visible Google Drive sync action now stages current UI state, writes attachment blobs into `IndexedDbBlobStore`, runs `syncOnce()`, and refreshes the app from the synced repository snapshot.
+- Sync pane includes the last sync result for pulled/pushed entries, attachment metadata, uploaded/downloaded blobs, tombstones, and conflicts.
 - Focused tests for repository CRUD, stable hashing, validation, two-device convergence, attachment metadata, blob restoration, conflicts, and tombstone non-resurrection.
 
 Next implementation task:
 
-1. Wire the app's visible "Sync to Google Drive" action through `GoogleDriveSyncProvider` + `syncOnce()`.
-2. Persist browser/Electron attachment blobs through `IndexedDbBlobStore` during normal file intake.
-3. Add a two-profile browser test that simulates desktop plus mobile PWA state.
-4. Add conflict and failed-transfer UI surfaces for the repository-backed sync engine.
+1. Add a two-profile browser test that simulates desktop plus mobile PWA state against the repository-backed sync engine.
+2. Add a local backup/restore archive for entries, metadata, tombstones, conflicts, and attachment blobs.
+3. Add conflict resolution actions that let the user choose local, remote, or keep both.
+4. Add resumable upload/retry behavior for larger attachment blobs and clearer failed-transfer recovery.
