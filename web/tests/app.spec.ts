@@ -826,6 +826,20 @@ test.describe('Lab note taking app', () => {
     await expect(page.getByPlaceholder('Desktop OAuth client ID for Electron')).toBeVisible()
     await expect(page.getByPlaceholder('Optional; stored locally only when provided')).toBeVisible()
     await expect(page.getByPlaceholder('Web OAuth client ID for browser/PWA')).toBeVisible()
+    await expect(page.getByTestId('import-oauth-json')).toBeVisible()
+    await page.getByTestId('oauth-json-file').setInputFiles({
+      name: 'oauth.desktop.json',
+      mimeType: 'application/json',
+      buffer: Buffer.from(JSON.stringify({
+        installed: {
+          client_id: 'desktop-client.apps.googleusercontent.com',
+          client_secret: 'desktop-secret',
+        },
+      })),
+    })
+    await expect(page.getByTestId('oauth-import-message')).toContainText('Imported desktop client ID')
+    await expect(page.getByPlaceholder('Desktop OAuth client ID for Electron')).toHaveValue('desktop-client.apps.googleusercontent.com')
+    await expect(page.getByPlaceholder('Optional; stored locally only when provided')).toHaveValue('desktop-secret')
     await expect(page.getByRole('button', { name: 'Export backup' })).toBeVisible()
     await expect(page.getByRole('button', { name: 'Restore backup' })).toBeVisible()
   })

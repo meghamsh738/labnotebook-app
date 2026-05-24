@@ -47,6 +47,13 @@ export type DriveConnectionState = {
 
 export type DriveOAuthClientKind = 'desktop' | 'web'
 
+export type ParsedGoogleOAuthClientConfig = {
+  desktopClientId?: string
+  desktopClientSecret?: string
+  webClientId?: string
+  importedKind: DriveOAuthClientKind | 'both' | 'unknown'
+}
+
 export type SyncProvider = {
   kind: 'google-drive'
   signIn(): Promise<void>
@@ -143,6 +150,66 @@ export function resolveDriveClientId(
     ? desktopClientId || legacyClientId
     : webClientId || legacyClientId
   return { clientId, preferredKind }
+}
+
+export function parseGoogleOAuthClientConfig(raw: string): ParsedGoogleOAuthClientConfig {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw.replace(/^\uFEFF/, ''))
+  } catch (error) {
+    throw new Error(`OAuth JSON is not valid JSON: ${error instanceof Error ? error.message : String(error)}`)
+  }
+
+  if (!parsed || typeof parsed !== 'object') {
+    throw new Error('OAuth JSON must be an object downloaded from Google Cloud.')
+  }
+
+  const source = parsed as Record<string, unknown>
+  const installed = source.installed && typeof source.installed === 'object'
+    ? source.installed as Record<string, unknown>
+    : undefined
+  const web = source.web && typeof source.web === 'object'
+    ? source.web as Record<string, unknown>
+    : undefined
+  const flat = !installed && !web ? source : undefined
+
+  const readString = (value: unknown) => (typeof value === 'string' ? value.trim() : '')
+  const desktopClientId = readString(installed?.client_id ?? installed?.clientId)
+  const desktopClientSecret = readString(installed?.client_secret ?? installed?.clientSecret)
+  const webClientId = readString(web?.client_id ?? web?.clientId)
+  const flatClientId = readString(flat?.client_id ?? flat?.clientId)
+  const flatClientSecret = readString(flat?.client_secret ?? flat?.clientSecret)
+  const flatType = readString(flat?.type)
+
+  const result: ParsedGoogleOAuthClientConfig = {
+    importedKind: 'unknown',
+  }
+
+  if (desktopClientId) {
+    result.desktopClientId = desktopClientId
+    result.desktopClientSecret = desktopClientSecret
+  }
+  if (webClientId) {
+    result.webClientId = webClientId
+  }
+  if (flatClientId) {
+    if (flatType === 'web') {
+      result.webClientId = flatClientId
+    } else {
+      result.desktopClientId = flatClientId
+      result.desktopClientSecret = flatClientSecret
+    }
+  }
+
+  if (result.desktopClientId && result.webClientId) result.importedKind = 'both'
+  else if (result.desktopClientId) result.importedKind = 'desktop'
+  else if (result.webClientId) result.importedKind = 'web'
+
+  if (!result.desktopClientId && !result.webClientId) {
+    throw new Error('OAuth JSON did not contain a Google client_id in an installed or web section.')
+  }
+
+  return result
 }
 
 export function detectDevicePlatform(): DevicePlatform {

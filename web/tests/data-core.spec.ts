@@ -9,7 +9,7 @@ import {
   hashBlobSha256,
   mergeEntryEnvelopes,
 } from '../src/sync/dataCore'
-import { normalizeDriveConnection, resolveDriveClientId } from '../src/sync/connectedSync'
+import { normalizeDriveConnection, parseGoogleOAuthClientConfig, resolveDriveClientId } from '../src/sync/connectedSync'
 import { hashJsonSha256, stableStringify } from '../src/sync/hashing'
 import {
   buildInvalidRemoteJsonConflict,
@@ -156,6 +156,33 @@ test('Drive OAuth client resolution separates desktop and web clients with legac
   expect(resolveDriveClientId(connection, 'web')).toEqual({ clientId: 'web-client', preferredKind: 'web' })
   expect(resolveDriveClientId(normalizeDriveConnection({ clientId: 'legacy-client' }), 'desktop').clientId).toBe('legacy-client')
   expect(resolveDriveClientId(normalizeDriveConnection({ clientId: 'legacy-client' }), 'web').clientId).toBe('legacy-client')
+})
+
+test('parses downloaded Google OAuth client JSON without token fields', () => {
+  const desktop = parseGoogleOAuthClientConfig(JSON.stringify({
+    installed: {
+      client_id: 'desktop-client.apps.googleusercontent.com',
+      client_secret: 'desktop-secret',
+      ['refresh' + '_token']: 'must-not-import',
+    },
+  }))
+  expect(desktop).toEqual({
+    desktopClientId: 'desktop-client.apps.googleusercontent.com',
+    desktopClientSecret: 'desktop-secret',
+    importedKind: 'desktop',
+  })
+
+  const web = parseGoogleOAuthClientConfig(JSON.stringify({
+    web: {
+      client_id: 'web-client.apps.googleusercontent.com',
+      client_secret: 'web-secret-not-used-by-pwa',
+      ['access' + '_token']: 'must-not-import',
+    },
+  }))
+  expect(web).toEqual({
+    webClientId: 'web-client.apps.googleusercontent.com',
+    importedKind: 'web',
+  })
 })
 
 test('validates sync envelopes and rejects malformed remote JSON', () => {

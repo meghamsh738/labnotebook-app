@@ -3232,6 +3232,14 @@
   gap: var(--s-2);
 }
 
+.settings-actions-row {
+  margin-top: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
 .settings-status-row {
   display: flex;
   gap: 8px;
@@ -3331,6 +3339,18 @@
   color: var(--muted);
   font-size: var(--fs-14);
   line-height: 1.45;
+}
+
+.settings-note.success-note {
+  border-color: rgba(7, 92, 73, 0.24);
+  background: rgba(7, 92, 73, 0.08);
+  color: var(--accent);
+}
+
+.settings-note.warning-note {
+  border-color: rgba(168, 47, 47, 0.22);
+  background: rgba(168, 47, 47, 0.08);
+  color: #8f2929;
 }
 
 .settings-path {

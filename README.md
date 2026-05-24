@@ -113,7 +113,7 @@ npm run standalone:build
 
 `npm --prefix web run screenshots` regenerates PNG screenshots under `screenshots/`.
 
-The packaged OAuth smoke requires a local-only desktop OAuth client ID. Either set shell environment variables or place a downloaded Google OAuth desktop JSON at `.labnote-local/oauth.desktop.json`; `.labnote-local/` is ignored by Git. Never commit OAuth JSON files, access tokens, refresh tokens, or user Drive data.
+The packaged OAuth smoke requires a local-only desktop OAuth client ID. Either set shell environment variables or place a downloaded Google OAuth desktop JSON at `.labnote-local/oauth.desktop.json`; `.labnote-local/` is ignored by Git. In the app, open **Sync > Advanced OAuth client IDs** and use **Import Google OAuth JSON** to fill the Desktop or Web/PWA client fields from a downloaded Google client JSON. The importer reads only client IDs and the optional desktop client secret. Never commit OAuth JSON files, access tokens, refresh tokens, or user Drive data.
 
 ## First Milestone Status
 

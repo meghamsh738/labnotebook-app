@@ -42,6 +42,7 @@ import {
   makeFileBoxItem,
   makeTransferRecord,
   normalizeDriveConnection,
+  parseGoogleOAuthClientConfig,
   resolveDriveClientId,
   saveJson,
   transferStatusLabel,
@@ -7612,10 +7613,36 @@ function SyncPane({
   onResolveConflict: (conflictId: string, action: ConflictResolutionAction) => void
 }) {
   const backupInputRef = useRef<HTMLInputElement | null>(null)
+  const oauthImportInputRef = useRef<HTMLInputElement | null>(null)
+  const [oauthImportMessage, setOauthImportMessage] = useState('')
   const driveOAuthClient = resolveDriveClientId(driveConnection)
   const activeOAuthLabel = driveOAuthClient.preferredKind === 'desktop' ? 'Desktop app' : 'Web/PWA'
   const hasActiveOAuthClient = Boolean(driveOAuthClient.clientId)
   const hasLegacyOAuthClient = Boolean(driveConnection.clientId.trim())
+
+  const handleOAuthJsonImport = async (file: File | undefined) => {
+    if (!file) return
+    try {
+      const parsed = parseGoogleOAuthClientConfig(await file.text())
+      onDriveConnectionChange((prev) => ({
+        ...prev,
+        desktopClientId: parsed.desktopClientId ?? prev.desktopClientId ?? '',
+        desktopClientSecret: parsed.desktopClientSecret ?? prev.desktopClientSecret ?? '',
+        webClientId: parsed.webClientId ?? prev.webClientId ?? '',
+        status: 'needs-auth',
+        lastError: undefined,
+      }))
+      const importedLabel =
+        parsed.importedKind === 'both'
+          ? 'desktop and web client IDs'
+          : parsed.importedKind === 'web'
+            ? 'web/PWA client ID'
+            : 'desktop client ID'
+      setOauthImportMessage(`Imported ${importedLabel}. Tokens were not imported or stored.`)
+    } catch (error) {
+      setOauthImportMessage(error instanceof Error ? error.message : String(error))
+    }
+  }
 
   return (
     <main className="panel editor connected-workspace" data-testid="sync-pane">
@@ -7660,6 +7687,31 @@ function SyncPane({
               <span className={`status-chip ${hasActiveOAuthClient ? 'success' : 'warning'}`}>{hasActiveOAuthClient ? `${activeOAuthLabel} configured` : `${activeOAuthLabel} needed`}</span>
             </summary>
             <div className="settings-disclosure-body">
+              <div className="settings-note">
+                Download the OAuth client JSON from Google Cloud, then import it here. The app reads only client IDs and the optional desktop client secret; access tokens and refresh tokens are never imported.
+              </div>
+              <div className="settings-actions-row">
+                <button className="pill soft" type="button" onClick={() => oauthImportInputRef.current?.click()} data-testid="import-oauth-json">
+                  <span className="icon"><UiIcon name="file" /></span>
+                  Import Google OAuth JSON
+                </button>
+                <input
+                  ref={oauthImportInputRef}
+                  type="file"
+                  accept="application/json,.json"
+                  style={{ display: 'none' }}
+                  data-testid="oauth-json-file"
+                  onChange={(event) => {
+                    void handleOAuthJsonImport(event.currentTarget.files?.[0])
+                    event.currentTarget.value = ''
+                  }}
+                />
+              </div>
+              {oauthImportMessage && (
+                <div className={`settings-note ${oauthImportMessage.startsWith('Imported ') ? 'success-note' : 'warning-note'}`} data-testid="oauth-import-message">
+                  {oauthImportMessage}
+                </div>
+              )}
               <label className="field">
                 <span>Desktop app OAuth client ID</span>
                 <input
