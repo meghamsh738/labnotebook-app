@@ -18,7 +18,8 @@
     "smoke:real-drive-content": "node scripts/smoke-real-drive-content.mjs",
     "smoke:packaged-oauth": "node scripts/smoke-packaged-oauth.mjs",
     "smoke:pixel-pwa": "node scripts/smoke-pixel-pwa.mjs",
-    "smoke:pixel-capture": "node scripts/smoke-pixel-pwa-capture.mjs"
+    "smoke:pixel-capture": "node scripts/smoke-pixel-pwa-capture.mjs",
+    "smoke:pixel-drive-roundtrip": "node scripts/smoke-pixel-drive-roundtrip.mjs"
   },
   "devDependencies": {
     "concurrently": "^9.2.1",

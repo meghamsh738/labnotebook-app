@@ -161,7 +161,7 @@ async function main() {
           lastSyncAt: parsed?.lastSyncAt,
         }
       })
-      if ((state.status === 'synced' || state.status === 'ready') && state.folderId) {
+      if ((state.status === 'synced' || state.status === 'ready' || state.status === 'syncing') && state.folderId && state.lastSyncAt) {
         await page.evaluate(() => {
           const raw = window.localStorage.getItem('labnote.connected.googleDrive')
           if (!raw) return
@@ -172,6 +172,7 @@ async function main() {
         fs.writeFileSync(resultFile, JSON.stringify({
           ok: true,
           stage: 'synced',
+          status: state.status,
           folderName,
           folderId: state.folderId,
           lastSyncAt: state.lastSyncAt,

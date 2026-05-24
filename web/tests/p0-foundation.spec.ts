@@ -5,7 +5,7 @@ test('journal repositories support blob CRUD in IndexedDB', async ({ page }) => 
 
   const result = await page.evaluate(async () => {
     const { createJournalRepositories } = await import('/src/sync/repositories.ts')
-    const repositories = await createJournalRepositories()
+    const repositories = await createJournalRepositories({ dbName: `p0-blob-crud-${crypto.randomUUID()}` })
     const id = `test-blob-${crypto.randomUUID()}`
     await repositories.blobs.put({
       id,
@@ -34,7 +34,7 @@ test('IndexedDbBlobStore persists and verifies attachment blobs', async ({ page 
   const result = await page.evaluate(async () => {
     const { createJournalRepositories } = await import('/src/sync/repositories.ts')
     const { IndexedDbBlobStore } = await import('/src/sync/blobStore.ts')
-    const repositories = await createJournalRepositories()
+    const repositories = await createJournalRepositories({ dbName: `p0-blob-store-${crypto.randomUUID()}` })
     const store = new IndexedDbBlobStore(repositories)
     const key = `cache-${crypto.randomUUID()}`
     const record = await store.put(key, new Blob(['abc'], { type: 'text/plain' }))
@@ -66,7 +66,7 @@ test('IndexedDbJournalStore persists snapshots and sync checkpoints', async ({ p
   const result = await page.evaluate(async () => {
     const { createJournalRepositories } = await import('/src/sync/repositories.ts')
     const { createIndexedDbJournalStore } = await import('/src/sync/syncEngine.ts')
-    const repositories = await createJournalRepositories()
+    const repositories = await createJournalRepositories({ dbName: `p0-journal-store-${crypto.randomUUID()}` })
     await Promise.all([
       repositories.entries.clear(),
       repositories.attachments.clear(),

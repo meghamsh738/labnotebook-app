@@ -113,6 +113,7 @@ async function focusBlockById(page: Page, blockId: string) {
     if (!sel) return
     sel.removeAllRanges()
     sel.addRange(range)
+    document.dispatchEvent(new Event('selectionchange', { bubbles: true }))
   }, blockId)
 }
 
@@ -135,6 +136,7 @@ async function focusTestIdText(page: Page, testId: string) {
     sel.addRange(range)
     const editor = document.querySelector('[data-testid="slate-editor"]') as HTMLElement | null
     editor?.focus()
+    document.dispatchEvent(new Event('selectionchange', { bubbles: true }))
   }, testId)
 }
 
@@ -510,49 +512,15 @@ test.describe('Lab note taking app', () => {
     await boot(page, { noFail: '1' })
     await ensureEditMode(page)
 
-    await page.evaluate((blockId) => {
-      const editor = document.querySelector('[data-testid="slate-editor"]') as HTMLElement | null
-      editor?.focus()
-      const block = document.querySelector(`[data-block-id="${blockId}"]`)
-      if (!block) return
-      const textSpan = block.querySelector('[data-slate-node="text"]')
-      const range = document.createRange()
-      if (textSpan) {
-        range.selectNodeContents(textSpan)
-        range.collapse(true)
-      } else {
-        range.selectNodeContents(block)
-        range.collapse(true)
-      }
-      const sel = window.getSelection()
-      if (!sel) return
-      sel.removeAllRanges()
-      sel.addRange(range)
-    }, 'b-context')
+    await focusBlockById(page, 'b-context')
     await page.keyboard.insertText('Start text')
-    await page.evaluate((blockId) => {
-      const editor = document.querySelector('[data-testid="slate-editor"]') as HTMLElement | null
-      editor?.focus()
-      const block = document.querySelector(`[data-block-id="${blockId}"]`)
-      if (!block) return
-      const textSpan = block.querySelector('[data-slate-node="text"]')
-      const range = document.createRange()
-      if (textSpan) {
-        range.selectNodeContents(textSpan)
-        range.collapse(true)
-      } else {
-        range.selectNodeContents(block)
-        range.collapse(true)
-      }
-      const sel = window.getSelection()
-      if (!sel) return
-      sel.removeAllRanges()
-      sel.addRange(range)
-    }, 'b-context')
+    const editor = page.getByTestId('slate-editor')
+    await expect(editor).toContainText('Start text')
+
+    await focusBlockById(page, 'b-context')
     await page.keyboard.press('Backspace')
     await page.keyboard.insertText('X')
 
-    const editor = page.getByTestId('slate-editor')
     await expect(editor).toContainText('XStart text')
   })
 

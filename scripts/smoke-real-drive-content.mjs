@@ -10,6 +10,7 @@ const outputDir = path.resolve(process.env.LABNOTE_REAL_DRIVE_OUTPUT_DIR || path
 const authUrlFile = path.join(outputDir, 'oauth-url.txt')
 const resultFile = path.join(outputDir, 'result.json')
 const configPath = path.resolve(process.env.LABNOTE_OAUTH_CONFIG_FILE || path.join(root, '.labnote-local', 'oauth.desktop.json'))
+const tokenCachePath = path.resolve(process.env.LABNOTE_REAL_DRIVE_TOKEN_FILE || path.join(root, '.labnote-local', 'real-drive-token.json'))
 const scope = 'https://www.googleapis.com/auth/drive.file'
 const folderName = process.env.LABNOTE_REAL_DRIVE_FOLDER_NAME?.trim() || `Easylab Lab Notebook Real Drive Smoke ${new Date().toISOString().replace(/[:.]/g, '-')}`
 const timeoutMs = Number(process.env.LABNOTE_REAL_DRIVE_TIMEOUT_MS || 300000)
@@ -46,6 +47,38 @@ function readOAuthConfig() {
     clientSecret: String(section.client_secret || section.clientSecret || '').trim(),
     source: 'local-config',
   }
+}
+
+function readTokenCache() {
+  if (!fs.existsSync(tokenCachePath)) return null
+  if (isTracked(tokenCachePath)) fail('Real Drive token cache is tracked by Git. Move it to ignored .labnote-local/ before running real Drive smoke.', { tokenCachePath })
+  try {
+    const parsed = JSON.parse(fs.readFileSync(tokenCachePath, 'utf8').replace(/^\uFEFF/, ''))
+    const refreshToken = String(parsed.refresh_token || parsed.refreshToken || '').trim()
+    const cachedClientId = String(parsed.client_id || parsed.clientId || '').trim()
+    if (!refreshToken) return null
+    return {
+      refreshToken,
+      clientId: cachedClientId,
+      scope: String(parsed.scope || '').trim(),
+    }
+  } catch (error) {
+    fail(`Could not parse real Drive token cache: ${error instanceof Error ? error.message : String(error)}`, { tokenCachePath })
+  }
+}
+
+function writeTokenCache({ clientId, tokenPayload }) {
+  const refreshToken = String(tokenPayload.refresh_token || '').trim()
+  if (!refreshToken) return false
+  fs.mkdirSync(path.dirname(tokenCachePath), { recursive: true })
+  fs.writeFileSync(tokenCachePath, JSON.stringify({
+    client_id: clientId,
+    refresh_token: refreshToken,
+    scope: tokenPayload.scope || scope,
+    token_type: tokenPayload.token_type || 'Bearer',
+    updated_at: new Date().toISOString(),
+  }, null, 2))
+  return true
 }
 
 function isTracked(filePath) {
@@ -133,7 +166,26 @@ async function exchangeCode({ clientId, clientSecret, code, codeVerifier, redire
   if (!response.ok || !payload.access_token) {
     throw new Error(payload.error_description || payload.error || `Token exchange failed with ${response.status}`)
   }
-  return String(payload.access_token)
+  return payload
+}
+
+async function refreshAccessToken({ clientId, clientSecret, refreshToken }) {
+  const body = new URLSearchParams({
+    client_id: clientId,
+    grant_type: 'refresh_token',
+    refresh_token: refreshToken,
+  })
+  if (clientSecret) body.set('client_secret', clientSecret)
+  const response = await fetch('https://oauth2.googleapis.com/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body,
+  })
+  const payload = await response.json().catch(() => ({}))
+  if (!response.ok || !payload.access_token) {
+    throw new Error(payload.error_description || payload.error || `Token refresh failed with ${response.status}`)
+  }
+  return payload
 }
 
 async function driveRequest(accessToken, url, init = {}) {
@@ -207,23 +259,50 @@ async function main() {
   if (!/\.apps\.googleusercontent\.com$/.test(clientId)) fail('Desktop OAuth client ID is invalid.', { source })
   if (!clientSecret) fail('Desktop OAuth client secret is required for this real Drive smoke.', { source })
 
-  const { verifier, challenge } = makePkce()
-  const listener = await createOAuthListener()
-  const redirectUri = listener.redirectUri
-  const authUrl = new URL('https://accounts.google.com/o/oauth2/v2/auth')
-  authUrl.searchParams.set('client_id', clientId)
-  authUrl.searchParams.set('redirect_uri', redirectUri)
-  authUrl.searchParams.set('response_type', 'code')
-  authUrl.searchParams.set('scope', scope)
-  authUrl.searchParams.set('code_challenge', challenge)
-  authUrl.searchParams.set('code_challenge_method', 'S256')
-  authUrl.searchParams.set('access_type', 'offline')
-  authUrl.searchParams.set('prompt', 'consent')
-  fs.writeFileSync(authUrlFile, authUrl.toString())
-  writeResult({ ok: null, stage: 'waiting-for-consent', authUrlFile, folderName })
+  let accessToken = ''
+  let authMode = ''
+  let tokenCacheReused = false
+  const cached = readTokenCache()
+  if (cached?.refreshToken && (!cached.clientId || cached.clientId === clientId)) {
+    try {
+      const refreshed = await refreshAccessToken({ clientId, clientSecret, refreshToken: cached.refreshToken })
+      accessToken = String(refreshed.access_token)
+      authMode = 'cached-refresh-token'
+      tokenCacheReused = true
+      writeResult({ ok: null, stage: 'using-cached-refresh-token', folderName, tokenCachePath })
+    } catch (error) {
+      writeResult({
+        ok: null,
+        stage: 'cached-refresh-token-failed',
+        folderName,
+        tokenCachePath,
+        message: error instanceof Error ? error.message : String(error),
+      })
+    }
+  }
 
-  const codeResult = await listener.codePromise
-  const accessToken = await exchangeCode({ clientId, clientSecret, code: codeResult.code, codeVerifier: verifier, redirectUri })
+  if (!accessToken) {
+    const { verifier, challenge } = makePkce()
+    const listener = await createOAuthListener()
+    const redirectUri = listener.redirectUri
+    const authUrl = new URL('https://accounts.google.com/o/oauth2/v2/auth')
+    authUrl.searchParams.set('client_id', clientId)
+    authUrl.searchParams.set('redirect_uri', redirectUri)
+    authUrl.searchParams.set('response_type', 'code')
+    authUrl.searchParams.set('scope', scope)
+    authUrl.searchParams.set('code_challenge', challenge)
+    authUrl.searchParams.set('code_challenge_method', 'S256')
+    authUrl.searchParams.set('access_type', 'offline')
+    authUrl.searchParams.set('prompt', 'consent')
+    fs.writeFileSync(authUrlFile, authUrl.toString())
+    writeResult({ ok: null, stage: 'waiting-for-consent', authUrlFile, folderName, tokenCachePath })
+
+    const codeResult = await listener.codePromise
+    const tokenPayload = await exchangeCode({ clientId, clientSecret, code: codeResult.code, codeVerifier: verifier, redirectUri })
+    accessToken = String(tokenPayload.access_token)
+    authMode = 'interactive-consent'
+    writeTokenCache({ clientId, tokenPayload })
+  }
 
   const rootFolderId = await ensureFolder(accessToken, 'root', folderName)
   const devicesFolderId = await ensureFolder(accessToken, rootFolderId, 'devices')
@@ -342,6 +421,8 @@ async function main() {
     remotePaths,
     metadataListedBeforeBlobDownload: metadataBeforeBlobDownload.some((file) => file.name.endsWith('.json')),
     blobDownloadedOnDemand: true,
+    authMode,
+    tokenCacheReused,
   })
 }
 
