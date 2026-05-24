@@ -112,6 +112,7 @@ npm --prefix web run screenshots
 npm run standalone:build
 npm run preflight:drive-oauth
 npm run smoke:drive-loop
+npm run smoke:real-drive-content
 npm run smoke:pixel-pwa
 ```
 
@@ -121,9 +122,11 @@ npm run smoke:pixel-pwa
 
 `npm run smoke:drive-loop` runs the focused desktop -> mobile/PWA -> desktop sync smoke against the mocked Drive provider. It proves entries, File Box metadata, transfer metadata, attachment metadata, and explicit on-demand blob download through the sync engine, and writes ignored evidence under `.labnote-smoke/drive-loop/`.
 
+`npm run smoke:real-drive-content` runs a local-only OAuth loopback, creates a throwaway Google Drive folder, uploads a daily entry, phone-style attachment metadata/blob, File Box metadata, and transfer metadata, then lists metadata before explicitly downloading the blob. It writes ignored evidence under `.labnote-smoke/real-drive-content/` and never writes tokens to disk.
+
 `npm run smoke:pixel-pwa` uses the connected Pixel 7a/WebAPK, `adb reverse tcp:4173 tcp:4173`, and a real device screenshot. It writes ignored evidence under `.labnote-device-smoke/pixel-pwa/` and fails rather than accepting black lockscreen/NotificationShade captures.
 
-The packaged OAuth smoke requires a local-only desktop OAuth client ID. Either set shell environment variables or place a downloaded Google OAuth desktop JSON at `.labnote-local/oauth.desktop.json`; `.labnote-local/` is ignored by Git. In the app, open **Sync > Advanced OAuth client IDs** and use **Import Google OAuth JSON** to fill the Desktop or Web/PWA client fields from a downloaded Google client JSON. The importer reads only client IDs and the optional desktop client secret. Never commit OAuth JSON files, access tokens, refresh tokens, or user Drive data.
+The packaged OAuth and real Drive content smokes require a local-only desktop OAuth client ID and, for current Google installed-app token exchange behavior, its client secret. Either set shell environment variables or place a downloaded Google OAuth desktop JSON at `.labnote-local/oauth.desktop.json`; `.labnote-local/` is ignored by Git. In the app, open **Sync > Advanced OAuth client IDs** and use **Import Google OAuth JSON** to fill the Desktop or Web/PWA client fields from a downloaded Google client JSON. The importer reads only client IDs and the optional desktop client secret. Never commit OAuth JSON files, access tokens, refresh tokens, or user Drive data.
 
 ## First Milestone Status
 

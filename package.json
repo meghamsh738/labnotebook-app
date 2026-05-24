@@ -15,6 +15,7 @@
     "standalone:build": "npm --prefix web run build && electron-builder --config electron-builder.json",
     "preflight:drive-oauth": "node scripts/preflight-drive-oauth.mjs",
     "smoke:drive-loop": "node scripts/smoke-drive-loop.mjs",
+    "smoke:real-drive-content": "node scripts/smoke-real-drive-content.mjs",
     "smoke:packaged-oauth": "node scripts/smoke-packaged-oauth.mjs",
     "smoke:pixel-pwa": "node scripts/smoke-pixel-pwa.mjs"
   },
