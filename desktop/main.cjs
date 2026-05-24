@@ -4,6 +4,12 @@ const fs = require('node:fs')
 const crypto = require('node:crypto')
 const http = require('node:http')
 
+const userDataDir = process.env.EASYLAB_LABNOTE_USER_DATA_DIR?.trim()
+if (userDataDir) {
+  fs.mkdirSync(userDataDir, { recursive: true })
+  app.setPath('userData', userDataDir)
+}
+
 const isDev = process.env.EASYLAB_LABNOTE_DEV === '1'
 
 function appRoot(...parts) {
@@ -47,8 +53,26 @@ function base64Url(buffer) {
   return buffer.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '')
 }
 
+async function openGoogleOAuthUrl(url) {
+  const capturePath = process.env.EASYLAB_LABNOTE_OAUTH_URL_FILE
+  if (capturePath) {
+    fs.mkdirSync(path.dirname(capturePath), { recursive: true })
+    fs.writeFileSync(capturePath, url, 'utf-8')
+  }
+  if (process.env.EASYLAB_LABNOTE_OAUTH_SKIP_OPEN === '1') return
+  await shell.openExternal(url)
+}
+
+function writeOAuthEvent(event, details = {}) {
+  const eventPath = process.env.EASYLAB_LABNOTE_OAUTH_EVENT_FILE
+  if (!eventPath) return
+  fs.mkdirSync(path.dirname(eventPath), { recursive: true })
+  fs.appendFileSync(eventPath, `${JSON.stringify({ event, ...details, at: new Date().toISOString() })}\n`, 'utf-8')
+}
+
 async function requestGoogleDriveToken({ clientId, clientSecret, scope }) {
   if (!clientId || !String(clientId).trim()) throw new Error('Google OAuth client ID is required.')
+  writeOAuthEvent('request-start', { hasClientSecret: Boolean(clientSecret) })
   const requestedScope = scope || 'https://www.googleapis.com/auth/drive.file'
   const optionalClientSecret = typeof clientSecret === 'string' ? clientSecret.trim() : ''
   const verifier = base64Url(crypto.randomBytes(48))
@@ -63,11 +87,16 @@ async function requestGoogleDriveToken({ clientId, clientSecret, scope }) {
       settled = true
       clearTimeout(timeout)
       server.close(() => {})
-      if (error) reject(error)
-      else resolve(result)
+      if (error) {
+        writeOAuthEvent('request-error', { message: error.message })
+        reject(error)
+      } else {
+        writeOAuthEvent('request-success', { scope: result?.scope, tokenType: result?.tokenType })
+        resolve(result)
+      }
     }
 
-    const timeout = setTimeout(() => finish(new Error('Google sign-in timed out.')), 120000)
+    const timeout = setTimeout(() => finish(new Error('Google sign-in timed out.')), 5 * 60 * 1000)
 
     server.on('request', async (req, res) => {
       try {
@@ -112,6 +141,7 @@ async function requestGoogleDriveToken({ clientId, clientSecret, scope }) {
         if (!tokenResponse.ok || !tokenJson.access_token) {
           throw new Error(tokenJson.error_description || tokenJson.error || `Google token exchange failed (${tokenResponse.status}).`)
         }
+        writeOAuthEvent('token-exchanged', { status: tokenResponse.status, scope: tokenJson.scope, tokenType: tokenJson.token_type })
 
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
         res.end('<h1>Easylab Lab Notebook is connected to Google Drive</h1><p>You can close this tab and return to the app.</p>')
@@ -141,7 +171,8 @@ async function requestGoogleDriveToken({ clientId, clientSecret, scope }) {
         authUrl.searchParams.set('code_challenge_method', 'S256')
         authUrl.searchParams.set('access_type', 'offline')
         authUrl.searchParams.set('prompt', 'consent')
-        await shell.openExternal(authUrl.toString())
+        writeOAuthEvent('auth-url-ready', { redirectUri })
+        await openGoogleOAuthUrl(authUrl.toString())
       } catch (error) {
         finish(error instanceof Error ? error : new Error(String(error)))
       }

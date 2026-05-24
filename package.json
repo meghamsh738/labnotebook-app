@@ -12,7 +12,8 @@
     "test:e2e": "npm --prefix web run test:e2e",
     "screenshots": "npm --prefix web run screenshots",
     "standalone:dev": "set EASYLAB_LABNOTE_DEV=1&& concurrently \"npm --prefix web run dev -- --host 127.0.0.1\" \"wait-on http://127.0.0.1:5173 && electron desktop/main.cjs\"",
-    "standalone:build": "npm --prefix web run build && electron-builder --config electron-builder.json"
+    "standalone:build": "npm --prefix web run build && electron-builder --config electron-builder.json",
+    "smoke:packaged-oauth": "node scripts/smoke-packaged-oauth.mjs"
   },
   "devDependencies": {
     "concurrently": "^9.2.1",

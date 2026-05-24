@@ -217,6 +217,12 @@ function newId(prefix: string) {
   return `${prefix}${crypto.randomUUID?.() ?? Math.random().toString(36).slice(2)}`
 }
 
+function logDriveSyncDebug(event: string, details?: unknown) {
+  if (typeof window === 'undefined') return
+  if (window.localStorage.getItem('labnote.debugSync') !== '1') return
+  console.info('[LabNote Drive Sync]', event, details ?? '')
+}
+
 const SEED_VERSION_KEY = 'labnote.seedVersion'
 
 const shouldResetSeed = () => {
@@ -3848,9 +3854,7 @@ function App() {
 
     setDriveConnection((prev) => ({ ...prev, status: 'syncing', lastError: undefined }))
     try {
-      const { repositories, blobStore, snapshot } = await prepareJournalCoreSnapshot()
-      const store = await createIndexedDbJournalStore(deviceProfile, repositories)
-      await store.saveSnapshot(snapshot)
+      logDriveSyncDebug('sync-start', { preferredKind: driveOAuthClient.preferredKind })
       const desktopClientSecret = driveOAuthClient.preferredKind === 'desktop'
         ? driveConnection.desktopClientSecret?.trim()
         : undefined
@@ -3860,8 +3864,22 @@ function App() {
         folderName: driveConnection.folderName || DRIVE_ROOT_FOLDER,
         folderId: driveConnection.folderId,
       })
+      await provider.signIn()
+      logDriveSyncDebug('signed-in')
+      const { repositories, blobStore, snapshot } = await prepareJournalCoreSnapshot()
+      logDriveSyncDebug('snapshot-prepared', {
+        entries: Object.keys(snapshot.entries).length,
+        attachments: snapshot.attachments.length,
+        fileBoxItems: snapshot.fileBoxItems.length,
+        transfers: snapshot.transfers.length,
+      })
+      const store = await createIndexedDbJournalStore(deviceProfile, repositories)
+      await store.saveSnapshot(snapshot)
+      logDriveSyncDebug('snapshot-saved')
       const syncResult = await syncOnce({ provider, store, device: deviceProfile, blobStore })
+      logDriveSyncDebug('sync-once-complete', syncResult)
       const workspace = await provider.ensureWorkspace()
+      logDriveSyncDebug('workspace-ready', { folderId: workspace.id })
       const syncedSnapshot = await store.getSnapshot()
       const lastSyncAt = new Date().toISOString()
       const attachmentById = new Map(syncedSnapshot.attachments.map((attachment) => [attachment.id, attachment]))
@@ -3903,7 +3921,9 @@ function App() {
         lastSyncAt,
         lastError: undefined,
       }))
+      logDriveSyncDebug('sync-state-updated', { folderId: workspace.id })
     } catch (err) {
+      logDriveSyncDebug('sync-error', err instanceof Error ? err.message : String(err))
       setDriveConnection((prev) => ({
         ...prev,
         status: 'error',

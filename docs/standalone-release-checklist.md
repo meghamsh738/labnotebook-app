@@ -10,6 +10,7 @@ Use this before calling the connected-devices branch ready for a desktop/PWA tri
 - `npm --prefix web run test:e2e -- --project=desktop-chromium`
 - `npm --prefix web run test:e2e -- --project=mobile-chromium web/tests/mobile-pair.spec.ts`
 - `npm run standalone:build`
+- Optional packaged OAuth smoke after entering local credentials: `npm run smoke:packaged-oauth`
 
 ## Sync Smoke
 
@@ -19,6 +20,7 @@ Use this before calling the connected-devices branch ready for a desktop/PWA tri
   - Web/PWA OAuth client ID for the browser or installed PWA origin.
 - Use the `https://www.googleapis.com/auth/drive.file` scope only.
 - Connect Google Drive and confirm the app creates the configured Drive folder.
+- For the packaged OAuth smoke, set `LABNOTE_DESKTOP_CLIENT_ID` and `LABNOTE_DESKTOP_CLIENT_SECRET` in the local shell only. Do not write those values into files or commits.
 - Create today's entry, attach one small file, run sync, restart the app, and confirm the entry and file metadata reload.
 - Repeat with a second browser profile or PWA viewport before claiming cross-device readiness.
 

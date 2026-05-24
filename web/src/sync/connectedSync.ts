@@ -383,6 +383,7 @@ export class GoogleDriveProvider implements SyncProvider {
   }
 
   async signIn(): Promise<void> {
+    if (this.accessToken) return
     if (typeof window !== 'undefined' && window.electronAPI?.requestGoogleDriveAccessToken) {
       const token = await window.electronAPI.requestGoogleDriveAccessToken({
         clientId: this.options.clientId,
