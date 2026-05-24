@@ -29,7 +29,13 @@ export const CONNECTED_STORAGE_KEYS = {
 
 export type DriveConnectionState = {
   provider: 'google-drive'
+  /**
+   * Legacy single-client field kept so existing installs do not lose their saved OAuth setting.
+   * New installs should prefer desktopClientId/webClientId.
+   */
   clientId: string
+  desktopClientId?: string
+  webClientId?: string
   folderName: string
   folderId?: string
   connectedAt?: string
@@ -37,6 +43,8 @@ export type DriveConnectionState = {
   status: 'disconnected' | 'ready' | 'needs-auth' | 'syncing' | 'error'
   lastError?: string
 }
+
+export type DriveOAuthClientKind = 'desktop' | 'web'
 
 export type SyncProvider = {
   kind: 'google-drive'
@@ -100,6 +108,39 @@ export function loadJson<T>(key: string, fallback: T): T {
 export function saveJson<T>(key: string, value: T) {
   if (typeof window === 'undefined') return
   window.localStorage.setItem(key, JSON.stringify(value))
+}
+
+export function normalizeDriveConnection(value?: Partial<DriveConnectionState> | null): DriveConnectionState {
+  return {
+    provider: 'google-drive',
+    clientId: value?.clientId ?? '',
+    desktopClientId: value?.desktopClientId ?? '',
+    webClientId: value?.webClientId ?? '',
+    folderName: value?.folderName || DRIVE_ROOT_FOLDER,
+    folderId: value?.folderId,
+    connectedAt: value?.connectedAt,
+    lastSyncAt: value?.lastSyncAt,
+    status: value?.status === 'syncing' ? 'needs-auth' : value?.status ?? 'disconnected',
+    lastError: value?.lastError,
+  }
+}
+
+export function getPreferredDriveOAuthClientKind(): DriveOAuthClientKind {
+  if (typeof window !== 'undefined' && window.electronAPI?.requestGoogleDriveAccessToken) return 'desktop'
+  return 'web'
+}
+
+export function resolveDriveClientId(
+  connection: Pick<DriveConnectionState, 'clientId' | 'desktopClientId' | 'webClientId'>,
+  preferredKind: DriveOAuthClientKind = getPreferredDriveOAuthClientKind()
+) {
+  const legacyClientId = connection.clientId.trim()
+  const desktopClientId = connection.desktopClientId?.trim() ?? ''
+  const webClientId = connection.webClientId?.trim() ?? ''
+  const clientId = preferredKind === 'desktop'
+    ? desktopClientId || legacyClientId
+    : webClientId || legacyClientId
+  return { clientId, preferredKind }
 }
 
 export function detectDevicePlatform(): DevicePlatform {

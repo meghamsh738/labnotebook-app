@@ -9,6 +9,7 @@ import {
   hashBlobSha256,
   mergeEntryEnvelopes,
 } from '../src/sync/dataCore'
+import { normalizeDriveConnection, resolveDriveClientId } from '../src/sync/connectedSync'
 import { hashJsonSha256, stableStringify } from '../src/sync/hashing'
 import {
   buildInvalidRemoteJsonConflict,
@@ -140,6 +141,21 @@ test('canonical JSON hashing is stable across object key order', async () => {
 
   expect(stableStringify(left)).toBe(stableStringify(right))
   await expect(hashJsonSha256(left)).resolves.toBe(await hashJsonSha256(right))
+})
+
+test('Drive OAuth client resolution separates desktop and web clients with legacy fallback', () => {
+  const connection = normalizeDriveConnection({
+    clientId: 'legacy-client',
+    desktopClientId: 'desktop-client',
+    webClientId: 'web-client',
+    status: 'syncing',
+  })
+
+  expect(connection.status).toBe('needs-auth')
+  expect(resolveDriveClientId(connection, 'desktop')).toEqual({ clientId: 'desktop-client', preferredKind: 'desktop' })
+  expect(resolveDriveClientId(connection, 'web')).toEqual({ clientId: 'web-client', preferredKind: 'web' })
+  expect(resolveDriveClientId(normalizeDriveConnection({ clientId: 'legacy-client' }), 'desktop').clientId).toBe('legacy-client')
+  expect(resolveDriveClientId(normalizeDriveConnection({ clientId: 'legacy-client' }), 'web').clientId).toBe('legacy-client')
 })
 
 test('validates sync envelopes and rejects malformed remote JSON', () => {

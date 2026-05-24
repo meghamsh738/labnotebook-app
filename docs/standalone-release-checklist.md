@@ -12,7 +12,9 @@ Use this before calling the connected-devices branch ready for a desktop/PWA tri
 
 ## Sync Smoke
 
-- Create or enter a Google OAuth client ID in Sync > Advanced OAuth client ID.
+- Create or enter the right Google OAuth client ID in Sync > Advanced OAuth client IDs:
+  - Desktop app OAuth client ID for the Electron app.
+  - Web/PWA OAuth client ID for the browser or installed PWA origin.
 - Use the `https://www.googleapis.com/auth/drive.file` scope only.
 - Connect Google Drive and confirm the app creates the configured Drive folder.
 - Create today's entry, attach one small file, run sync, restart the app, and confirm the entry and file metadata reload.

@@ -278,7 +278,7 @@ Implemented in this branch:
 - Conflict resolution controls in the Sync pane for local wins, Drive copy wins, or keeping both as a separate entry copy.
 - Google Drive upload retry handling plus resumable upload for larger attachment blobs.
 - Two isolated browser-profile tests for attachment blob round-trip, offline edit conflict preservation, and tombstone propagation.
-- First-run Sync pane copy now explains local-first Drive setup and keeps the OAuth client ID under an Advanced section.
+- First-run Sync pane copy now explains local-first Drive setup and keeps Desktop app and Web/PWA OAuth client IDs under an Advanced section with legacy single-client fallback.
 - File Hub and Entry File Box rows now show actionable recovery hints for failed sync, missing local references, remote-only files, remote unavailable errors, and hash mismatch errors.
 - Release readiness checklist for desktop installer, PWA, sync smoke, data safety, and secret hygiene.
 - Focused tests for repository CRUD, stable hashing, validation, two-device convergence, attachment metadata, blob restoration, conflicts, tombstone non-resurrection, backup restore, Google Drive provider path mapping, upload retry, and two-profile repository-backed sync.
@@ -286,6 +286,6 @@ Implemented in this branch:
 Next implementation task:
 
 1. Verify the real Google Drive OAuth flow with a user-provided OAuth client ID and consent.
-2. Add separate desktop/web OAuth client ID slots if real Electron and PWA smoke testing proves one field is confusing.
-3. Run a clean desktop installer smoke plus mobile PWA installability check after real Drive auth succeeds.
-4. Promote the passing verification evidence into the release checklist before tagging a trial build.
+2. Run a clean desktop installer smoke plus mobile PWA installability check after real Drive auth succeeds.
+3. Promote the passing verification evidence into the release checklist before tagging a trial build.
+4. Consider a guided OAuth setup screen only if the Advanced fields still confuse first-run testing.

@@ -41,6 +41,8 @@ import {
   loadJson,
   makeFileBoxItem,
   makeTransferRecord,
+  normalizeDriveConnection,
+  resolveDriveClientId,
   saveJson,
   transferStatusLabel,
   type DriveConnectionState,
@@ -2086,12 +2088,7 @@ function App() {
     loadJson<SyncConflict[]>(CONNECTED_STORAGE_KEYS.conflicts, [])
   )
   const [driveConnection, setDriveConnection] = useState<DriveConnectionState>(() =>
-    loadJson<DriveConnectionState>(CONNECTED_STORAGE_KEYS.drive, {
-      provider: 'google-drive',
-      clientId: '',
-      folderName: DRIVE_ROOT_FOLDER,
-      status: 'disconnected',
-    })
+    normalizeDriveConnection(loadJson<Partial<DriveConnectionState> | null>(CONNECTED_STORAGE_KEYS.drive, null))
   )
   const [driveSyncSummary, setDriveSyncSummary] = useState<DriveSyncSummary | null>(null)
   const [backupStatus, setBackupStatus] = useState<BackupStatus>(null)
@@ -3842,8 +3839,10 @@ function App() {
   ])
 
   const runGoogleDriveSync = useCallback(async () => {
-    if (!driveConnection.clientId.trim()) {
-      setDriveConnection((prev) => ({ ...prev, status: 'needs-auth', lastError: 'Add a Google OAuth client ID before connecting.' }))
+    const driveOAuthClient = resolveDriveClientId(driveConnection)
+    if (!driveOAuthClient.clientId) {
+      const label = driveOAuthClient.preferredKind === 'desktop' ? 'desktop' : 'web/PWA'
+      setDriveConnection((prev) => ({ ...prev, status: 'needs-auth', lastError: `Add a Google OAuth ${label} client ID before connecting.` }))
       return
     }
 
@@ -3853,7 +3852,7 @@ function App() {
       const store = await createIndexedDbJournalStore(deviceProfile, repositories)
       await store.saveSnapshot(snapshot)
       const provider = new GoogleDriveSyncProvider({
-        clientId: driveConnection.clientId.trim(),
+        clientId: driveOAuthClient.clientId,
         folderName: driveConnection.folderName || DRIVE_ROOT_FOLDER,
         folderId: driveConnection.folderId,
       })
@@ -3909,9 +3908,7 @@ function App() {
     }
   }, [
     deviceProfile,
-    driveConnection.clientId,
-    driveConnection.folderId,
-    driveConnection.folderName,
+    driveConnection,
     prepareJournalCoreSnapshot,
   ])
 
@@ -7217,6 +7214,10 @@ function SyncPane({
   onResolveConflict: (conflictId: string, action: ConflictResolutionAction) => void
 }) {
   const backupInputRef = useRef<HTMLInputElement | null>(null)
+  const driveOAuthClient = resolveDriveClientId(driveConnection)
+  const activeOAuthLabel = driveOAuthClient.preferredKind === 'desktop' ? 'Desktop app' : 'Web/PWA'
+  const hasActiveOAuthClient = Boolean(driveOAuthClient.clientId)
+  const hasLegacyOAuthClient = Boolean(driveConnection.clientId.trim())
 
   return (
     <main className="panel editor connected-workspace" data-testid="sync-pane">
@@ -7257,19 +7258,41 @@ function SyncPane({
           </div>
           <details className="settings-disclosure sync-advanced">
             <summary className="settings-disclosure-summary">
-              <span><strong>Advanced OAuth client ID</strong><span className="muted tiny">Required before first connect; OAuth client IDs are not secrets.</span></span>
-              <span className={`status-chip ${driveConnection.clientId.trim() ? 'success' : 'warning'}`}>{driveConnection.clientId.trim() ? 'Configured' : 'Needed'}</span>
+              <span><strong>Advanced OAuth client IDs</strong><span className="muted tiny">Desktop and PWA use different Google client types. OAuth client IDs are not secrets.</span></span>
+              <span className={`status-chip ${hasActiveOAuthClient ? 'success' : 'warning'}`}>{hasActiveOAuthClient ? `${activeOAuthLabel} configured` : `${activeOAuthLabel} needed`}</span>
             </summary>
             <div className="settings-disclosure-body">
               <label className="field">
-                <span>OAuth client ID</span>
+                <span>Desktop app OAuth client ID</span>
                 <input
-                  value={driveConnection.clientId}
-                  onChange={(event) => onDriveConnectionChange((prev) => ({ ...prev, clientId: event.target.value, status: event.target.value.trim() ? 'needs-auth' : 'disconnected' }))}
-                  placeholder="Desktop client ID for Electron, web client ID for PWA"
+                  value={driveConnection.desktopClientId ?? ''}
+                  onChange={(event) => onDriveConnectionChange((prev) => {
+                    const desktopClientId = event.target.value
+                    const hasAnyClient = Boolean(desktopClientId.trim() || prev.webClientId?.trim() || prev.clientId.trim())
+                    return { ...prev, desktopClientId, status: hasAnyClient ? 'needs-auth' : 'disconnected' }
+                  })}
+                  placeholder="Desktop OAuth client ID for Electron"
                   spellCheck={false}
                 />
               </label>
+              <label className="field">
+                <span>Web/PWA OAuth client ID</span>
+                <input
+                  value={driveConnection.webClientId ?? ''}
+                  onChange={(event) => onDriveConnectionChange((prev) => {
+                    const webClientId = event.target.value
+                    const hasAnyClient = Boolean(prev.desktopClientId?.trim() || webClientId.trim() || prev.clientId.trim())
+                    return { ...prev, webClientId, status: hasAnyClient ? 'needs-auth' : 'disconnected' }
+                  })}
+                  placeholder="Web OAuth client ID for browser/PWA"
+                  spellCheck={false}
+                />
+              </label>
+              {hasLegacyOAuthClient && !driveConnection.desktopClientId?.trim() && !driveConnection.webClientId?.trim() && (
+                <div className="settings-note">
+                  A legacy single OAuth client ID is saved and will be used as a fallback. Move it into the matching Desktop or Web/PWA field when you know which client type it is.
+                </div>
+              )}
             </div>
           </details>
           {driveConnection.lastError && <div className="settings-error">{driveConnection.lastError}</div>}
