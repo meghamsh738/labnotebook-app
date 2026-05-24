@@ -14,6 +14,7 @@
     "standalone:dev": "set EASYLAB_LABNOTE_DEV=1&& concurrently \"npm --prefix web run dev -- --host 127.0.0.1\" \"wait-on http://127.0.0.1:5173 && electron desktop/main.cjs\"",
     "standalone:build": "npm --prefix web run build && electron-builder --config electron-builder.json",
     "preflight:drive-oauth": "node scripts/preflight-drive-oauth.mjs",
+    "smoke:drive-loop": "node scripts/smoke-drive-loop.mjs",
     "smoke:packaged-oauth": "node scripts/smoke-packaged-oauth.mjs",
     "smoke:pixel-pwa": "node scripts/smoke-pixel-pwa.mjs"
   },

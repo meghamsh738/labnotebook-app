@@ -111,12 +111,15 @@ npm --prefix web run test:e2e -- --project=mobile-chromium
 npm --prefix web run screenshots
 npm run standalone:build
 npm run preflight:drive-oauth
+npm run smoke:drive-loop
 npm run smoke:pixel-pwa
 ```
 
 `npm --prefix web run screenshots` regenerates PNG screenshots under `screenshots/`.
 
 `npm run preflight:drive-oauth` checks the ignored local OAuth setup before the packaged app is launched. It accepts `LABNOTE_DESKTOP_CLIENT_ID` or `.labnote-local/oauth.desktop.json`, rejects tracked OAuth JSON, and fails if the downloaded client is a Web client instead of a Desktop app client.
+
+`npm run smoke:drive-loop` runs the focused desktop -> mobile/PWA -> desktop sync smoke against the mocked Drive provider. It proves entries, File Box metadata, transfer metadata, attachment metadata, and explicit on-demand blob download through the sync engine, and writes ignored evidence under `.labnote-smoke/drive-loop/`.
 
 `npm run smoke:pixel-pwa` uses the connected Pixel 7a/WebAPK, `adb reverse tcp:4173 tcp:4173`, and a real device screenshot. It writes ignored evidence under `.labnote-device-smoke/pixel-pwa/` and fails rather than accepting black lockscreen/NotificationShade captures.
 
