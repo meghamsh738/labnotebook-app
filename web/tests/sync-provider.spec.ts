@@ -10,6 +10,8 @@ type FakeDriveNode = DriveFile & {
 
 class FakeFolderDriveClient implements FolderDriveClient {
   readonly kind = 'google-drive' as const
+  failNextBlobUpload = false
+  blobUploadAttempts = 0
   private sequence = 0
   private readonly nodes = new Map<string, FakeDriveNode>()
   private signedIn = false
@@ -47,6 +49,11 @@ class FakeFolderDriveClient implements FolderDriveClient {
   }
 
   async uploadBlob(parentFolderId: string, name: string, blob: Blob, mimeType?: string) {
+    this.blobUploadAttempts += 1
+    if (this.failNextBlobUpload) {
+      this.failNextBlobUpload = false
+      throw new Error('Google Drive request failed (503): temporary upload failure')
+    }
     const id = this.upsertFile(parentFolderId, name, mimeType || blob.type || 'application/octet-stream')
     this.nodes.set(id, { ...this.nodes.get(id)!, blob, size: blob.size.toString(), modifiedTime: nowIso() })
     return id
@@ -127,4 +134,27 @@ test('GoogleDriveSyncProvider maps logical paths onto Drive folders and files', 
   expect(entry?.value).toEqual({ title: 'Daily entry' })
   expect(await blob?.text()).toBe('image bytes')
   expect(files.map((file) => file.path)).toEqual(['attachments/2026-05-24/att-image.png'])
+})
+
+test('GoogleDriveSyncProvider retries transient blob upload failures', async () => {
+  const client = new FakeFolderDriveClient()
+  client.failNextBlobUpload = true
+  const provider = new GoogleDriveSyncProvider({
+    clientId: 'test-client-id',
+    client,
+    uploadRetryCount: 2,
+    retryDelayMs: 0,
+  })
+
+  await provider.signIn()
+  await provider.ensureWorkspace()
+  const file = await provider.putBlob('attachments/2026-05-24/retry-image.png', new Blob(['retry bytes'], { type: 'image/png' }), {
+    mimeType: 'image/png',
+    byteSize: 11,
+  })
+  const blob = await provider.getBlob('attachments/2026-05-24/retry-image.png')
+
+  expect(client.blobUploadAttempts).toBe(2)
+  expect(file.path).toBe('attachments/2026-05-24/retry-image.png')
+  expect(await blob?.text()).toBe('retry bytes')
 })

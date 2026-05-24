@@ -15,6 +15,8 @@ import type {
 export const DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.file'
 export const DRIVE_ROOT_FOLDER = 'Easylab Lab Notebook'
 export const DRIVE_MIME_FOLDER = 'application/vnd.google-apps.folder'
+const DRIVE_RESUMABLE_UPLOAD_THRESHOLD_BYTES = 5 * 1024 * 1024
+const DRIVE_REQUEST_RETRY_COUNT = 2
 
 export const CONNECTED_STORAGE_KEYS = {
   device: 'labnote.connected.device',
@@ -310,6 +312,23 @@ function multipartBody(metadata: Record<string, unknown>, blob: Blob) {
   return { boundary, body }
 }
 
+class GoogleDriveRequestError extends Error {
+  readonly status: number
+
+  constructor(status: number, detail: string) {
+    super(`Google Drive request failed (${status}): ${detail}`)
+    this.status = status
+  }
+}
+
+function isRetryableDriveError(error: unknown) {
+  if (error instanceof TypeError) return true
+  if (error instanceof GoogleDriveRequestError) {
+    return error.status === 408 || error.status === 429 || error.status >= 500
+  }
+  return false
+}
+
 export class GoogleDriveProvider implements SyncProvider {
   readonly kind = 'google-drive' as const
   private accessToken = ''
@@ -397,7 +416,10 @@ export class GoogleDriveProvider implements SyncProvider {
   }
 
   async uploadBlob(parentFolderId: string, name: string, blob: Blob, mimeType?: string): Promise<string> {
-    return this.upsertFile(parentFolderId, name, mimeType && blob.type !== mimeType ? blob.slice(0, blob.size, mimeType) : blob)
+    const normalizedBlob = mimeType && blob.type !== mimeType ? blob.slice(0, blob.size, mimeType) : blob
+    return this.upsertFile(parentFolderId, name, normalizedBlob, {
+      resumable: normalizedBlob.size >= DRIVE_RESUMABLE_UPLOAD_THRESHOLD_BYTES,
+    })
   }
 
   async downloadJson<T>(fileId: string): Promise<T> {
@@ -405,22 +427,18 @@ export class GoogleDriveProvider implements SyncProvider {
   }
 
   async downloadBlob(fileId: string): Promise<Blob> {
-    if (!this.accessToken) throw new Error('Google Drive is not authorized.')
-    const response = await fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?alt=media`, {
-      headers: { Authorization: `Bearer ${this.accessToken}` },
-    })
-    if (!response.ok) {
-      const detail = await response.text().catch(() => '')
-      throw new Error(`Google Drive blob download failed (${response.status}): ${detail || response.statusText}`)
-    }
+    const response = await this.requestRaw(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?alt=media`)
     return response.blob()
   }
 
-  private async upsertFile(parentFolderId: string, name: string, blob: Blob): Promise<string> {
+  private async upsertFile(parentFolderId: string, name: string, blob: Blob, options: { resumable?: boolean } = {}): Promise<string> {
     const existing = await this.listFolder(parentFolderId, `name = '${escapeDriveQuery(name)}'`)
+    const existingId = existing[0]?.id
+    if (options.resumable) {
+      return this.resumableUpsertFile(parentFolderId, name, blob, existingId)
+    }
     const metadata = { name, parents: [parentFolderId] }
     const { body } = multipartBody(metadata, blob)
-    const existingId = existing[0]?.id
     const url = existingId
       ? `https://www.googleapis.com/upload/drive/v3/files/${encodeURIComponent(existingId)}?uploadType=multipart&fields=id`
       : 'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id'
@@ -431,16 +449,61 @@ export class GoogleDriveProvider implements SyncProvider {
     return created.id
   }
 
+  private async resumableUpsertFile(parentFolderId: string, name: string, blob: Blob, existingId?: string): Promise<string> {
+    const metadata = existingId ? { name } : { name, parents: [parentFolderId] }
+    const sessionUrl = existingId
+      ? `https://www.googleapis.com/upload/drive/v3/files/${encodeURIComponent(existingId)}?uploadType=resumable&fields=id`
+      : 'https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&fields=id'
+    const sessionResponse = await this.requestRaw(sessionUrl, {
+      method: existingId ? 'PATCH' : 'POST',
+      headers: {
+        'Content-Type': 'application/json; charset=UTF-8',
+        'X-Upload-Content-Type': blob.type || 'application/octet-stream',
+        'X-Upload-Content-Length': String(blob.size),
+      },
+      body: JSON.stringify(metadata),
+    })
+    const uploadUrl = sessionResponse.headers.get('Location')
+    if (!uploadUrl) throw new Error('Google Drive did not return a resumable upload session URL.')
+    const uploaded = await this.request<DriveFile>(uploadUrl, {
+      method: 'PUT',
+      headers: { 'Content-Type': blob.type || 'application/octet-stream' },
+      body: blob,
+    })
+    return uploaded.id
+  }
+
   private async request<T>(url: string, init: RequestInit = {}): Promise<T> {
+    const response = await this.requestRaw(url, init)
+    return (await response.json()) as T
+  }
+
+  private async requestRaw(url: string, init: RequestInit = {}): Promise<Response> {
     if (!this.accessToken) throw new Error('Google Drive is not authorized.')
     const headers = new Headers(init.headers)
     headers.set('Authorization', `Bearer ${this.accessToken}`)
-    const response = await fetch(url, { ...init, headers })
-    if (!response.ok) {
-      const detail = await response.text().catch(() => '')
-      throw new Error(`Google Drive request failed (${response.status}): ${detail || response.statusText}`)
+    return this.withRequestRetry(async () => {
+      const response = await fetch(url, { ...init, headers })
+      if (!response.ok) {
+        const detail = await response.text().catch(() => '')
+        throw new GoogleDriveRequestError(response.status, detail || response.statusText)
+      }
+      return response
+    })
+  }
+
+  private async withRequestRetry<T>(operation: () => Promise<T>): Promise<T> {
+    let lastError: unknown
+    for (let attempt = 0; attempt <= DRIVE_REQUEST_RETRY_COUNT; attempt += 1) {
+      try {
+        return await operation()
+      } catch (err) {
+        lastError = err
+        if (attempt >= DRIVE_REQUEST_RETRY_COUNT || !isRetryableDriveError(err)) break
+        await new Promise((resolve) => globalThis.setTimeout(resolve, 300 * (attempt + 1)))
+      }
     }
-    return (await response.json()) as T
+    throw lastError
   }
 
   private async loadIdentity(): Promise<GoogleIdentity> {

@@ -6059,6 +6059,18 @@ code,
   gap: 8px;
 }
 
+.conflict-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.conflict-actions .ghost {
+  min-height: 32px;
+  padding: 6px 10px;
+}
+
 .connected-empty {
   padding: 18px;
   border: 1px dashed rgba(32, 48, 42, 0.16);
@@ -6112,6 +6124,15 @@ code,
   border-radius: 12px;
   background: rgba(168, 47, 47, 0.08);
   color: #8f2929;
+}
+
+.settings-success {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid rgba(7, 92, 73, 0.22);
+  border-radius: 12px;
+  background: rgba(7, 92, 73, 0.08);
+  color: var(--accent);
 }
 
 @media (max-width: 980px) {

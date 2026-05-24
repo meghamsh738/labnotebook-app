@@ -22,6 +22,7 @@ async function boot(
     appPaths?: typeof defaultPaths
     entries?: Record<string, unknown>
     attachments?: unknown[]
+    conflicts?: unknown[]
   }
 ) {
   const initOpts = { noFail: '1', setupComplete: true, ...opts }
@@ -47,6 +48,9 @@ async function boot(
     }
     if (o?.attachments) {
       window.localStorage.setItem('labnote.attachments', JSON.stringify(o.attachments))
+    }
+    if (o?.conflicts) {
+      window.localStorage.setItem('labnote.connected.conflicts', JSON.stringify(o.conflicts))
     }
     if (o?.stubPicker) {
       ;(window as unknown as { showDirectoryPicker?: unknown }).showDirectoryPicker = undefined
@@ -808,6 +812,53 @@ test.describe('Lab note taking app', () => {
     await page.getByRole('tab', { name: 'Sync' }).click()
     await expect(page.getByTestId('sync-pane')).toBeVisible()
     await expect(page.getByRole('heading', { name: 'Device-owned sync without an Easylab cloud server' })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Export backup' })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Restore backup' })).toBeVisible()
+  })
+
+  test('sync conflict actions can keep both entry copies', async ({ page }) => {
+    const entry = {
+      id: 'entry-conflict-day',
+      createdDatetime: '2026-05-24T09:00:00.000Z',
+      lastEditedDatetime: '2026-05-24T10:00:00.000Z',
+      authorId: 'u1',
+      title: 'Local conflict day',
+      dateBucket: '2026-05-24',
+      isDaily: true,
+      content: [{ id: 'local-block', type: 'paragraph', text: 'local note' }],
+      tags: [],
+      searchTerms: [],
+      linkedFiles: [],
+      pinnedRegions: [],
+    }
+    await boot(page, {
+      noFail: '1',
+      entries: { [entry.id]: entry },
+      conflicts: [{
+        id: 'conf-entry-conflict-day',
+        entityKind: 'entry',
+        entityId: entry.id,
+        localUpdatedAt: '2026-05-24T10:00:00.000Z',
+        remoteUpdatedAt: '2026-05-24T10:05:00.000Z',
+        detectedAt: '2026-05-24T10:06:00.000Z',
+        resolution: 'pending',
+        summary: 'Both devices edited this daily entry.',
+        localCopy: { entry },
+        remoteCopy: { entry: { ...entry, title: 'Drive conflict day', content: [{ id: 'remote-block', type: 'paragraph', text: 'drive note' }] } },
+      }],
+    })
+
+    await page.getByRole('tab', { name: 'Sync' }).click()
+    await page.getByRole('button', { name: 'Keep both' }).click()
+    await expect(page.getByText('kept-copy')).toBeVisible()
+    await expect
+      .poll(async () =>
+        page.evaluate(() => {
+          const entries = JSON.parse(window.localStorage.getItem('labnote.entries') || '{}') as Record<string, { title?: string }>
+          return Object.values(entries).some((candidate) => candidate.title === 'Drive conflict day (conflict copy)')
+        })
+      )
+      .toBe(true)
   })
 
   test('journal data core migrates local entries into IndexedDB', async ({ page }) => {

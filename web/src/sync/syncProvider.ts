@@ -215,6 +215,8 @@ export type GoogleDriveSyncProviderOptions = {
   folderName?: string
   folderId?: string
   client?: FolderDriveClient
+  uploadRetryCount?: number
+  retryDelayMs?: number
 }
 
 function pathSegments(path: string) {
@@ -241,12 +243,16 @@ function driveFileToRemoteRef(path: string, file: DriveFile): RemoteFileRef {
 export class GoogleDriveSyncProvider implements SyncProvider {
   private readonly client: FolderDriveClient
   private readonly folderName: string
+  private readonly uploadRetryCount: number
+  private readonly retryDelayMs: number
   private rootFolderId = ''
   private readonly folderIds = new Map<string, string>()
 
   constructor(options: GoogleDriveSyncProviderOptions) {
     this.folderName = options.folderName || DRIVE_ROOT_FOLDER
     this.rootFolderId = options.folderId || ''
+    this.uploadRetryCount = options.uploadRetryCount ?? 2
+    this.retryDelayMs = options.retryDelayMs ?? 350
     this.client = options.client ?? new GoogleDriveProvider({
       clientId: options.clientId,
       folderName: this.folderName,
@@ -283,7 +289,7 @@ export class GoogleDriveSyncProvider implements SyncProvider {
   async putJson<T>(path: string, value: T): Promise<RemoteFileRef> {
     const { folderPath, fileName } = this.splitFilePath(path)
     const parentFolderId = await this.ensureFolderPath(folderPath)
-    const fileId = await this.client.uploadJson(parentFolderId, fileName, value)
+    const fileId = await this.withUploadRetry(() => this.client.uploadJson(parentFolderId, fileName, value))
     const file = await this.findFile(path)
     return file ? driveFileToRemoteRef(path, file) : {
       id: fileId,
@@ -303,7 +309,7 @@ export class GoogleDriveSyncProvider implements SyncProvider {
   async putBlob(path: string, blob: Blob, metadata: BlobMetadata): Promise<RemoteFileRef> {
     const { folderPath, fileName } = this.splitFilePath(path)
     const parentFolderId = await this.ensureFolderPath(folderPath)
-    const fileId = await this.client.uploadBlob(parentFolderId, fileName, blob, metadata.mimeType)
+    const fileId = await this.withUploadRetry(() => this.client.uploadBlob(parentFolderId, fileName, blob, metadata.mimeType))
     const file = await this.findFile(path)
     return file ? driveFileToRemoteRef(path, file) : {
       id: fileId,
@@ -405,8 +411,28 @@ export class GoogleDriveSyncProvider implements SyncProvider {
     if (!this.rootFolderId) this.rootFolderId = await this.client.ensureRootFolder()
     this.folderIds.set('', this.rootFolderId)
   }
+
+  private async withUploadRetry<T>(operation: () => Promise<T>): Promise<T> {
+    let lastError: unknown
+    for (let attempt = 0; attempt <= this.uploadRetryCount; attempt += 1) {
+      try {
+        return await operation()
+      } catch (err) {
+        lastError = err
+        if (attempt >= this.uploadRetryCount || !isRetryableUploadError(err)) break
+        await new Promise((resolve) => globalThis.setTimeout(resolve, this.retryDelayMs * (attempt + 1)))
+      }
+    }
+    throw lastError
+  }
 }
 
 function escapeDriveQuery(value: string) {
   return value.replace(/\\/g, '\\\\').replace(/'/g, "\\'")
+}
+
+function isRetryableUploadError(error: unknown) {
+  if (error instanceof TypeError) return true
+  if (!(error instanceof Error)) return false
+  return /\b(408|429|5\d\d)\b|rate limit|network|timeout|temporar/i.test(error.message)
 }

@@ -59,6 +59,12 @@ import {
   type SyncEngineResult,
 } from './sync/syncEngine'
 import { GoogleDriveSyncProvider } from './sync/syncProvider'
+import {
+  createJournalBackup,
+  parseJournalBackup,
+  restoreJournalBackup,
+  type JournalBackupRestoreResult,
+} from './sync/backup'
 
 const dateOnly = new Intl.DateTimeFormat('en-US', {
   month: 'short',
@@ -90,6 +96,12 @@ type AppPane = 'entries' | 'protocols' | 'file-hub' | 'devices' | 'transfers' | 
 type DriveSyncSummary = SyncEngineResult & {
   syncedAt: string
 }
+
+type BackupStatus = {
+  ok: boolean
+  message: string
+  result?: JournalBackupRestoreResult
+} | null
 
 type DateRange = {
   start: string
@@ -1307,6 +1319,7 @@ type FsDirectoryWithPerm = FileSystemDirectoryHandle & {
 }
 type MockSyncOverrides = { noFail?: boolean; failNext?: boolean }
 type MockSyncWindow = Window & { __labnoteMockSync?: MockSyncOverrides }
+type ConflictResolutionAction = 'local-won' | 'remote-won' | 'kept-copy'
 
 function blockToSearchText(block: Block): string {
   switch (block.type) {
@@ -1348,6 +1361,31 @@ const entryPreviewLines = (entry: Entry, maxLines = 3) => {
 function isAbortError(err: unknown): boolean {
   if (!err || typeof err !== 'object') return false
   return 'name' in err && (err as { name?: unknown }).name === 'AbortError'
+}
+
+function isEntryLike(value: unknown): value is Entry {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
+  const record = value as Partial<Entry>
+  return typeof record.id === 'string' && typeof record.title === 'string' && Array.isArray(record.content)
+}
+
+function entryFromConflictCopy(value: unknown): Entry | undefined {
+  if (isEntryLike(value)) return value
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined
+  const record = value as { entry?: unknown }
+  return isEntryLike(record.entry) ? record.entry : undefined
+}
+
+function makeConflictCopyEntry(entry: Entry, deviceId: string): Entry {
+  const timestamp = new Date().toISOString()
+  return {
+    ...entry,
+    id: `entry-conflict-${crypto.randomUUID?.() ?? Math.random().toString(36).slice(2)}`,
+    title: `${entry.title} (conflict copy)`,
+    lastEditedDatetime: timestamp,
+    updatedByDeviceId: deviceId,
+    syncStatus: 'queued',
+  }
 }
 
 const inferDefaultMobilePairLink = () => {
@@ -2056,6 +2094,7 @@ function App() {
     })
   )
   const [driveSyncSummary, setDriveSyncSummary] = useState<DriveSyncSummary | null>(null)
+  const [backupStatus, setBackupStatus] = useState<BackupStatus>(null)
   const [openEntryIds, setOpenEntryIds] = useState<string[]>(() =>
     sampleData.entries[0]?.id ? [sampleData.entries[0].id] : []
   )
@@ -3759,6 +3798,49 @@ function App() {
     )
   }, [])
 
+  const prepareJournalCoreSnapshot = useCallback(async () => {
+    const repositories = await createJournalRepositories()
+    const blobStore = new IndexedDbBlobStore(repositories)
+    const preparedAttachments = await Promise.all(attachmentsStore.map(async (attachment) => {
+      if (attachment.cacheKey && await blobStore.has(attachment.cacheKey)) return attachment
+      const cacheKey =
+        attachment.cacheKey ||
+        (attachment.cachedPath?.startsWith('idb://') ? attachment.cachedPath.replace('idb://', '') : '') ||
+        (attachment.cachedPath?.startsWith('fs://') ? attachment.cachedPath.replace('fs://', '') : '') ||
+        `attachment-${attachment.id}`
+      const blob = await readAttachmentBlob(attachment, attachmentUrls)
+      if (!blob) return attachment
+      try {
+        await blobStore.put(cacheKey, blob)
+        return { ...attachment, cacheKey }
+      } catch (err) {
+        console.warn('Unable to stage attachment blob for journal core', attachment.id, err)
+        return attachment
+      }
+    }))
+    return {
+      repositories,
+      blobStore,
+      snapshot: {
+        entries: entryDrafts,
+        attachments: preparedAttachments,
+        fileBoxItems,
+        transfers: transferRecords,
+        conflicts: syncConflicts,
+        tombstones: [],
+        device: deviceProfile,
+      },
+    }
+  }, [
+    attachmentUrls,
+    attachmentsStore,
+    deviceProfile,
+    entryDrafts,
+    fileBoxItems,
+    syncConflicts,
+    transferRecords,
+  ])
+
   const runGoogleDriveSync = useCallback(async () => {
     if (!driveConnection.clientId.trim()) {
       setDriveConnection((prev) => ({ ...prev, status: 'needs-auth', lastError: 'Add a Google OAuth client ID before connecting.' }))
@@ -3767,35 +3849,9 @@ function App() {
 
     setDriveConnection((prev) => ({ ...prev, status: 'syncing', lastError: undefined }))
     try {
-      const repositories = await createJournalRepositories()
-      const blobStore = new IndexedDbBlobStore(repositories)
-      const preparedAttachments = await Promise.all(attachmentsStore.map(async (attachment) => {
-        if (attachment.cacheKey && await blobStore.has(attachment.cacheKey)) return attachment
-        const cacheKey =
-          attachment.cacheKey ||
-          (attachment.cachedPath?.startsWith('idb://') ? attachment.cachedPath.replace('idb://', '') : '') ||
-          (attachment.cachedPath?.startsWith('fs://') ? attachment.cachedPath.replace('fs://', '') : '') ||
-          `attachment-${attachment.id}`
-        const blob = await readAttachmentBlob(attachment, attachmentUrls)
-        if (!blob) return attachment
-        try {
-          await blobStore.put(cacheKey, blob)
-          return { ...attachment, cacheKey }
-        } catch (err) {
-          console.warn('Unable to stage attachment blob for Drive sync', attachment.id, err)
-          return attachment
-        }
-      }))
+      const { repositories, blobStore, snapshot } = await prepareJournalCoreSnapshot()
       const store = await createIndexedDbJournalStore(deviceProfile, repositories)
-      await store.saveSnapshot({
-        entries: entryDrafts,
-        attachments: preparedAttachments,
-        fileBoxItems,
-        transfers: transferRecords,
-        conflicts: syncConflicts,
-        tombstones: [],
-        device: deviceProfile,
-      })
+      await store.saveSnapshot(snapshot)
       const provider = new GoogleDriveSyncProvider({
         clientId: driveConnection.clientId.trim(),
         folderName: driveConnection.folderName || DRIVE_ROOT_FOLDER,
@@ -3852,17 +3908,127 @@ function App() {
       }))
     }
   }, [
-    attachmentUrls,
-    attachmentsStore,
     deviceProfile,
     driveConnection.clientId,
     driveConnection.folderId,
     driveConnection.folderName,
-    entryDrafts,
-    fileBoxItems,
-    syncConflicts,
-    transferRecords,
+    prepareJournalCoreSnapshot,
   ])
+
+  const exportLocalBackup = useCallback(async () => {
+    setBackupStatus(null)
+    try {
+      const { repositories, blobStore, snapshot } = await prepareJournalCoreSnapshot()
+      const store = await createIndexedDbJournalStore(deviceProfile, repositories)
+      await store.saveSnapshot(snapshot)
+      const backup = await createJournalBackup(snapshot, blobStore)
+      const timestamp = backup.exportedAt.replace(/[:.]/g, '-')
+      downloadBlob(
+        `easylab-lab-notebook-backup-${timestamp}.json`,
+        new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json;charset=utf-8' })
+      )
+      setBackupStatus({
+        ok: true,
+        message: `Backup exported with ${Object.keys(snapshot.entries).length} entries, ${snapshot.attachments.length} attachments, and ${backup.blobs.length} cached blobs.`,
+      })
+    } catch (err) {
+      setBackupStatus({ ok: false, message: err instanceof Error ? err.message : String(err) })
+    }
+  }, [deviceProfile, prepareJournalCoreSnapshot])
+
+  const importLocalBackup = useCallback(async (file: File) => {
+    setBackupStatus(null)
+    try {
+      const backup = parseJournalBackup(JSON.parse(await file.text()))
+      const repositories = await createJournalRepositories()
+      const blobStore = new IndexedDbBlobStore(repositories)
+      const store = await createIndexedDbJournalStore(deviceProfile, repositories)
+      const result = await restoreJournalBackup({ backup, store, blobStore, device: deviceProfile })
+      const restored = await store.getSnapshot()
+      const normalizedEntries = Object.fromEntries(
+        Object.entries(restored.entries).map(([id, entry]) => [
+          id,
+          condenseLegacyDailyEntry(ensureEntryDateBucket(applyLockedTemplateHeadings(entry))),
+        ])
+      )
+
+      setEntryDrafts(normalizedEntries)
+      setAttachmentsStore(restored.attachments)
+      setFileBoxItems(restored.fileBoxItems)
+      setTransferRecords(restored.transfers)
+      setSyncConflicts(restored.conflicts)
+      setJournalCoreStatus('ready')
+      setJournalCoreSource('indexeddb')
+      setJournalCoreQueueCount(0)
+      setJournalCoreError('')
+      setBackupStatus({
+        ok: true,
+        message: `Backup restored from ${new Date(backup.exportedAt).toLocaleString()}.`,
+        result,
+      })
+
+      const preferredEntry =
+        Object.values(normalizedEntries).find((entry) => entry.dateBucket === todaySeed)?.id ||
+        Object.values(normalizedEntries).sort((a, b) => entrySortTimestamp(b) - entrySortTimestamp(a))[0]?.id
+      if (preferredEntry) {
+        setSelectedEntryId(preferredEntry)
+        setOpenEntryIds([preferredEntry])
+      }
+    } catch (err) {
+      setBackupStatus({ ok: false, message: err instanceof Error ? err.message : String(err) })
+    }
+  }, [deviceProfile, todaySeed])
+
+  const resolveSyncConflict = useCallback((conflictId: string, action: ConflictResolutionAction) => {
+    const conflict = syncConflicts.find((item) => item.id === conflictId)
+    if (!conflict) return
+    const timestamp = new Date().toISOString()
+
+    if (conflict.entityKind === 'entry' && action === 'remote-won') {
+      const remoteEntry = entryFromConflictCopy(conflict.remoteCopy)
+      if (remoteEntry) {
+        const resolvedEntry: Entry = {
+          ...remoteEntry,
+          lastEditedDatetime: timestamp,
+          updatedByDeviceId: deviceProfile.id,
+          syncStatus: 'queued',
+        }
+        setEntryDrafts((prev) => ({ ...prev, [resolvedEntry.id]: resolvedEntry }))
+        setSelectedEntryId(resolvedEntry.id)
+        setOpenEntryIds((prev) => prev.includes(resolvedEntry.id) ? prev : [resolvedEntry.id, ...prev].slice(0, 5))
+      }
+    }
+
+    if (conflict.entityKind === 'entry' && action === 'kept-copy') {
+      const candidate = entryFromConflictCopy(conflict.remoteCopy) ?? entryFromConflictCopy(conflict.localCopy)
+      if (candidate) {
+        const copy = makeConflictCopyEntry(candidate, deviceProfile.id)
+        setEntryDrafts((prev) => ({ ...prev, [copy.id]: copy }))
+        setSelectedEntryId(copy.id)
+        setOpenEntryIds((prev) => [copy.id, ...prev.filter((id) => id !== copy.id)].slice(0, 5))
+      }
+    }
+
+    setSyncConflicts((prev) =>
+      prev.map((item) =>
+        item.id === conflictId
+          ? {
+              ...item,
+              resolution: action,
+              summary:
+                action === 'local-won'
+                  ? 'Resolved locally: current local copy will be pushed on the next sync.'
+                  : action === 'remote-won'
+                    ? 'Resolved from Drive: remote copy replaced the visible local entry.'
+                    : 'Resolved by keeping a separate conflict copy.',
+              localUpdatedAt: action === 'local-won' ? timestamp : item.localUpdatedAt,
+              remoteUpdatedAt: action === 'remote-won' ? timestamp : item.remoteUpdatedAt,
+            }
+          : item
+      )
+    )
+    setJournalCoreQueueCount((prev) => prev + 1)
+  }, [deviceProfile.id, syncConflicts])
 
   const addFileDestination = useCallback((entryId: string, val: { path: string; label?: string }): Attachment => {
     const rawPath = val.path.trim()
@@ -4598,6 +4764,10 @@ function App() {
             journalCoreSource={journalCoreSource}
             journalCoreQueueCount={journalCoreQueueCount}
             journalCoreError={journalCoreError}
+            backupStatus={backupStatus}
+            onExportBackup={exportLocalBackup}
+            onImportBackup={importLocalBackup}
+            onResolveConflict={resolveSyncConflict}
           />
         ) : (
           <EditorPane
@@ -6911,6 +7081,10 @@ function SyncPane({
   journalCoreSource,
   journalCoreQueueCount,
   journalCoreError,
+  backupStatus,
+  onExportBackup,
+  onImportBackup,
+  onResolveConflict,
 }: {
   appPaths: AppPaths
   masterSyncPath: string
@@ -6925,7 +7099,13 @@ function SyncPane({
   journalCoreSource: JournalHydrationResult['source']
   journalCoreQueueCount: number
   journalCoreError: string
+  backupStatus: BackupStatus
+  onExportBackup: () => Promise<void>
+  onImportBackup: (file: File) => Promise<void>
+  onResolveConflict: (conflictId: string, action: ConflictResolutionAction) => void
 }) {
+  const backupInputRef = useRef<HTMLInputElement | null>(null)
+
   return (
     <main className="panel editor connected-workspace" data-testid="sync-pane">
       <div className="connected-page-head">
@@ -7010,6 +7190,40 @@ function SyncPane({
           {journalCoreError && <div className="settings-error">{journalCoreError}</div>}
         </section>
         <section className="connected-card">
+          <div className="section-title">Local backup and restore</div>
+          <p className="muted">Export a self-contained JSON backup with daily entries, sync metadata, conflicts, tombstones, and cached attachment blobs. Keep this file private.</p>
+          <div className="settings-actions" style={{ marginTop: 10 }}>
+            <button className="ghost icon-btn" type="button" onClick={() => void onExportBackup()}>
+              <span className="icon"><UiIcon name="download" /></span>
+              Export backup
+            </button>
+            <button className="ghost icon-btn" type="button" onClick={() => backupInputRef.current?.click()}>
+              <span className="icon"><UiIcon name="folder" /></span>
+              Restore backup
+            </button>
+            <input
+              ref={backupInputRef}
+              type="file"
+              accept="application/json,.json"
+              style={{ display: 'none' }}
+              data-testid="restore-backup-input"
+              onChange={(event) => {
+                const file = event.currentTarget.files?.[0]
+                event.currentTarget.value = ''
+                if (file) void onImportBackup(file)
+              }}
+            />
+          </div>
+          {backupStatus && (
+            <div className={backupStatus.ok ? 'settings-success' : 'settings-error'}>
+              {backupStatus.message}
+              {backupStatus.result && (
+                <span> Restored {backupStatus.result.entries} entries, {backupStatus.result.attachments} attachments, and {backupStatus.result.blobs} blobs.</span>
+              )}
+            </div>
+          )}
+        </section>
+        <section className="connected-card">
           <div className="section-title">Sync manifest preview</div>
           <div className="connected-table">
             <div className="connected-table-row"><span>Entries</span><strong>{manifest.entryCount}</strong></div>
@@ -7028,6 +7242,15 @@ function SyncPane({
                 <div className="connected-row-main">
                   <strong>{conflict.entityKind} · {conflict.entityId}</strong>
                   <span>{conflict.summary}</span>
+                  {conflict.resolution === 'pending' ? (
+                    <div className="conflict-actions">
+                      <button className="ghost" type="button" onClick={() => onResolveConflict(conflict.id, 'local-won')}>Use local</button>
+                      <button className="ghost" type="button" onClick={() => onResolveConflict(conflict.id, 'remote-won')}>Use Drive copy</button>
+                      <button className="ghost" type="button" onClick={() => onResolveConflict(conflict.id, 'kept-copy')}>Keep both</button>
+                    </div>
+                  ) : (
+                    <span className="status-chip success">{conflict.resolution}</span>
+                  )}
                 </div>
               </div>
             ))}
