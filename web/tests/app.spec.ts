@@ -731,7 +731,7 @@ test.describe('Lab note taking app', () => {
     await firstChecklist.locator('input[type="checkbox"]').click()
 
     const statusChip = page.getByTestId('sync-status-chip')
-    await expect(statusChip).toContainText('Synced')
+    await expect(statusChip).toContainText('Saved locally')
   })
 
   test('today entry opens in edit mode', async ({ page }) => {
@@ -758,7 +758,7 @@ test.describe('Lab note taking app', () => {
 
     await expect(page.getByTestId('sync-action')).toHaveText(/retry failed/i)
     await page.getByTestId('sync-action').click()
-    await expect(statusChip).toContainText('Synced')
+    await expect(statusChip).toContainText('Saved locally')
   })
 
   test('export markdown fallback triggers downloads', async ({ page }) => {
@@ -824,7 +824,7 @@ test.describe('Lab note taking app', () => {
     await expect(page.getByText('Advanced OAuth client IDs', { exact: true })).toBeVisible()
     await page.locator('details.sync-advanced summary').click()
     await expect(page.getByPlaceholder('Desktop OAuth client ID for Electron')).toBeVisible()
-    await expect(page.getByPlaceholder('Desktop OAuth client secret (local only)')).toBeVisible()
+    await expect(page.getByPlaceholder('Optional; stored locally only when provided')).toBeVisible()
     await expect(page.getByPlaceholder('Web OAuth client ID for browser/PWA')).toBeVisible()
     await expect(page.getByRole('button', { name: 'Export backup' })).toBeVisible()
     await expect(page.getByRole('button', { name: 'Restore backup' })).toBeVisible()

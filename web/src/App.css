@@ -2551,6 +2551,10 @@
   scroll-snap-type: x proximity;
 }
 
+.mobile-editor-toolbar {
+  display: none;
+}
+
 .toolbar-label {
   display: inline-flex;
   align-items: center;
@@ -6392,14 +6396,31 @@ code,
     flex: 0 0 auto;
   }
 
-  .editor-toolbar-dock {
-    margin-top: 8px;
+  .editor-header .editor-toolbar-dock {
+    position: relative;
+    z-index: 1;
+    left: auto;
+    right: auto;
+    bottom: auto;
+    width: 100%;
+    max-width: 100%;
+    margin: 6px 0 0;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    box-shadow: none;
   }
 
   .editor-toolbar {
     overflow-x: auto;
     flex-wrap: nowrap;
     scrollbar-width: none;
+    max-width: 100%;
+    border-radius: 15px;
+    border: 1px solid rgba(32, 48, 42, 0.12);
+    background: rgba(255, 252, 245, 0.86);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.65);
+    backdrop-filter: blur(10px);
   }
 
   .editor-toolbar::-webkit-scrollbar {
@@ -6420,7 +6441,7 @@ code,
   }
 
   .editor-main-stack {
-    padding-bottom: 112px;
+    padding-bottom: 156px;
   }
 
   .content-section,
@@ -6635,21 +6656,47 @@ code,
   }
 
   .editor-toolbar {
-    min-height: 44px;
-    max-height: 54px;
-    flex-wrap: nowrap !important;
-    overflow-x: auto !important;
-    overflow-y: hidden !important;
-    scrollbar-width: none;
-  }
-
-  .editor-toolbar::-webkit-scrollbar {
     display: none;
   }
 
-  .editor-toolbar .toolbar-group {
+  .mobile-editor-toolbar {
+    display: flex;
+    max-width: 100%;
+    gap: 6px;
+    padding: 6px;
+    border: 1px solid rgba(32, 48, 42, 0.12);
+    border-radius: 15px;
+    background: rgba(255, 252, 245, 0.88);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.65);
+    overflow-x: auto;
+    overflow-y: hidden;
+    overscroll-behavior-inline: contain;
+    scrollbar-width: none;
+  }
+
+  .mobile-editor-toolbar::-webkit-scrollbar {
+    display: none;
+  }
+
+  .mobile-editor-toolbar .toolbar-group {
     flex: 0 0 auto;
+    display: flex;
+    align-items: center;
     flex-wrap: nowrap;
+    gap: 5px;
     min-width: max-content;
+  }
+
+  .mobile-editor-toolbar .toolbar-group + .toolbar-group {
+    padding-left: 6px;
+    border-left: 1px solid rgba(32, 48, 42, 0.1);
+  }
+
+  .mobile-editor-toolbar .pill {
+    min-height: 40px;
+    padding: 8px 11px;
+    border-radius: 12px;
+    font: 700 13px/1 var(--font-body);
+    white-space: nowrap;
   }
 }

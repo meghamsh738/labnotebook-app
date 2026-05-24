@@ -5986,12 +5986,12 @@ function EditorPane({
   const verifiedAttachmentCount = attachments.filter((a) => Boolean(a.sha256)).length
   const hasWorkbook = workbookHasContent(workbookData)
   const saveStateLabel = syncing
-    ? 'Syncing changes'
+    ? 'Syncing to Drive'
     : failedCount
       ? `${failedCount} sync issue${failedCount === 1 ? '' : 's'}`
       : pendingCount
-        ? 'Saved locally · sync pending'
-        : 'Saved locally · synced'
+        ? 'Queued for Drive'
+        : 'Saved locally'
 
   const handleUpdateBlock = useCallback(
     (updated: Block) => {
@@ -6313,7 +6313,7 @@ function EditorPane({
               <span>{experiment?.title ?? 'General note'}</span>
               <span className="pill soft" data-testid="entry-date-bucket">{entry.dateBucket}</span>
               <span className={`status-chip ${syncing || hasWork ? 'warning' : 'success'}`} data-testid="sync-status-chip">
-                {syncing ? 'Syncing…' : failedCount ? `${failedCount} failed` : pendingCount ? `${pendingCount} pending` : 'Synced'}
+                {syncing ? 'Syncing' : failedCount ? `${failedCount} failed` : pendingCount ? `${pendingCount} queued` : 'Saved locally'}
               </span>
             </div>
 
@@ -6988,7 +6988,7 @@ function EditorPane({
                     <div className="title-sm">{entry.dateBucket}</div>
                   </div>
                   <span className={`status-chip ${syncing || hasWork ? 'warning' : 'success'}`}>
-                    {syncing ? 'Syncing' : failedCount ? `${failedCount} failed` : pendingCount ? `${pendingCount} pending` : 'Synced'}
+                    {syncing ? 'Syncing' : failedCount ? `${failedCount} failed` : pendingCount ? `${pendingCount} queued` : 'Saved locally'}
                   </span>
                 </div>
                 <div className="context-metrics">
@@ -9063,6 +9063,89 @@ function EditorInsertBar({
 
   return (
     <>
+      <div className="mobile-editor-toolbar" contentEditable={false} data-testid="mobile-editor-toolbar">
+        <div className="toolbar-group">
+          <button
+            className="pill soft"
+            type="button"
+            disabled={!canUndo}
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => HistoryEditor.undo(editor)}
+            aria-label="Undo"
+          >
+            Undo
+          </button>
+          <button
+            className="pill soft"
+            type="button"
+            disabled={!canRedo}
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => HistoryEditor.redo(editor)}
+            aria-label="Redo"
+          >
+            Redo
+          </button>
+        </div>
+        <div className="toolbar-group">
+          <button
+            className={`pill soft ${isMarkActive(editor, 'bold') ? 'active-pill' : ''}`}
+            type="button"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => toggleMark(editor, 'bold')}
+            aria-label="Bold"
+          >
+            B
+          </button>
+          <button
+            className={`pill soft ${isMarkActive(editor, 'italic') ? 'active-pill' : ''}`}
+            type="button"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => toggleMark(editor, 'italic')}
+            aria-label="Italic"
+          >
+            I
+          </button>
+          <button
+            className={`pill soft ${isMarkActive(editor, 'underline') ? 'active-pill' : ''}`}
+            type="button"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => toggleMark(editor, 'underline')}
+            aria-label="Underline"
+          >
+            U
+          </button>
+        </div>
+        <div className="toolbar-group">
+          <button className="pill soft" type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => insertHeadingBlock(editor, 2)}>
+            <UiIcon name="note" />
+            Header
+          </button>
+          <button className="pill soft" type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => insertChecklistBlock(editor)}>
+            <UiIcon name="check" />
+            Checks
+          </button>
+          <button className="pill soft" type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => insertTableBlock(editor, [['Sample', 'Value']])}>
+            <UiIcon name="table" />
+            Table
+          </button>
+        </div>
+        <div className="toolbar-group">
+          <button className="pill soft" type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => cameraRef.current?.click()}>
+            <UiIcon name="camera" />
+            Photo
+          </button>
+          <button className="pill soft" type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => fileRef.current?.click()}>
+            <UiIcon name="file" />
+            File
+          </button>
+          {onShowTags && (
+            <button className="pill soft" type="button" onMouseDown={(e) => e.preventDefault()} onClick={onShowTags}>
+              <UiIcon name="tag" />
+              Tags
+            </button>
+          )}
+        </div>
+      </div>
       <div className="editor-toolbar" contentEditable={false} data-testid="editor-toolbar">
         <div className="toolbar-group">
           <button
