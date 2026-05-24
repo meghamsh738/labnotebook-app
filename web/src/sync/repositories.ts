@@ -45,6 +45,10 @@ export type BlobStoreRecord = {
   updatedAt: string
 }
 
+export type JournalRepositoryOptions = {
+  dbName?: string
+}
+
 type StoreRecordMap = {
   [JOURNAL_STORES.entries]: SyncEntityEnvelope<Entry>
   [JOURNAL_STORES.attachments]: SyncEntityEnvelope<Attachment>
@@ -70,10 +74,10 @@ export type ConflictRepository = TypedJournalRepository<typeof JOURNAL_STORES.co
 export type MetaRepository = TypedJournalRepository<typeof JOURNAL_STORES.meta>
 export type BlobRecordRepository = TypedJournalRepository<typeof JOURNAL_STORES.blobs>
 
-export function openJournalDb(): Promise<IDBDatabase> {
+export function openJournalDb(dbName = JOURNAL_DB_NAME): Promise<IDBDatabase> {
   if (typeof indexedDB === 'undefined') return Promise.reject(new Error('IndexedDB is not available.'))
   return new Promise((resolve, reject) => {
-    const request = indexedDB.open(JOURNAL_DB_NAME, JOURNAL_DB_VERSION)
+    const request = indexedDB.open(dbName, JOURNAL_DB_VERSION)
     request.onupgradeneeded = () => {
       const db = request.result
       for (const storeName of Object.values(JOURNAL_STORES)) {
@@ -85,6 +89,10 @@ export function openJournalDb(): Promise<IDBDatabase> {
     request.onsuccess = () => resolve(request.result)
     request.onerror = () => reject(request.error)
   })
+}
+
+function isIDBDatabase(value: unknown): value is IDBDatabase {
+  return typeof value === 'object' && value !== null && 'transaction' in value && 'objectStoreNames' in value
 }
 
 export class EntityRepository<T extends { id: string }> {
@@ -167,8 +175,10 @@ function repository<S extends JournalStoreName>(db: IDBDatabase, storeName: S): 
   return new EntityRepository<StoreRecordMap[S]>(db, storeName)
 }
 
-export async function createJournalRepositories(db?: IDBDatabase) {
-  const journalDb = db ?? (await openJournalDb())
+export async function createJournalRepositories(dbOrOptions?: IDBDatabase | JournalRepositoryOptions) {
+  const journalDb = isIDBDatabase(dbOrOptions)
+    ? dbOrOptions
+    : await openJournalDb(dbOrOptions?.dbName)
   return {
     entries: repository(journalDb, JOURNAL_STORES.entries),
     attachments: repository(journalDb, JOURNAL_STORES.attachments),
