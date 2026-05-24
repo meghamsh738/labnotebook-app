@@ -12,7 +12,7 @@ declare global {
         source: 'none' | 'tailscale' | 'lan'
       }>
       setZoomFactor?: (factor: number) => Promise<number | null>
-      requestGoogleDriveAccessToken?: (options: { clientId: string; scope: string }) => Promise<{
+      requestGoogleDriveAccessToken?: (options: { clientId: string; clientSecret?: string; scope: string }) => Promise<{
         accessToken: string
         expiresIn?: number
         scope?: string

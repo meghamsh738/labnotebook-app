@@ -212,6 +212,7 @@ export class MockSyncProvider implements SyncProvider {
 
 export type GoogleDriveSyncProviderOptions = {
   clientId: string
+  clientSecret?: string
   folderName?: string
   folderId?: string
   client?: FolderDriveClient
@@ -255,6 +256,7 @@ export class GoogleDriveSyncProvider implements SyncProvider {
     this.retryDelayMs = options.retryDelayMs ?? 350
     this.client = options.client ?? new GoogleDriveProvider({
       clientId: options.clientId,
+      clientSecret: options.clientSecret,
       folderName: this.folderName,
     })
   }

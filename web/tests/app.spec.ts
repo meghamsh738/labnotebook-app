@@ -824,6 +824,7 @@ test.describe('Lab note taking app', () => {
     await expect(page.getByText('Advanced OAuth client IDs', { exact: true })).toBeVisible()
     await page.locator('details.sync-advanced summary').click()
     await expect(page.getByPlaceholder('Desktop OAuth client ID for Electron')).toBeVisible()
+    await expect(page.getByPlaceholder('Desktop OAuth client secret (local only)')).toBeVisible()
     await expect(page.getByPlaceholder('Web OAuth client ID for browser/PWA')).toBeVisible()
     await expect(page.getByRole('button', { name: 'Export backup' })).toBeVisible()
     await expect(page.getByRole('button', { name: 'Restore backup' })).toBeVisible()

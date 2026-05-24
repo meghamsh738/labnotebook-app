@@ -47,9 +47,10 @@ function base64Url(buffer) {
   return buffer.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '')
 }
 
-async function requestGoogleDriveToken({ clientId, scope }) {
+async function requestGoogleDriveToken({ clientId, clientSecret, scope }) {
   if (!clientId || !String(clientId).trim()) throw new Error('Google OAuth client ID is required.')
   const requestedScope = scope || 'https://www.googleapis.com/auth/drive.file'
+  const optionalClientSecret = typeof clientSecret === 'string' ? clientSecret.trim() : ''
   const verifier = base64Url(crypto.randomBytes(48))
   const challenge = base64Url(crypto.createHash('sha256').update(verifier).digest())
 
@@ -101,6 +102,7 @@ async function requestGoogleDriveToken({ clientId, scope }) {
           grant_type: 'authorization_code',
           redirect_uri: redirectUri,
         })
+        if (optionalClientSecret) body.set('client_secret', optionalClientSecret)
         const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
           method: 'POST',
           headers: { 'Content-Type': 'application/x-www-form-urlencoded' },

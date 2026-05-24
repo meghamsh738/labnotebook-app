@@ -664,7 +664,7 @@ function labnoteStore(): Plugin {
 export default defineConfig({
   base: './',
   plugins: [react(), labnoteStore()],
-  publicDir: false,
+  publicDir: 'public',
   build: {
     outDir: DIST_DIR,
     emptyOutDir: true,

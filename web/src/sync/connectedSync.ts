@@ -35,6 +35,7 @@ export type DriveConnectionState = {
    */
   clientId: string
   desktopClientId?: string
+  desktopClientSecret?: string
   webClientId?: string
   folderName: string
   folderId?: string
@@ -115,6 +116,7 @@ export function normalizeDriveConnection(value?: Partial<DriveConnectionState> |
     provider: 'google-drive',
     clientId: value?.clientId ?? '',
     desktopClientId: value?.desktopClientId ?? '',
+    desktopClientSecret: value?.desktopClientSecret ?? '',
     webClientId: value?.webClientId ?? '',
     folderName: value?.folderName || DRIVE_ROOT_FOLDER,
     folderId: value?.folderId,
@@ -374,9 +376,9 @@ export class GoogleDriveProvider implements SyncProvider {
   readonly kind = 'google-drive' as const
   private accessToken = ''
   private tokenClient: TokenClient | null = null
-  private readonly options: { clientId: string; folderName?: string }
+  private readonly options: { clientId: string; clientSecret?: string; folderName?: string }
 
-  constructor(options: { clientId: string; folderName?: string }) {
+  constructor(options: { clientId: string; clientSecret?: string; folderName?: string }) {
     this.options = options
   }
 
@@ -384,6 +386,7 @@ export class GoogleDriveProvider implements SyncProvider {
     if (typeof window !== 'undefined' && window.electronAPI?.requestGoogleDriveAccessToken) {
       const token = await window.electronAPI.requestGoogleDriveAccessToken({
         clientId: this.options.clientId,
+        clientSecret: this.options.clientSecret,
         scope: DRIVE_SCOPE,
       })
       if (!token?.accessToken) throw new Error('Google authorization did not return an access token.')

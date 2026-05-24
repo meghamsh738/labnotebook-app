@@ -6,6 +6,7 @@ Use this before calling the connected-devices branch ready for a desktop/PWA tri
 
 - `npm --prefix web run lint`
 - `npm --prefix web run build`
+- `npm --prefix web run verify:pwa`
 - `npm --prefix web run test:e2e -- --project=desktop-chromium`
 - `npm --prefix web run test:e2e -- --project=mobile-chromium web/tests/mobile-pair.spec.ts`
 - `npm run standalone:build`
@@ -14,6 +15,7 @@ Use this before calling the connected-devices branch ready for a desktop/PWA tri
 
 - Create or enter the right Google OAuth client ID in Sync > Advanced OAuth client IDs:
   - Desktop app OAuth client ID for the Electron app.
+  - Desktop OAuth client secret for the Electron app, if Google issued one for that desktop client. Keep it local only.
   - Web/PWA OAuth client ID for the browser or installed PWA origin.
 - Use the `https://www.googleapis.com/auth/drive.file` scope only.
 - Connect Google Drive and confirm the app creates the configured Drive folder.
@@ -31,7 +33,7 @@ Use this before calling the connected-devices branch ready for a desktop/PWA tri
 
 - Install the generated desktop installer on a clean profile.
 - Confirm the app title, icon, local data paths, Sync pane paths, and backup export location.
-- Confirm the PWA manifest and service worker are present in the built `web/dist` output.
+- Confirm the PWA manifest, icon, share target, and service worker are present in the built `.labnote-dist/web` output.
 
 ## Secret Hygiene
 

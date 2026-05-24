@@ -3851,8 +3851,12 @@ function App() {
       const { repositories, blobStore, snapshot } = await prepareJournalCoreSnapshot()
       const store = await createIndexedDbJournalStore(deviceProfile, repositories)
       await store.saveSnapshot(snapshot)
+      const desktopClientSecret = driveOAuthClient.preferredKind === 'desktop'
+        ? driveConnection.desktopClientSecret?.trim()
+        : undefined
       const provider = new GoogleDriveSyncProvider({
         clientId: driveOAuthClient.clientId,
+        clientSecret: desktopClientSecret,
         folderName: driveConnection.folderName || DRIVE_ROOT_FOLDER,
         folderId: driveConnection.folderId,
       })
@@ -7272,6 +7276,17 @@ function SyncPane({
                     return { ...prev, desktopClientId, status: hasAnyClient ? 'needs-auth' : 'disconnected' }
                   })}
                   placeholder="Desktop OAuth client ID for Electron"
+                  spellCheck={false}
+                />
+              </label>
+              <label className="field">
+                <span>Desktop OAuth client secret</span>
+                <input
+                  type="password"
+                  value={driveConnection.desktopClientSecret ?? ''}
+                  onChange={(event) => onDriveConnectionChange((prev) => ({ ...prev, desktopClientSecret: event.target.value }))}
+                  placeholder="Desktop OAuth client secret (local only)"
+                  autoComplete="off"
                   spellCheck={false}
                 />
               </label>
