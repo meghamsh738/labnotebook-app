@@ -13,6 +13,7 @@ pnpm-debug.log*
 *.local
 .labnote-data/
 .labnote-dist/
+.labnote-local/
 .labnote-smoke/
 .labnote-device-smoke/
 

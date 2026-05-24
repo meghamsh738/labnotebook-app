@@ -49,7 +49,7 @@ License: All Rights Reserved. See `LICENSE`.
 
 No client secrets or tokens are committed. The OAuth client ID is user-provided in the app under `Sync`.
 
-- **Desktop Electron**: use a Google Cloud OAuth **Desktop app** client ID. The app opens the system browser, listens on a temporary `127.0.0.1` loopback callback, exchanges the PKCE code for an access token, and keeps that token in memory only.
+- **Desktop Electron**: use a Google Cloud OAuth **Desktop app** client ID. The app opens the system browser, listens on a temporary `127.0.0.1` loopback callback, exchanges the PKCE code for an access token, and keeps that token in memory only. If your downloaded desktop OAuth JSON includes a client secret, keep it local; the smoke script can use it but does not require it up front.
 - **Browser/PWA**: use a Google Cloud OAuth **Web application** client ID. Add the dev/deployed origin, for example `http://127.0.0.1:4173`, to the allowed JavaScript origins.
 - Scope is `https://www.googleapis.com/auth/drive.file`, so the app only manages files it creates or the user explicitly opens with it.
 
@@ -113,7 +113,7 @@ npm run standalone:build
 
 `npm --prefix web run screenshots` regenerates PNG screenshots under `screenshots/`.
 
-The packaged OAuth smoke requires local-only desktop OAuth environment variables. Set them in your shell only, never commit them, then run `npm run smoke:packaged-oauth`.
+The packaged OAuth smoke requires a local-only desktop OAuth client ID. Either set shell environment variables or place a downloaded Google OAuth desktop JSON at `.labnote-local/oauth.desktop.json`; `.labnote-local/` is ignored by Git. Never commit OAuth JSON files, access tokens, refresh tokens, or user Drive data.
 
 ## First Milestone Status
 

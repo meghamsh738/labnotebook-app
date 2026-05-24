@@ -12,10 +12,26 @@ const authUrlFile = path.join(outputDir, 'oauth-url.txt')
 const oauthEventFile = path.join(outputDir, 'oauth-events.jsonl')
 const resultFile = path.join(outputDir, 'result.json')
 const exePath = path.resolve(process.env.LABNOTE_EXE || path.join(root, 'desktop', 'dist', 'win-unpacked', 'Easylab Lab Notebook.exe'))
-const clientId = process.env.LABNOTE_DESKTOP_CLIENT_ID?.trim() || ''
-const clientSecret = process.env.LABNOTE_DESKTOP_CLIENT_SECRET?.trim() || ''
+const localConfigPath = path.resolve(process.env.LABNOTE_OAUTH_CONFIG_FILE || path.join(root, '.labnote-local', 'oauth.desktop.json'))
+const localOAuthConfig = readLocalOAuthConfig(localConfigPath)
+const clientId = process.env.LABNOTE_DESKTOP_CLIENT_ID?.trim() || localOAuthConfig.clientId
+const clientSecret = process.env.LABNOTE_DESKTOP_CLIENT_SECRET?.trim() || localOAuthConfig.clientSecret
 const folderName = process.env.LABNOTE_SMOKE_FOLDER_NAME?.trim() || `Easylab Lab Notebook Packaged Smoke ${new Date().toISOString().replace(/[:.]/g, '-')}`
 const timeoutMs = Number(process.env.LABNOTE_SMOKE_TIMEOUT_MS || 240000)
+
+function readLocalOAuthConfig(configPath) {
+  if (!fs.existsSync(configPath)) return { clientId: '', clientSecret: '' }
+  try {
+    const parsed = JSON.parse(fs.readFileSync(configPath, 'utf-8').replace(/^\uFEFF/, ''))
+    const section = parsed.installed || parsed.web || parsed
+    return {
+      clientId: String(section.client_id || section.clientId || '').trim(),
+      clientSecret: String(section.client_secret || section.clientSecret || '').trim(),
+    }
+  } catch (error) {
+    fail(`Could not read OAuth config JSON at ${configPath}: ${error instanceof Error ? error.message : String(error)}`)
+  }
+}
 
 function fail(message) {
   fs.mkdirSync(outputDir, { recursive: true })
@@ -39,7 +55,6 @@ function writeStatus(stage, extra = {}) {
 
 async function main() {
   requireValue(clientId, 'LABNOTE_DESKTOP_CLIENT_ID')
-  requireValue(clientSecret, 'LABNOTE_DESKTOP_CLIENT_SECRET')
   if (!fs.existsSync(exePath)) fail(`Packaged app not found: ${exePath}`)
 
   fs.mkdirSync(outputDir, { recursive: true })
@@ -83,14 +98,14 @@ async function main() {
         provider: 'google-drive',
         clientId: '',
         desktopClientId,
-        desktopClientSecret,
+        desktopClientSecret: desktopClientSecret || '',
         webClientId: '',
         folderName: driveFolderName,
         status: 'needs-auth',
       }))
     }, { appPaths, clientId, clientSecret, folderName })
 
-    writeStatus('configured-local-storage', { folderName })
+    writeStatus('configured-local-storage', { folderName, loadedConfigFile: fs.existsSync(localConfigPath), hasClientSecret: Boolean(clientSecret) })
     await page.reload()
     await page.waitForLoadState('domcontentloaded')
     writeStatus('reloaded-after-configuration', { title: await page.title(), url: page.url() })

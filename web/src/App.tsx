@@ -7674,12 +7674,12 @@ function SyncPane({
                 />
               </label>
               <label className="field">
-                <span>Desktop OAuth client secret</span>
+                <span>Desktop OAuth client secret (optional)</span>
                 <input
                   type="password"
                   value={driveConnection.desktopClientSecret ?? ''}
                   onChange={(event) => onDriveConnectionChange((prev) => ({ ...prev, desktopClientSecret: event.target.value }))}
-                  placeholder="Desktop OAuth client secret (local only)"
+                  placeholder="Optional; stored locally only when provided"
                   autoComplete="off"
                   spellCheck={false}
                 />
