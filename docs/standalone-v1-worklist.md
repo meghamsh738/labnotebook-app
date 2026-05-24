@@ -274,11 +274,18 @@ Implemented in this branch:
 - `syncOnce()` engine for entry pull/push, attachment metadata, attachment blob upload/download, tombstones, and conflicts.
 - Visible Google Drive sync action now stages current UI state, writes attachment blobs into `IndexedDbBlobStore`, runs `syncOnce()`, and refreshes the app from the synced repository snapshot.
 - Sync pane includes the last sync result for pulled/pushed entries, attachment metadata, uploaded/downloaded blobs, tombstones, and conflicts.
-- Focused tests for repository CRUD, stable hashing, validation, two-device convergence, attachment metadata, blob restoration, conflicts, and tombstone non-resurrection.
+- Local backup/restore archive for entries, attachment metadata, file box items, transfers, conflicts, tombstones, device metadata, and cached attachment blobs.
+- Conflict resolution controls in the Sync pane for local wins, Drive copy wins, or keeping both as a separate entry copy.
+- Google Drive upload retry handling plus resumable upload for larger attachment blobs.
+- Two isolated browser-profile tests for attachment blob round-trip, offline edit conflict preservation, and tombstone propagation.
+- First-run Sync pane copy now explains local-first Drive setup and keeps the OAuth client ID under an Advanced section.
+- File Hub and Entry File Box rows now show actionable recovery hints for failed sync, missing local references, remote-only files, remote unavailable errors, and hash mismatch errors.
+- Release readiness checklist for desktop installer, PWA, sync smoke, data safety, and secret hygiene.
+- Focused tests for repository CRUD, stable hashing, validation, two-device convergence, attachment metadata, blob restoration, conflicts, tombstone non-resurrection, backup restore, Google Drive provider path mapping, upload retry, and two-profile repository-backed sync.
 
 Next implementation task:
 
-1. Add a two-profile browser test that simulates desktop plus mobile PWA state against the repository-backed sync engine.
-2. Add a local backup/restore archive for entries, metadata, tombstones, conflicts, and attachment blobs.
-3. Add conflict resolution actions that let the user choose local, remote, or keep both.
-4. Add resumable upload/retry behavior for larger attachment blobs and clearer failed-transfer recovery.
+1. Verify the real Google Drive OAuth flow with a user-provided OAuth client ID and consent.
+2. Add separate desktop/web OAuth client ID slots if real Electron and PWA smoke testing proves one field is confusing.
+3. Run a clean desktop installer smoke plus mobile PWA installability check after real Drive auth succeeds.
+4. Promote the passing verification evidence into the release checklist before tagging a trial build.

@@ -22,6 +22,8 @@ async function boot(
     appPaths?: typeof defaultPaths
     entries?: Record<string, unknown>
     attachments?: unknown[]
+    fileBoxItems?: unknown[]
+    transfers?: unknown[]
     conflicts?: unknown[]
   }
 ) {
@@ -48,6 +50,12 @@ async function boot(
     }
     if (o?.attachments) {
       window.localStorage.setItem('labnote.attachments', JSON.stringify(o.attachments))
+    }
+    if (o?.fileBoxItems) {
+      window.localStorage.setItem('labnote.connected.fileBox', JSON.stringify(o.fileBoxItems))
+    }
+    if (o?.transfers) {
+      window.localStorage.setItem('labnote.connected.transfers', JSON.stringify(o.transfers))
     }
     if (o?.conflicts) {
       window.localStorage.setItem('labnote.connected.conflicts', JSON.stringify(o.conflicts))
@@ -812,8 +820,79 @@ test.describe('Lab note taking app', () => {
     await page.getByRole('tab', { name: 'Sync' }).click()
     await expect(page.getByTestId('sync-pane')).toBeVisible()
     await expect(page.getByRole('heading', { name: 'Device-owned sync without an Easylab cloud server' })).toBeVisible()
+    await expect(page.getByText('First sync setup', { exact: true })).toBeVisible()
+    await expect(page.getByText('Advanced OAuth client ID', { exact: false })).toBeVisible()
+    await page.locator('details.sync-advanced summary').click()
+    await expect(page.getByPlaceholder('Desktop client ID for Electron, web client ID for PWA')).toBeVisible()
     await expect(page.getByRole('button', { name: 'Export backup' })).toBeVisible()
     await expect(page.getByRole('button', { name: 'Restore backup' })).toBeVisible()
+  })
+
+  test('file hub shows actionable recovery for failed transfers', async ({ page }) => {
+    const entry = {
+      id: 'entry-recovery-day',
+      createdDatetime: '2026-05-24T09:00:00.000Z',
+      lastEditedDatetime: '2026-05-24T10:00:00.000Z',
+      authorId: 'u1',
+      title: 'Recovery day',
+      dateBucket: '2026-05-24',
+      isDaily: true,
+      content: [{ id: 'recovery-block', type: 'paragraph', text: 'file recovery note' }],
+      tags: [],
+      searchTerms: [],
+      linkedFiles: ['att-failed-drive'],
+      pinnedRegions: [],
+    }
+    await boot(page, {
+      noFail: '1',
+      entries: { [entry.id]: entry },
+      attachments: [{
+        id: 'att-failed-drive',
+        entryId: entry.id,
+        type: 'file',
+        filename: 'failed-upload.csv',
+        filesize: '12 KB',
+        storagePath: 'attachments/2026-05-24/failed-upload.csv',
+        driveFileId: 'drive-file-failed',
+        syncStatus: 'failed',
+      }],
+      fileBoxItems: [{
+        id: 'fb-failed-drive',
+        entryId: entry.id,
+        attachmentId: 'att-failed-drive',
+        filename: 'failed-upload.csv',
+        filesize: '12 KB',
+        sourceDeviceId: 'dev-desktop',
+        sourceDeviceName: 'Desktop Lab Notebook',
+        status: 'failed',
+        createdAt: '2026-05-24T10:00:00.000Z',
+        updatedAt: '2026-05-24T10:05:00.000Z',
+        driveFileId: 'drive-file-failed',
+        lastError: 'Google Drive request failed (503): remote upload failed',
+      }],
+      transfers: [{
+        id: 'tr-failed-drive',
+        fileBoxItemId: 'fb-failed-drive',
+        entryId: entry.id,
+        attachmentId: 'att-failed-drive',
+        filename: 'failed-upload.csv',
+        fromDeviceId: 'dev-desktop',
+        fromDeviceName: 'Desktop Lab Notebook',
+        provider: 'google-drive',
+        status: 'failed',
+        bytesTotal: 12000,
+        createdAt: '2026-05-24T10:00:00.000Z',
+        updatedAt: '2026-05-24T10:05:00.000Z',
+        lastError: 'remote upload failed',
+      }],
+    })
+
+    await page.getByRole('tab', { name: 'File Hub' }).click()
+    const fileHub = page.getByTestId('file-hub-pane')
+    const failedRow = fileHub.locator('.filebox-row.has-recovery').filter({ hasText: 'failed-upload.csv' }).filter({ hasText: 'Sync failed' })
+    await expect(failedRow).toHaveCount(1)
+    await expect(failedRow.getByRole('button', { name: 'Retry sync' })).toBeVisible()
+    await expect(failedRow.getByRole('button', { name: 'Attach' })).toBeDisabled()
   })
 
   test('sync conflict actions can keep both entry copies', async ({ page }) => {

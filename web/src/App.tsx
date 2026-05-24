@@ -4725,6 +4725,7 @@ function App() {
             }}
             onAttachItem={attachFileBoxItem}
             onRejectItem={rejectFileBoxItem}
+            onRetrySync={() => void runGoogleDriveSync()}
           />
         ) : activePane === 'devices' ? (
           <DevicesPane
@@ -4822,6 +4823,7 @@ function App() {
             onQueueFileBoxFiles={queueFileBoxFiles}
             onAttachFileBoxItem={attachFileBoxItem}
             onRejectFileBoxItem={rejectFileBoxItem}
+            onRunDriveSync={() => void runGoogleDriveSync()}
             onAddFileDestination={addFileDestination}
             onDeleteEntry={handleDeleteEntry}
             onEnqueueChange={(entryId, blockIds, ts) =>
@@ -5526,6 +5528,7 @@ interface EditorPaneProps {
   onQueueFileBoxFiles: (entryId: string, files: File[]) => Promise<void>
   onAttachFileBoxItem: (itemId: string) => void
   onRejectFileBoxItem: (itemId: string) => void
+  onRunDriveSync: () => void
   onAddFileDestination: (entryId: string, val: { path: string; label?: string }) => Attachment
   onDeleteEntry: (entryId: string) => void
   onEnqueueChange: (entryId: string, blockIds: string[], timestamp: string) => void
@@ -5570,6 +5573,7 @@ function EditorPane({
   onQueueFileBoxFiles,
   onAttachFileBoxItem,
   onRejectFileBoxItem,
+  onRunDriveSync,
   onAddFileDestination,
   onDeleteEntry,
   onEnqueueChange,
@@ -6457,6 +6461,7 @@ function EditorPane({
           onQueueFiles={onQueueFileBoxFiles}
           onAttachItem={onAttachFileBoxItem}
           onRejectItem={onRejectFileBoxItem}
+          onRetrySync={onRunDriveSync}
         />
       )}
 
@@ -6750,6 +6755,80 @@ function EditorPane({
   )
 }
 
+type FileBoxRecoveryHint = {
+  label: string
+  detail: string
+  tone: 'warning' | 'danger'
+  canRetry: boolean
+}
+
+function fileBoxStatusLabel(status: TransferRecord['status'] | FileBoxItem['status']) {
+  return status === 'rejected' ? 'Rejected' : transferStatusLabel(status)
+}
+
+function fileBoxRecoveryHint({
+  item,
+  attachment,
+  transfer,
+  isLinkedToEntry = true,
+}: {
+  item: FileBoxItem
+  attachment?: Attachment
+  transfer?: TransferRecord
+  isLinkedToEntry?: boolean
+}): FileBoxRecoveryHint | null {
+  const errorText = [item.lastError, transfer?.lastError].filter(Boolean).join(' ').toLowerCase()
+  if (errorText.includes('hash') || errorText.includes('checksum')) {
+    return {
+      label: 'Hash mismatch',
+      detail: 'The downloaded file did not match the expected checksum. Keep the current copy, then re-add the source file or restore from backup.',
+      tone: 'danger',
+      canRetry: false,
+    }
+  }
+  if (item.status === 'failed' || transfer?.status === 'failed' || attachment?.syncStatus === 'failed') {
+    return {
+      label: 'Sync failed',
+      detail: 'The file is still linked locally. Retry sync, or reject it if the source file should not be kept.',
+      tone: 'danger',
+      canRetry: true,
+    }
+  }
+  if (errorText.includes('404') || errorText.includes('not found') || errorText.includes('remote')) {
+    return {
+      label: 'Remote unavailable',
+      detail: 'Drive metadata exists, but the remote blob could not be read. Retry sync after Drive is online or replace the file from this device.',
+      tone: 'warning',
+      canRetry: true,
+    }
+  }
+  if ((attachment?.driveFileId || item.driveFileId || transfer?.driveFileId) && !attachment?.cacheKey && !attachment?.cachedPath && item.status !== 'attached') {
+    return {
+      label: 'Remote only',
+      detail: 'This item is visible from Drive but the local blob cache is missing. Retry sync to restore the local copy before attaching.',
+      tone: 'warning',
+      canRetry: true,
+    }
+  }
+  if (!item.attachmentId || !isLinkedToEntry) {
+    return {
+      label: 'Needs local file',
+      detail: 'The File Box row is missing a local attachment reference. Add the file again from this device or reject the stale row.',
+      tone: 'warning',
+      canRetry: false,
+    }
+  }
+  if (transfer?.status === 'conflict') {
+    return {
+      label: 'Transfer conflict',
+      detail: 'Another device changed this transfer. Review the entry before attaching or rejecting it.',
+      tone: 'warning',
+      canRetry: true,
+    }
+  }
+  return null
+}
+
 function EntryFileBoxPanel({
   entry,
   fileBoxItems,
@@ -6757,6 +6836,7 @@ function EntryFileBoxPanel({
   onQueueFiles,
   onAttachItem,
   onRejectItem,
+  onRetrySync,
 }: {
   entry: Entry
   fileBoxItems: FileBoxItem[]
@@ -6764,10 +6844,12 @@ function EntryFileBoxPanel({
   onQueueFiles: (entryId: string, files: File[]) => Promise<void>
   onAttachItem: (itemId: string) => void
   onRejectItem: (itemId: string) => void
+  onRetrySync: () => void
 }) {
   const inputRef = useRef<HTMLInputElement | null>(null)
   const [busy, setBusy] = useState(false)
   const activeItems = fileBoxItems.filter((item) => item.status !== 'rejected' && item.status !== 'removed')
+  const linkedAttachmentIds = useMemo(() => new Set(entry.linkedFiles), [entry.linkedFiles])
 
   const submitFiles = useCallback(
     async (files: File[]) => {
@@ -6831,17 +6913,35 @@ function EntryFileBoxPanel({
           </div>
           <div className="connected-list">
             {activeItems.length === 0 && <div className="connected-empty">No files waiting. Add one from this device or a mobile PWA share sheet.</div>}
-            {activeItems.map((item) => (
-              <div className="connected-row" key={item.id}>
+            {activeItems.map((item) => {
+              const transfer = transfers.find((candidate) => candidate.fileBoxItemId === item.id)
+              const recovery = fileBoxRecoveryHint({
+                item,
+                transfer,
+                isLinkedToEntry: Boolean(item.attachmentId && linkedAttachmentIds.has(item.attachmentId)),
+              })
+              return (
+                <div className={`connected-row filebox-row ${recovery ? `has-recovery ${recovery.tone}` : ''}`} key={item.id}>
                 <div className="connected-row-icon"><UiIcon name={item.contentType?.startsWith('image') ? 'image' : 'file'} /></div>
                 <div className="connected-row-main">
                   <strong>{item.filename}</strong>
-                  <span>{item.filesize} · {item.sourceDeviceName} · {item.status}</span>
+                  <span>{item.filesize} · {item.sourceDeviceName} · {fileBoxStatusLabel(transfer?.status ?? item.status)}</span>
+                  {recovery && (
+                    <div className="filebox-recovery">
+                      <span className={`status-chip ${recovery.tone === 'danger' ? 'danger' : 'warning'}`}>{recovery.label}</span>
+                      <span>{recovery.detail}</span>
+                    </div>
+                  )}
                 </div>
                 <div className="connected-row-actions">
                   {item.status !== 'attached' && (
-                    <button className="pill soft" type="button" onClick={() => onAttachItem(item.id)} disabled={!item.attachmentId}>
+                    <button className="pill soft" type="button" onClick={() => onAttachItem(item.id)} disabled={!item.attachmentId || item.status === 'failed'}>
                       Attach
+                    </button>
+                  )}
+                  {recovery?.canRetry && (
+                    <button className="ghost subtle" type="button" onClick={onRetrySync}>
+                      Retry sync
                     </button>
                   )}
                   {item.status !== 'attached' && (
@@ -6850,8 +6950,9 @@ function EntryFileBoxPanel({
                     </button>
                   )}
                 </div>
-              </div>
-            ))}
+                </div>
+              )
+            })}
           </div>
         </section>
 
@@ -6877,6 +6978,7 @@ function FileHubPane({
   onSelectEntry,
   onAttachItem,
   onRejectItem,
+  onRetrySync,
 }: {
   entries: Record<string, Entry>
   attachments: Attachment[]
@@ -6885,6 +6987,7 @@ function FileHubPane({
   onSelectEntry: (entryId: string) => void
   onAttachItem: (itemId: string) => void
   onRejectItem: (itemId: string) => void
+  onRetrySync: () => void
 }) {
   const attachmentsById = useMemo(() => new Map(attachments.map((att) => [att.id, att])), [attachments])
   const openItems = fileBoxItems.filter((item) => item.status !== 'attached' && item.status !== 'rejected' && item.status !== 'removed')
@@ -6918,16 +7021,25 @@ function FileHubPane({
             {openItems.map((item) => {
               const entry = entries[item.entryId]
               const attachment = item.attachmentId ? attachmentsById.get(item.attachmentId) : undefined
+              const transfer = transfers.find((candidate) => candidate.fileBoxItemId === item.id)
+              const recovery = fileBoxRecoveryHint({ item, attachment, transfer })
               return (
-                <div className="connected-row" key={item.id}>
+                <div className={`connected-row filebox-row ${recovery ? `has-recovery ${recovery.tone}` : ''}`} key={item.id}>
                   <div className="connected-row-icon"><UiIcon name={attachment?.type === 'image' ? 'image' : 'file'} /></div>
                   <div className="connected-row-main">
                     <strong>{item.filename}</strong>
-                    <span>{entry?.title ?? 'Entry'} · {item.filesize} · {item.status}</span>
+                    <span>{entry?.title ?? 'Entry'} · {item.filesize} · {fileBoxStatusLabel(transfer?.status ?? item.status)}</span>
+                    {recovery && (
+                      <div className="filebox-recovery">
+                        <span className={`status-chip ${recovery.tone === 'danger' ? 'danger' : 'warning'}`}>{recovery.label}</span>
+                        <span>{recovery.detail}</span>
+                      </div>
+                    )}
                   </div>
                   <div className="connected-row-actions">
                     <button className="pill soft" type="button" onClick={() => onSelectEntry(item.entryId)}>Open</button>
-                    <button className="accent" type="button" onClick={() => onAttachItem(item.id)} disabled={!item.attachmentId}>Attach</button>
+                    <button className="accent" type="button" onClick={() => onAttachItem(item.id)} disabled={!item.attachmentId || item.status === 'failed'}>Attach</button>
+                    {recovery?.canRetry && <button className="ghost subtle" type="button" onClick={onRetrySync}>Retry sync</button>}
                     <button className="ghost subtle" type="button" onClick={() => onRejectItem(item.id)}>Reject</button>
                   </div>
                 </div>
@@ -7122,17 +7234,14 @@ function SyncPane({
 
       <div className="connected-grid two">
         <section className="connected-card">
-          <div className="section-title">Google Drive OAuth</div>
+          <div className="section-title">First sync setup</div>
+          <p className="muted">Local entries stay on this device first. When you connect Drive, the app creates an Easylab Lab Notebook folder and syncs only app-owned files with the narrow Drive file scope.</p>
+          <ol className="sync-setup-list">
+            <li><strong>Choose the Drive folder name.</strong><span>Use the default unless you want a separate test folder.</span></li>
+            <li><strong>Connect Google Drive.</strong><span>Desktop uses a Google OAuth desktop client; browser/PWA installs use a web client for their origin.</span></li>
+            <li><strong>Run sync and review the result.</strong><span>Entries, file-box metadata, transfers, conflicts, tombstones, and attachments are written under that Drive folder.</span></li>
+          </ol>
           <div className="settings-grid">
-            <label className="field">
-              <span>OAuth client ID</span>
-              <input
-                value={driveConnection.clientId}
-                onChange={(event) => onDriveConnectionChange((prev) => ({ ...prev, clientId: event.target.value, status: event.target.value.trim() ? 'needs-auth' : 'disconnected' }))}
-                placeholder="Google OAuth web client ID"
-                spellCheck={false}
-              />
-            </label>
             <label className="field">
               <span>Drive folder name</span>
               <input
@@ -7142,14 +7251,27 @@ function SyncPane({
               />
             </label>
             <label className="field">
-              <span>Drive folder id</span>
-              <input value={driveConnection.folderId ?? 'Created after first successful sync'} readOnly />
-            </label>
-            <label className="field">
               <span>Last sync</span>
               <input value={driveConnection.lastSyncAt ? new Date(driveConnection.lastSyncAt).toLocaleString() : 'Not synced yet'} readOnly />
             </label>
           </div>
+          <details className="settings-disclosure sync-advanced">
+            <summary className="settings-disclosure-summary">
+              <span><strong>Advanced OAuth client ID</strong><span className="muted tiny">Required before first connect; OAuth client IDs are not secrets.</span></span>
+              <span className={`status-chip ${driveConnection.clientId.trim() ? 'success' : 'warning'}`}>{driveConnection.clientId.trim() ? 'Configured' : 'Needed'}</span>
+            </summary>
+            <div className="settings-disclosure-body">
+              <label className="field">
+                <span>OAuth client ID</span>
+                <input
+                  value={driveConnection.clientId}
+                  onChange={(event) => onDriveConnectionChange((prev) => ({ ...prev, clientId: event.target.value, status: event.target.value.trim() ? 'needs-auth' : 'disconnected' }))}
+                  placeholder="Desktop client ID for Electron, web client ID for PWA"
+                  spellCheck={false}
+                />
+              </label>
+            </div>
+          </details>
           {driveConnection.lastError && <div className="settings-error">{driveConnection.lastError}</div>}
         </section>
 
@@ -7160,6 +7282,7 @@ function SyncPane({
             <div className="settings-path-card"><div className="settings-path-label">Local attachments</div><div className="settings-path">{appPaths.attachmentsRoot}</div></div>
             <div className="settings-path-card"><div className="settings-path-label">Exports</div><div className="settings-path">{appPaths.exportRoot}</div></div>
             <div className="settings-path-card"><div className="settings-path-label">Legacy sync root</div><div className="settings-path">{masterSyncPath || appPaths.syncRoot}</div></div>
+            <div className="settings-path-card"><div className="settings-path-label">Drive folder id</div><div className="settings-path">{driveConnection.folderId ?? 'Created after first successful sync'}</div></div>
             <div className="settings-path-card"><div className="settings-path-label">Drive layout</div><div className="settings-path">manifest.json, devices, entries, attachments, filebox, transfers, conflicts, tombstones</div></div>
           </div>
         </section>
