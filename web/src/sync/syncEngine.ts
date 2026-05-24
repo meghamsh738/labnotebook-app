@@ -22,6 +22,8 @@ import {
   validateEntryEnvelope,
   validateTombstone,
 } from './schemas'
+import type { BlobStore } from './blobStore'
+import { createJournalRepositories, type JournalRepositories } from './repositories'
 import type { SyncProvider } from './syncProvider'
 
 export type SyncEngineMeta = {
@@ -34,7 +36,10 @@ export type SyncEngineMeta = {
 export type SyncEngineResult = {
   pulledEntries: number
   pushedEntries: number
+  pulledAttachments: number
   pushedAttachments: number
+  uploadedBlobs: number
+  downloadedBlobs: number
   pushedTombstones: number
   conflicts: number
 }
@@ -46,6 +51,8 @@ export type LocalJournalStore = {
   saveMeta(meta: SyncEngineMeta): Promise<void>
 }
 
+const SYNC_ENGINE_META_ID = 'sync-engine'
+
 function nowIso() {
   return new Date().toISOString()
 }
@@ -56,6 +63,16 @@ function clone<T>(value: T): T {
 
 function defaultMeta(): SyncEngineMeta {
   return { entryHashes: {}, attachmentHashes: {} }
+}
+
+function isSyncEngineMeta(value: unknown): value is SyncEngineMeta {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
+  const record = value as Record<string, unknown>
+  return typeof record.entryHashes === 'object' && record.entryHashes !== null && typeof record.attachmentHashes === 'object' && record.attachmentHashes !== null
+}
+
+function envelopeRecord<T>(envelopes: SyncEntityEnvelope<T>[]) {
+  return Object.fromEntries(envelopes.map((envelope) => [envelope.id, envelope.payload]))
 }
 
 export class MemoryJournalStore implements LocalJournalStore {
@@ -82,6 +99,68 @@ export class MemoryJournalStore implements LocalJournalStore {
   async saveMeta(meta: SyncEngineMeta) {
     this.meta = clone(meta)
   }
+}
+
+export class IndexedDbJournalStore implements LocalJournalStore {
+  private readonly repositories: JournalRepositories
+  private readonly device: DeviceProfile
+
+  constructor(repositories: JournalRepositories, device: DeviceProfile) {
+    this.repositories = repositories
+    this.device = device
+  }
+
+  async getSnapshot() {
+    const [entryEnvelopes, attachmentEnvelopes, fileBoxItems, transfers, conflicts, tombstones, devices] = await Promise.all([
+      this.repositories.entries.all(),
+      this.repositories.attachments.all(),
+      this.repositories.fileBoxItems.all(),
+      this.repositories.transfers.all(),
+      this.repositories.conflicts.all(),
+      this.repositories.tombstones.all(),
+      this.repositories.devices.all(),
+    ])
+    return applyTombstonesToSnapshot({
+      entries: envelopeRecord(entryEnvelopes),
+      attachments: attachmentEnvelopes.map((envelope) => envelope.payload),
+      fileBoxItems,
+      transfers,
+      conflicts,
+      tombstones,
+      device: devices.find((candidate) => candidate.id === this.device.id) ?? devices[0] ?? this.device,
+    }, tombstones)
+  }
+
+  async saveSnapshot(snapshot: JournalSnapshot) {
+    const device = snapshot.device ?? this.device
+    await Promise.all([
+      this.repositories.entries.replaceAll(Object.values(snapshot.entries).map((entry) => buildEntryEnvelope(entry, device))),
+      this.repositories.attachments.replaceAll(snapshot.attachments.map((attachment) => buildAttachmentEnvelope(attachment, device))),
+      this.repositories.fileBoxItems.replaceAll(snapshot.fileBoxItems),
+      this.repositories.transfers.replaceAll(snapshot.transfers),
+      this.repositories.conflicts.replaceAll(snapshot.conflicts),
+      this.repositories.tombstones.replaceAll(snapshot.tombstones),
+      this.repositories.devices.replaceAll([device]),
+    ])
+  }
+
+  async getMeta() {
+    const record = await this.repositories.meta.get(SYNC_ENGINE_META_ID)
+    return isSyncEngineMeta(record?.value) ? record.value : defaultMeta()
+  }
+
+  async saveMeta(meta: SyncEngineMeta) {
+    await this.repositories.meta.put({
+      id: SYNC_ENGINE_META_ID,
+      updatedAt: nowIso(),
+      lastSyncedAt: meta.lastSyncedAt,
+      value: meta,
+    })
+  }
+}
+
+export async function createIndexedDbJournalStore(device: DeviceProfile, repositories?: JournalRepositories) {
+  return new IndexedDbJournalStore(repositories ?? await createJournalRepositories(), device)
 }
 
 export async function entryContentHash(entry: Entry) {
@@ -156,12 +235,21 @@ function attachmentMetadataPath(attachment: Attachment, entries: Record<string, 
   return `${buildAttachmentDrivePath(attachment, entries[attachment.entryId])}.json`
 }
 
+function attachmentBlobPath(attachment: Attachment, entries: Record<string, Entry>) {
+  return buildAttachmentDrivePath(attachment, entries[attachment.entryId])
+}
+
+function attachmentBlobKey(attachment: Attachment) {
+  return attachment.cacheKey || `attachment-${attachment.id}`
+}
+
 export async function syncOnce(params: {
   provider: SyncProvider
   store: LocalJournalStore
   device: DeviceProfile
+  blobStore?: BlobStore
 }): Promise<SyncEngineResult> {
-  const { provider, store, device } = params
+  const { provider, store, device, blobStore } = params
   await provider.signIn()
   await provider.ensureWorkspace()
   await provider.ensureDeviceRecord(device)
@@ -169,8 +257,11 @@ export async function syncOnce(params: {
   let snapshot = await store.getSnapshot()
   const meta = { ...defaultMeta(), ...(await store.getMeta()) }
   let pulledEntries = 0
+  let pulledAttachments = 0
   let pushedEntries = 0
   let pushedAttachments = 0
+  let uploadedBlobs = 0
+  let downloadedBlobs = 0
   let pushedTombstones = 0
   let conflicts = snapshot.conflicts.length
 
@@ -261,8 +352,11 @@ export async function syncOnce(params: {
     const localHash = localIndex >= 0 ? await attachmentMetadataHash(snapshot.attachments[localIndex]) : undefined
 
     if (localIndex < 0) {
-      snapshot.attachments.push(remoteAttachment)
+      const restoredAttachment = await restoreRemoteAttachmentBlob(remoteAttachment, snapshot.entries, provider, blobStore)
+      if (restoredAttachment.downloaded) downloadedBlobs += 1
+      snapshot.attachments.push(restoredAttachment.attachment)
       meta.attachmentHashes[remoteAttachment.id] = remoteHash
+      pulledAttachments += 1
       continue
     }
 
@@ -272,8 +366,11 @@ export async function syncOnce(params: {
     }
 
     if (localHash === baseHash || !baseHash) {
-      snapshot.attachments[localIndex] = remoteAttachment
+      const restoredAttachment = await restoreRemoteAttachmentBlob(remoteAttachment, snapshot.entries, provider, blobStore)
+      if (restoredAttachment.downloaded) downloadedBlobs += 1
+      snapshot.attachments[localIndex] = restoredAttachment.attachment
       meta.attachmentHashes[remoteAttachment.id] = remoteHash
+      pulledAttachments += 1
     }
   }
 
@@ -285,15 +382,20 @@ export async function syncOnce(params: {
   }
 
   for (const attachment of snapshot.attachments) {
-    const hash = await attachmentMetadataHash(attachment)
+    const uploadedBlob = await uploadAttachmentBlob(attachment, snapshot.entries, provider, blobStore)
+    if (uploadedBlob.uploaded) uploadedBlobs += 1
+    const nextAttachment = uploadedBlob.attachment
+    const hash = await attachmentMetadataHash(nextAttachment)
     if (hash !== meta.attachmentHashes[attachment.id]) {
-      await provider.putJson(attachmentMetadataPath(attachment, snapshot.entries), buildAttachmentEnvelope({
-        ...attachment,
+      await provider.putJson(attachmentMetadataPath(nextAttachment, snapshot.entries), buildAttachmentEnvelope({
+        ...nextAttachment,
         syncStatus: 'synced',
       }, device), {
-        appProperties: { entityType: 'attachment', entityId: attachment.id, contentHash: hash },
+        appProperties: { entityType: 'attachment', entityId: nextAttachment.id, contentHash: hash },
       })
-      meta.attachmentHashes[attachment.id] = hash
+      const attachmentIndex = snapshot.attachments.findIndex((candidate) => candidate.id === nextAttachment.id)
+      if (attachmentIndex >= 0) snapshot.attachments[attachmentIndex] = { ...nextAttachment, syncStatus: 'synced' }
+      meta.attachmentHashes[nextAttachment.id] = hash
       pushedAttachments += 1
     }
   }
@@ -334,7 +436,73 @@ export async function syncOnce(params: {
   await store.saveSnapshot(snapshot)
   await store.saveMeta(meta)
 
-  return { pulledEntries, pushedEntries, pushedAttachments, pushedTombstones, conflicts }
+  return { pulledEntries, pushedEntries, pulledAttachments, pushedAttachments, uploadedBlobs, downloadedBlobs, pushedTombstones, conflicts }
+}
+
+async function uploadAttachmentBlob(
+  attachment: Attachment,
+  entries: Record<string, Entry>,
+  provider: SyncProvider,
+  blobStore?: BlobStore
+): Promise<{ attachment: Attachment; uploaded: boolean }> {
+  if (!blobStore) return { attachment, uploaded: false }
+  const key = attachmentBlobKey(attachment)
+  const record = await blobStore.getRecord(key)
+  if (!record) return { attachment, uploaded: false }
+  if (attachment.driveFileId && attachment.syncStatus === 'synced' && attachment.sha256 === record.sha256) {
+    return { attachment: { ...attachment, cacheKey: key }, uploaded: false }
+  }
+  const expectedSha256 = attachment.sha256 || record.sha256
+  const verified = await blobStore.verify(key, expectedSha256)
+  if (!verified.ok) return { attachment: { ...attachment, syncStatus: 'failed' }, uploaded: false }
+  const remote = await provider.putBlob(attachmentBlobPath(attachment, entries), record.blob, {
+    mimeType: attachment.contentType || attachment.mimeType || record.mimeType,
+    sha256: record.sha256,
+    byteSize: record.size,
+    appProperties: { entityType: 'attachmentBlob', entityId: attachment.id, sha256: record.sha256 },
+  })
+  return {
+    attachment: {
+      ...attachment,
+      cacheKey: key,
+      sha256: record.sha256,
+      bytes: attachment.bytes ?? record.size,
+      contentType: attachment.contentType || record.mimeType,
+      driveFileId: remote.id,
+      syncStatus: 'synced',
+      updatedAt: nowIso(),
+    },
+    uploaded: true,
+  }
+}
+
+async function restoreRemoteAttachmentBlob(
+  attachment: Attachment,
+  entries: Record<string, Entry>,
+  provider: SyncProvider,
+  blobStore?: BlobStore
+): Promise<{ attachment: Attachment; downloaded: boolean }> {
+  if (!blobStore) return { attachment, downloaded: false }
+  const key = attachmentBlobKey(attachment)
+  if (await blobStore.has(key)) return { attachment: { ...attachment, cacheKey: key }, downloaded: false }
+  const remoteBlob = await provider.getBlob(attachmentBlobPath(attachment, entries))
+  if (!remoteBlob) return { attachment, downloaded: false }
+  const record = await blobStore.put(key, remoteBlob)
+  if (attachment.sha256 && record.sha256 !== attachment.sha256) {
+    await blobStore.delete(key)
+    return { attachment: { ...attachment, syncStatus: 'failed' }, downloaded: false }
+  }
+  return {
+    attachment: {
+      ...attachment,
+      cacheKey: key,
+      sha256: record.sha256,
+      bytes: attachment.bytes ?? record.size,
+      contentType: attachment.contentType || record.mimeType,
+      syncStatus: 'synced',
+    },
+    downloaded: true,
+  }
 }
 
 async function readRemoteEntries(provider: SyncProvider, deviceId: string) {

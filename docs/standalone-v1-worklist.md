@@ -269,12 +269,14 @@ Implemented in this branch:
 - Blob storage abstraction for IndexedDB.
 - Remote JSON schema validators.
 - Mock sync provider.
-- `syncOnce()` mock-provider engine for entry pull/push, attachment metadata, tombstones, and conflicts.
-- Focused tests for repository CRUD, stable hashing, validation, two-device convergence, attachment metadata, conflicts, and tombstone non-resurrection.
+- Google Drive adapter that implements the new `SyncProvider` path contract over the existing OAuth/Drive folder client.
+- Repository-backed `IndexedDbJournalStore` for snapshots, devices, and sync engine checkpoints.
+- `syncOnce()` engine for entry pull/push, attachment metadata, attachment blob upload/download, tombstones, and conflicts.
+- Focused tests for repository CRUD, stable hashing, validation, two-device convergence, attachment metadata, blob restoration, conflicts, and tombstone non-resurrection.
 
 Next implementation task:
 
-1. Add the real Google Drive provider adapter behind the same `SyncProvider` contract.
-2. Upload/download attachment blobs, not only metadata.
-3. Persist sync checkpoints and device records through the repository layer instead of test-only memory stores.
-4. Add the first real two-profile browser test that simulates desktop plus mobile PWA state.
+1. Wire the app's visible "Sync to Google Drive" action through `GoogleDriveSyncProvider` + `syncOnce()`.
+2. Persist browser/Electron attachment blobs through `IndexedDbBlobStore` during normal file intake.
+3. Add a two-profile browser test that simulates desktop plus mobile PWA state.
+4. Add conflict and failed-transfer UI surfaces for the repository-backed sync engine.

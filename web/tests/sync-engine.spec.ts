@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test'
 import type { Attachment, DeviceProfile, Entry, TombstoneRecord } from '../src/domain/types'
+import { MemoryBlobStore } from '../src/sync/blobStore'
 import type { JournalSnapshot } from '../src/sync/dataCore'
 import { MemoryJournalStore, syncOnce } from '../src/sync/syncEngine'
 import { MockSyncProvider } from '../src/sync/syncProvider'
@@ -110,6 +111,41 @@ test('attachment metadata follows its owning daily entry across devices', async 
   expect(mobileSnapshot.attachments).toHaveLength(1)
   expect(mobileSnapshot.attachments[0].entryId).toBe(dailyEntry.id)
   expect(remoteAttachmentFiles.map((file) => file.path)).toContain('attachments/2026-05-23/att-raw-raw.csv.json')
+})
+
+test('attachment blobs upload to Drive paths and restore into another device cache', async () => {
+  const provider = new MockSyncProvider()
+  const desktop = device('dev-desktop', 'Desktop')
+  const mobile = device('dev-mobile', 'Mobile')
+  const dailyEntry = entry({ id: 'entry-2026-05-23', date: '2026-05-23', text: 'has image', deviceId: desktop.id })
+  const desktopBlobStore = new MemoryBlobStore()
+  const localBlob = await desktopBlobStore.put('cache-att-image', new Blob(['image bytes'], { type: 'image/png' }))
+  const desktopStore = new MemoryJournalStore(snapshot(desktop, [dailyEntry], [
+    {
+      ...attachment({ id: 'att-image', entryId: dailyEntry.id, filename: 'image.png', sha256: localBlob.sha256 }),
+      cacheKey: localBlob.id,
+      contentType: localBlob.mimeType,
+    },
+  ]))
+  const mobileStore = new MemoryJournalStore(snapshot(mobile))
+  const mobileBlobStore = new MemoryBlobStore()
+
+  const pushed = await syncOnce({ provider, store: desktopStore, device: desktop, blobStore: desktopBlobStore })
+  const remoteBlob = await provider.getBlob('attachments/2026-05-23/att-image-image.png')
+  const pulled = await syncOnce({ provider, store: mobileStore, device: mobile, blobStore: mobileBlobStore })
+  const mobileSnapshot = await mobileStore.getSnapshot()
+  const restoredBlob = await mobileBlobStore.get('cache-att-image')
+
+  expect(pushed.uploadedBlobs).toBe(1)
+  expect(await remoteBlob?.text()).toBe('image bytes')
+  expect(pulled.downloadedBlobs).toBe(1)
+  expect(mobileSnapshot.attachments[0]).toMatchObject({
+    id: 'att-image',
+    cacheKey: 'cache-att-image',
+    sha256: localBlob.sha256,
+    syncStatus: 'synced',
+  })
+  expect(await restoredBlob?.text()).toBe('image bytes')
 })
 
 test('same-day competing edits create a conflict and keep the local copy visible', async () => {

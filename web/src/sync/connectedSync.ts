@@ -44,6 +44,7 @@ export type SyncProvider = {
   uploadJson<T>(parentFolderId: string, name: string, data: T): Promise<string>
   uploadBlob(parentFolderId: string, name: string, blob: Blob, mimeType?: string): Promise<string>
   downloadJson<T>(fileId: string): Promise<T>
+  downloadBlob(fileId: string): Promise<Blob>
   listFolder(parentFolderId: string, query?: string): Promise<DriveFile[]>
   logout(): void
 }
@@ -401,6 +402,18 @@ export class GoogleDriveProvider implements SyncProvider {
 
   async downloadJson<T>(fileId: string): Promise<T> {
     return this.request<T>(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?alt=media`)
+  }
+
+  async downloadBlob(fileId: string): Promise<Blob> {
+    if (!this.accessToken) throw new Error('Google Drive is not authorized.')
+    const response = await fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?alt=media`, {
+      headers: { Authorization: `Bearer ${this.accessToken}` },
+    })
+    if (!response.ok) {
+      const detail = await response.text().catch(() => '')
+      throw new Error(`Google Drive blob download failed (${response.status}): ${detail || response.statusText}`)
+    }
+    return response.blob()
   }
 
   private async upsertFile(parentFolderId: string, name: string, blob: Blob): Promise<string> {

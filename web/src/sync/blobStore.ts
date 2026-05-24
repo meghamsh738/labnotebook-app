@@ -62,3 +62,47 @@ export class IndexedDbBlobStore implements BlobStore {
     return { ok: expectedSha256 ? actualSha256 === expectedSha256 : actualSha256 === record.sha256, actualSha256 }
   }
 }
+
+export class MemoryBlobStore implements BlobStore {
+  private readonly records = new Map<string, BlobStoreRecord>()
+
+  async put(key: string, blob: Blob) {
+    const record: BlobStoreRecord = {
+      id: key,
+      blob,
+      sha256: await hashBlobSha256(blob),
+      size: blob.size,
+      mimeType: blob.type || 'application/octet-stream',
+      updatedAt: nowIso(),
+    }
+    this.records.set(key, record)
+    return record
+  }
+
+  async get(key: string) {
+    return this.records.get(key)?.blob
+  }
+
+  async getRecord(key: string) {
+    return this.records.get(key)
+  }
+
+  async delete(key: string) {
+    this.records.delete(key)
+  }
+
+  async list() {
+    return [...this.records.values()]
+  }
+
+  async has(key: string) {
+    return this.records.has(key)
+  }
+
+  async verify(key: string, expectedSha256?: string) {
+    const record = this.records.get(key)
+    if (!record) return { ok: false, missing: true }
+    const actualSha256 = await hashBlobSha256(record.blob)
+    return { ok: expectedSha256 ? actualSha256 === expectedSha256 : actualSha256 === record.sha256, actualSha256 }
+  }
+}

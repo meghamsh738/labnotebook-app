@@ -59,3 +59,75 @@ test('IndexedDbBlobStore persists and verifies attachment blobs', async ({ page 
   expect(result.verifyMismatch.ok).toBe(false)
   expect(result.verifyMissing).toEqual({ ok: false, missing: true })
 })
+
+test('IndexedDbJournalStore persists snapshots and sync checkpoints', async ({ page }) => {
+  await page.goto('/')
+
+  const result = await page.evaluate(async () => {
+    const { createJournalRepositories } = await import('/src/sync/repositories.ts')
+    const { createIndexedDbJournalStore } = await import('/src/sync/syncEngine.ts')
+    const repositories = await createJournalRepositories()
+    await Promise.all([
+      repositories.entries.clear(),
+      repositories.attachments.clear(),
+      repositories.fileBoxItems.clear(),
+      repositories.transfers.clear(),
+      repositories.conflicts.clear(),
+      repositories.tombstones.clear(),
+      repositories.devices.clear(),
+      repositories.meta.clear(),
+    ])
+    const device = {
+      id: `dev-${crypto.randomUUID()}`,
+      name: 'Browser test',
+      platform: 'web' as const,
+      createdAt: '2026-05-24T08:00:00.000Z',
+      lastSeenAt: '2026-05-24T08:00:00.000Z',
+    }
+    const entry = {
+      id: `entry-${crypto.randomUUID()}`,
+      authorId: 'user-1',
+      title: 'Repository entry',
+      dateBucket: '2026-05-24',
+      isDaily: true,
+      createdDatetime: '2026-05-24T08:00:00.000Z',
+      lastEditedDatetime: '2026-05-24T09:00:00.000Z',
+      content: [{ id: 'block-1', type: 'paragraph' as const, text: 'saved' }],
+      tags: [],
+      searchTerms: [],
+      linkedFiles: [],
+      pinnedRegions: [],
+    }
+    const store = await createIndexedDbJournalStore(device, repositories)
+    await store.saveSnapshot({
+      entries: { [entry.id]: entry },
+      attachments: [],
+      fileBoxItems: [],
+      transfers: [],
+      conflicts: [],
+      tombstones: [],
+      device,
+    })
+    await store.saveMeta({
+      entryHashes: { [entry.id]: 'hash-entry' },
+      attachmentHashes: {},
+      lastSyncedAt: '2026-05-24T10:00:00.000Z',
+      driveChangesToken: '12',
+    })
+    const restored = await store.getSnapshot()
+    const meta = await store.getMeta()
+    return {
+      entryTitle: restored.entries[entry.id]?.title,
+      deviceId: restored.device?.id,
+      metaHash: meta.entryHashes[entry.id],
+      token: meta.driveChangesToken,
+    }
+  })
+
+  expect(result).toEqual({
+    entryTitle: 'Repository entry',
+    deviceId: expect.stringMatching(/^dev-/),
+    metaHash: 'hash-entry',
+    token: '12',
+  })
+})

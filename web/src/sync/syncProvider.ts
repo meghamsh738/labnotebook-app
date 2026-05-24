@@ -1,4 +1,11 @@
 import type { DeviceProfile } from '../domain/types'
+import {
+  DRIVE_MIME_FOLDER,
+  DRIVE_ROOT_FOLDER,
+  GoogleDriveProvider,
+  type DriveFile,
+  type SyncProvider as FolderDriveClient,
+} from './connectedSync'
 
 export type AuthSession = {
   provider: 'mock' | 'google-drive'
@@ -107,9 +114,7 @@ export class MockSyncProvider implements SyncProvider {
   }
 
   async ensureDeviceRecord(device: DeviceProfile) {
-    await this.putJson(`devices/${device.id}.json`, device, {
-      appProperties: { entityType: 'device', entityId: device.id },
-    })
+    await this.putJson(`devices/${device.id}.json`, device)
   }
 
   async getJson<T>(path: string): Promise<RemoteJson<T> | null> {
@@ -203,4 +208,205 @@ export class MockSyncProvider implements SyncProvider {
   private recordChange(file: RemoteFileRef) {
     this.changes.push({ ...file, appProperties: file.appProperties ? { ...file.appProperties } : undefined })
   }
+}
+
+export type GoogleDriveSyncProviderOptions = {
+  clientId: string
+  folderName?: string
+  folderId?: string
+  client?: FolderDriveClient
+}
+
+function pathSegments(path: string) {
+  return path.split('/').map((segment) => segment.trim()).filter(Boolean)
+}
+
+function parseDriveSize(size?: string) {
+  if (!size) return undefined
+  const parsed = Number.parseInt(size, 10)
+  return Number.isFinite(parsed) ? parsed : undefined
+}
+
+function driveFileToRemoteRef(path: string, file: DriveFile): RemoteFileRef {
+  return {
+    id: file.id,
+    path,
+    name: file.name,
+    mimeType: file.mimeType,
+    size: parseDriveSize(file.size),
+    updatedAt: file.modifiedTime || nowIso(),
+  }
+}
+
+export class GoogleDriveSyncProvider implements SyncProvider {
+  private readonly client: FolderDriveClient
+  private readonly folderName: string
+  private rootFolderId = ''
+  private readonly folderIds = new Map<string, string>()
+
+  constructor(options: GoogleDriveSyncProviderOptions) {
+    this.folderName = options.folderName || DRIVE_ROOT_FOLDER
+    this.rootFolderId = options.folderId || ''
+    this.client = options.client ?? new GoogleDriveProvider({
+      clientId: options.clientId,
+      folderName: this.folderName,
+    })
+  }
+
+  async signIn(): Promise<AuthSession> {
+    await this.client.signIn()
+    return { provider: 'google-drive', signedInAt: nowIso() }
+  }
+
+  async signOut() {
+    this.client.logout()
+  }
+
+  async ensureWorkspace(): Promise<WorkspaceRef> {
+    if (!this.rootFolderId) this.rootFolderId = await this.client.ensureRootFolder()
+    this.folderIds.set('', this.rootFolderId)
+    await Promise.all(['devices', 'entries', 'attachments', 'filebox', 'transfers', 'conflicts', 'tombstones'].map((folder) => this.ensureFolderPath(folder)))
+    return { id: this.rootFolderId, rootPath: this.folderName }
+  }
+
+  async ensureDeviceRecord(device: DeviceProfile) {
+    await this.putJson(`devices/${device.id}.json`, device)
+  }
+
+  async getJson<T>(path: string): Promise<RemoteJson<T> | null> {
+    const file = await this.findFile(path)
+    if (!file) return null
+    const value = await this.client.downloadJson<T>(file.id)
+    return { ...driveFileToRemoteRef(path, file), value }
+  }
+
+  async putJson<T>(path: string, value: T): Promise<RemoteFileRef> {
+    const { folderPath, fileName } = this.splitFilePath(path)
+    const parentFolderId = await this.ensureFolderPath(folderPath)
+    const fileId = await this.client.uploadJson(parentFolderId, fileName, value)
+    const file = await this.findFile(path)
+    return file ? driveFileToRemoteRef(path, file) : {
+      id: fileId,
+      path,
+      name: fileName,
+      mimeType: 'application/json',
+      updatedAt: nowIso(),
+    }
+  }
+
+  async getBlob(path: string): Promise<Blob | null> {
+    const file = await this.findFile(path)
+    if (!file) return null
+    return this.client.downloadBlob(file.id)
+  }
+
+  async putBlob(path: string, blob: Blob, metadata: BlobMetadata): Promise<RemoteFileRef> {
+    const { folderPath, fileName } = this.splitFilePath(path)
+    const parentFolderId = await this.ensureFolderPath(folderPath)
+    const fileId = await this.client.uploadBlob(parentFolderId, fileName, blob, metadata.mimeType)
+    const file = await this.findFile(path)
+    return file ? driveFileToRemoteRef(path, file) : {
+      id: fileId,
+      path,
+      name: fileName,
+      mimeType: metadata.mimeType || blob.type || 'application/octet-stream',
+      size: metadata.byteSize ?? blob.size,
+      updatedAt: nowIso(),
+    }
+  }
+
+  async loadManifest<T = unknown>() {
+    return (await this.getJson<T>('manifest.json'))?.value ?? null
+  }
+
+  putManifest<T>(manifest: T) {
+    return this.putJson('manifest.json', manifest)
+  }
+
+  async listManagedFiles(options: ListOptions = {}) {
+    await this.ensureWorkspace()
+    const allFiles = await this.listFilesRecursive('', this.rootFolderId)
+    return allFiles
+      .filter((file) => !options.prefix || file.path.startsWith(options.prefix))
+      .sort((a, b) => a.path.localeCompare(b.path))
+  }
+
+  private splitFilePath(path: string) {
+    const segments = pathSegments(path)
+    const fileName = segments.pop()
+    if (!fileName) throw new Error('Drive path must include a file name.')
+    return { folderPath: segments.join('/'), fileName }
+  }
+
+  private async ensureFolderPath(folderPath: string) {
+    await this.ensureRoot()
+    if (this.folderIds.has(folderPath)) return this.folderIds.get(folderPath)!
+    let parentFolderId = this.rootFolderId
+    const current: string[] = []
+    for (const segment of pathSegments(folderPath)) {
+      current.push(segment)
+      const key = current.join('/')
+      let folderId = this.folderIds.get(key)
+      if (!folderId) {
+        folderId = await this.client.ensureFolder(parentFolderId, segment)
+        this.folderIds.set(key, folderId)
+      }
+      parentFolderId = folderId
+    }
+    return parentFolderId
+  }
+
+  private async resolveFolderPath(folderPath: string) {
+    await this.ensureRoot()
+    if (this.folderIds.has(folderPath)) return this.folderIds.get(folderPath)
+    let parentFolderId = this.rootFolderId
+    const current: string[] = []
+    for (const segment of pathSegments(folderPath)) {
+      current.push(segment)
+      const key = current.join('/')
+      const cached = this.folderIds.get(key)
+      if (cached) {
+        parentFolderId = cached
+        continue
+      }
+      const matches = await this.client.listFolder(parentFolderId, `name = '${escapeDriveQuery(segment)}' and mimeType = '${DRIVE_MIME_FOLDER}'`)
+      const folderId = matches[0]?.id
+      if (!folderId) return undefined
+      this.folderIds.set(key, folderId)
+      parentFolderId = folderId
+    }
+    return parentFolderId
+  }
+
+  private async findFile(path: string) {
+    const { folderPath, fileName } = this.splitFilePath(path)
+    const folderId = await this.resolveFolderPath(folderPath)
+    if (!folderId) return undefined
+    const matches = await this.client.listFolder(folderId, `name = '${escapeDriveQuery(fileName)}' and mimeType != '${DRIVE_MIME_FOLDER}'`)
+    return matches[0]
+  }
+
+  private async listFilesRecursive(folderPath: string, folderId: string): Promise<RemoteFileRef[]> {
+    const children = await this.client.listFolder(folderId)
+    const files: RemoteFileRef[] = []
+    for (const child of children) {
+      const childPath = folderPath ? `${folderPath}/${child.name}` : child.name
+      if (child.mimeType === DRIVE_MIME_FOLDER) {
+        this.folderIds.set(childPath, child.id)
+        files.push(...await this.listFilesRecursive(childPath, child.id))
+      } else {
+        files.push(driveFileToRemoteRef(childPath, child))
+      }
+    }
+    return files
+  }
+
+  private async ensureRoot() {
+    if (!this.rootFolderId) this.rootFolderId = await this.client.ensureRootFolder()
+    this.folderIds.set('', this.rootFolderId)
+  }
+}
+
+function escapeDriveQuery(value: string) {
+  return value.replace(/\\/g, '\\\\').replace(/'/g, "\\'")
 }
