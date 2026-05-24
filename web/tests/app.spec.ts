@@ -939,6 +939,91 @@ test.describe('Lab note taking app', () => {
     await expect(failedRow.getByRole('button', { name: 'Attach' })).toBeDisabled()
   })
 
+  test('remote Drive attachments are shown as on-demand until downloaded', async ({ page }) => {
+    const entry = {
+      id: 'entry-remote-drive-day',
+      createdDatetime: '2026-05-24T09:00:00.000Z',
+      lastEditedDatetime: '2026-05-24T10:00:00.000Z',
+      authorId: 'u1',
+      title: 'Remote Drive day',
+      dateBucket: '2026-05-24',
+      isDaily: true,
+      content: [{ id: 'remote-block', type: 'paragraph', text: 'remote attachment note' }],
+      tags: [],
+      searchTerms: [],
+      linkedFiles: ['att-remote-drive'],
+      pinnedRegions: [],
+    }
+
+    await boot(page, {
+      noFail: '1',
+      entries: { [entry.id]: entry },
+      attachments: [{
+        id: 'att-remote-drive',
+        entryId: entry.id,
+        type: 'image',
+        filename: 'phone-capture.jpg',
+        filesize: '2 MB',
+        bytes: 2_000_000,
+        storagePath: 'attachments/2026-05-24/att-remote-drive-phone-capture.jpg',
+        contentType: 'image/jpeg',
+        mimeType: 'image/jpeg',
+        sha256: 'abc123remotehash',
+        driveFileId: 'drive-file-remote',
+        syncStatus: 'remote-available',
+        createdAt: '2026-05-24T10:00:00.000Z',
+        updatedAt: '2026-05-24T10:05:00.000Z',
+      }],
+      fileBoxItems: [{
+        id: 'fb-remote-drive',
+        entryId: entry.id,
+        attachmentId: 'att-remote-drive',
+        filename: 'phone-capture.jpg',
+        filesize: '2 MB',
+        contentType: 'image/jpeg',
+        sourceDeviceId: 'dev-pixel',
+        sourceDeviceName: 'Pixel 7a',
+        status: 'available',
+        createdAt: '2026-05-24T10:00:00.000Z',
+        updatedAt: '2026-05-24T10:05:00.000Z',
+        driveFileId: 'drive-file-remote',
+      }],
+      transfers: [{
+        id: 'tr-remote-drive',
+        fileBoxItemId: 'fb-remote-drive',
+        entryId: entry.id,
+        attachmentId: 'att-remote-drive',
+        filename: 'phone-capture.jpg',
+        fromDeviceId: 'dev-pixel',
+        fromDeviceName: 'Pixel 7a',
+        provider: 'google-drive',
+        status: 'available',
+        bytesTotal: 2_000_000,
+        createdAt: '2026-05-24T10:00:00.000Z',
+        updatedAt: '2026-05-24T10:05:00.000Z',
+        driveFileId: 'drive-file-remote',
+      }],
+    })
+
+    await page.getByTestId('editor-tab-files').click()
+    const filesPanel = page.locator('.tab-panel').filter({ hasText: 'Master sync folder' })
+    const fileRow = filesPanel.locator('.attachment-row.remote-only').filter({ hasText: 'phone-capture.jpg' })
+    await expect(fileRow).toHaveCount(1)
+    await expect(fileRow).toContainText('Status: Remote available')
+    await expect(fileRow).toContainText('On demand')
+    await expect(fileRow.getByRole('button', { name: 'Download' })).toBeVisible()
+    await expect(fileRow.getByRole('button', { name: 'Open' })).toHaveCount(0)
+    await expect(fileRow.getByRole('button', { name: 'Remove local' })).toHaveCount(0)
+
+    await page.getByTestId('editor-tab-filebox').click()
+    const fileBox = page.getByTestId('entry-filebox-panel')
+    const fileBoxRow = fileBox.locator('.filebox-row.has-recovery').filter({ hasText: 'phone-capture.jpg' })
+    await expect(fileBoxRow).toHaveCount(1)
+    await expect(fileBoxRow).toContainText('Remote only')
+    await expect(fileBoxRow).toContainText('Download the file only when you need to open or attach the local blob.')
+    await expect(fileBoxRow.getByRole('button', { name: 'Download' })).toBeVisible()
+  })
+
   test('sync conflict actions can keep both entry copies', async ({ page }) => {
     const entry = {
       id: 'entry-conflict-day',
