@@ -5524,24 +5524,77 @@ function Sidebar({
               </button>
             </div>
           ) : (
-            <div className="connected-sidebar-summary">
-              <div>
-                <span className="muted tiny">Device</span>
-                <strong>{deviceName}</strong>
+            <>
+              <div className="connected-sidebar-summary">
+                <div>
+                  <span className="muted tiny">Device</span>
+                  <strong>{deviceName}</strong>
+                </div>
+                <div>
+                  <span className="muted tiny">File Box</span>
+                  <strong>{fileBoxCount} open</strong>
+                </div>
+                <div>
+                  <span className="muted tiny">Transfers</span>
+                  <strong>{transferCount} active</strong>
+                </div>
+                <div>
+                  <span className="muted tiny">Drive</span>
+                  <strong>{driveStatus === 'ready' ? 'Ready' : driveStatus === 'syncing' ? 'Syncing' : 'Setup'}</strong>
+                </div>
               </div>
-              <div>
-                <span className="muted tiny">File Box</span>
-                <strong>{fileBoxCount} open</strong>
-              </div>
-              <div>
-                <span className="muted tiny">Transfers</span>
-                <strong>{transferCount} active</strong>
-              </div>
-              <div>
-                <span className="muted tiny">Drive</span>
-                <strong>{driveStatus === 'ready' ? 'Ready' : driveStatus === 'syncing' ? 'Syncing' : 'Setup'}</strong>
-              </div>
-            </div>
+              <section className="sidebar-section connected-nav-list" aria-label="Connected workspace">
+                <div className="section-title">Connected workspace</div>
+                <button
+                  className={`entry-item ${mode === 'file-hub' ? 'active' : ''}`}
+                  type="button"
+                  onClick={() => { onModeChange('file-hub'); onCloseMobile() }}
+                >
+                  <span className="connected-nav-icon"><UiIcon name="folder" /></span>
+                  <div>
+                    <div className="title-sm">Entry File Box</div>
+                    <p className="muted tiny">Accept, attach, and track incoming files.</p>
+                  </div>
+                  <span className="entry-signal summary">{fileBoxCount}</span>
+                </button>
+                <button
+                  className={`entry-item ${mode === 'devices' ? 'active' : ''}`}
+                  type="button"
+                  onClick={() => { onModeChange('devices'); onCloseMobile() }}
+                >
+                  <span className="connected-nav-icon"><UiIcon name="settings" /></span>
+                  <div>
+                    <div className="title-sm">Devices</div>
+                    <p className="muted tiny">Desktop, mobile PWA, and Drive identity.</p>
+                  </div>
+                  <span className="entry-signal summary">1</span>
+                </button>
+                <button
+                  className={`entry-item ${mode === 'transfers' ? 'active' : ''}`}
+                  type="button"
+                  onClick={() => { onModeChange('transfers'); onCloseMobile() }}
+                >
+                  <span className="connected-nav-icon"><UiIcon name="refresh" /></span>
+                  <div>
+                    <div className="title-sm">Transfers</div>
+                    <p className="muted tiny">Recent file movements and status.</p>
+                  </div>
+                  <span className="entry-signal summary">{transferCount}</span>
+                </button>
+                <button
+                  className={`entry-item ${mode === 'sync' ? 'active' : ''}`}
+                  type="button"
+                  onClick={() => { onModeChange('sync'); onCloseMobile() }}
+                >
+                  <span className="connected-nav-icon"><UiIcon name="drive" /></span>
+                  <div>
+                    <div className="title-sm">Google Drive Sync</div>
+                    <p className="muted tiny">OAuth, folder layout, and storage paths.</p>
+                  </div>
+                  <span className="entry-signal success">{driveStatus === 'ready' ? 'Ready' : 'Setup'}</span>
+                </button>
+              </section>
+            </>
           )}
 
           {isEntriesMode && (
@@ -7762,8 +7815,20 @@ function FileHubPane({
           </div>
           <div className="connected-list">
             {visibleOpenItems.length === 0 && (
-              <div className="connected-empty">
-                No waiting files. Attach a photo or file from Today, then it will appear here until it is accepted into the entry.
+              <div className="connected-empty filehub-empty-state">
+                <span className="filehub-empty-icon"><UiIcon name="paperclip" /></span>
+                <strong>No files waiting to be attached</strong>
+                <span>Attach a photo, document, or raw export from Today. It will appear here until it is accepted into an entry.</span>
+                <div className="filehub-empty-actions">
+                  {entryRows[0] && (
+                    <button className="accent" type="button" onClick={() => onSelectEntry(entryRows[0].entry.id)}>
+                      Open latest entry
+                    </button>
+                  )}
+                  <button className="pill soft" type="button" onClick={onRetrySync}>
+                    Check Drive queue
+                  </button>
+                </div>
               </div>
             )}
             {visibleOpenItems.map((item) => {

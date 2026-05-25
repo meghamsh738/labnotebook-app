@@ -1205,6 +1205,37 @@ test.describe('Lab note taking app', () => {
     await expect(page.locator('.sidebar')).not.toHaveClass(/collapsed/)
   })
 
+  test('sidebar mode options keep stable geometry when switching sections', async ({ page }) => {
+    await boot(page, { noFail: '1' })
+    const modeToggle = page.locator('.connected-mode-toggle')
+    const labels = ['Entries', 'Protocols', 'File Hub', 'Devices', 'Transfers', 'Sync', 'Entries']
+    const rects: string[] = []
+
+    for (const label of labels) {
+      await modeToggle.getByRole('tab', { name: label }).click()
+      await expect(modeToggle.getByRole('tab')).toHaveCount(6)
+      rects.push(
+        JSON.stringify(
+          await modeToggle.evaluate((element) => {
+            const parent = element.getBoundingClientRect()
+            return Array.from(element.querySelectorAll('button')).map((button) => {
+              const box = button.getBoundingClientRect()
+              return {
+                text: button.textContent?.trim(),
+                x: Math.round(box.x - parent.x),
+                y: Math.round(box.y - parent.y),
+                width: Math.round(box.width),
+                height: Math.round(box.height),
+              }
+            })
+          })
+        )
+      )
+    }
+
+    expect(new Set(rects).size).toBe(1)
+  })
+
   test('calendar filters entries by date', async ({ page }) => {
     await boot(page, { noFail: '1' })
     const today = new Date()

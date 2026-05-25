@@ -13378,9 +13378,12 @@ kbd {
   z-index: 7;
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-rows: repeat(2, 48px);
+  align-content: start;
   gap: 7px;
   width: 100%;
-  min-height: 98px;
+  height: 114px;
+  min-height: 114px;
   padding: 3px 0 8px;
   border: 0;
   background: linear-gradient(180deg, var(--nav-bg) 82%, color-mix(in srgb, var(--nav-bg) 0%, transparent));
@@ -13497,12 +13500,14 @@ kbd {
   }
 
   .sidebar .mode-toggle.connected-mode-toggle {
-    min-height: 104px;
+    height: 114px;
+    min-height: 114px;
     gap: 8px;
   }
 
   .sidebar .mode-toggle.connected-mode-toggle .pill {
-    min-height: 44px;
+    height: 48px;
+    min-height: 48px;
     border-radius: 15px;
   }
 
@@ -13628,4 +13633,118 @@ kbd {
   .mobile-pwa-nav button {
     min-height: 44px;
   }
+}
+
+/* Connected workspace reference pass: stable sidebar cards and a richer File Hub empty state. */
+.sidebar.sidebar-mode-connected .sidebar-content {
+  gap: 10px;
+}
+
+.sidebar.sidebar-mode-connected .connected-nav-list {
+  order: 3;
+  display: grid;
+  gap: 8px;
+  padding-top: 4px;
+}
+
+.sidebar.sidebar-mode-connected .connected-nav-list .section-title {
+  margin: 2px 0 2px;
+}
+
+.sidebar.sidebar-mode-connected .connected-nav-list .entry-item {
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+  min-height: 64px;
+  padding: 10px;
+  border-color: color-mix(in srgb, var(--nav-text) 14%, transparent);
+  background: color-mix(in srgb, var(--nav-text) 7%, transparent);
+  box-shadow: none;
+}
+
+.sidebar.sidebar-mode-connected .connected-nav-list .entry-item.active {
+  border-color: color-mix(in srgb, var(--nav-accent) 55%, transparent);
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--nav-accent) 21%, transparent), transparent 80%),
+    color-mix(in srgb, var(--nav-text) 10%, transparent);
+}
+
+.connected-nav-icon {
+  display: inline-grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--nav-accent) 42%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--nav-accent) 14%, transparent);
+  color: color-mix(in srgb, var(--nav-accent) 72%, var(--nav-text));
+}
+
+.sidebar.sidebar-mode-connected .connected-nav-list .title-sm {
+  font-size: 0.82rem;
+  line-height: 1.15;
+}
+
+.sidebar.sidebar-mode-connected .connected-nav-list .muted {
+  margin-top: 2px;
+  font-size: 0.7rem;
+  line-height: 1.25;
+}
+
+.sidebar.sidebar-mode-connected .connected-nav-list .entry-signal {
+  align-self: start;
+  min-width: 24px;
+  max-width: 58px;
+  overflow: hidden;
+  justify-content: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.filehub-empty-state {
+  display: grid;
+  min-height: 116px;
+  grid-template-columns: 64px minmax(0, 1fr);
+  gap: 6px 18px;
+  align-items: center;
+  text-align: left;
+}
+
+.filehub-empty-state > strong {
+  align-self: end;
+  color: var(--text);
+  font-size: 1rem;
+}
+
+.filehub-empty-state > span:not(.filehub-empty-icon) {
+  align-self: start;
+  color: var(--text-3);
+}
+
+.filehub-empty-icon {
+  grid-row: span 3;
+  display: inline-grid;
+  width: 58px;
+  height: 58px;
+  place-items: center;
+  border: 1px solid rgba(32, 48, 42, 0.12);
+  border-radius: 15px;
+  background:
+    linear-gradient(145deg, rgba(255, 252, 245, 0.78), rgba(239, 231, 217, 0.8)),
+    var(--surface-2);
+  color: var(--accent);
+}
+
+.filehub-empty-icon .ui-icon {
+  width: 26px;
+  height: 26px;
+}
+
+.filehub-empty-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.filehub-empty-actions button {
+  min-height: 32px;
+  padding: 6px 11px;
 }
