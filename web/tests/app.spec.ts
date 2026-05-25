@@ -1236,6 +1236,53 @@ test.describe('Lab note taking app', () => {
     expect(new Set(rects).size).toBe(1)
   })
 
+  test('generated-reference typography stays on Inter with mono reserved for technical data', async ({ page }) => {
+    await boot(page, { noFail: '1' })
+
+    const typography = await page.evaluate(() => {
+      const read = (selector: string) => {
+        const element = document.querySelector(selector)
+        if (!element) return null
+        const style = window.getComputedStyle(element)
+        return {
+          fontFamily: style.fontFamily,
+          fontSize: style.fontSize,
+          fontWeight: style.fontWeight,
+          letterSpacing: style.letterSpacing,
+        }
+      }
+
+      const rootStyle = window.getComputedStyle(document.documentElement)
+      return {
+        rootBody: rootStyle.getPropertyValue('--font-body'),
+        rootDisplay: rootStyle.getPropertyValue('--font-display'),
+        rootMono: rootStyle.getPropertyValue('--font-mono'),
+        body: read('body'),
+        brandTitle: read('.brand-title'),
+        modePill: read('.connected-mode-toggle .pill'),
+        editorTitle: read('.editor-header h1'),
+        editorTab: read('.editor-tabs .tab-button'),
+        calendarDay: read('.calendar-day'),
+      }
+    })
+
+    expect(typography.rootBody).toContain('Inter')
+    expect(typography.rootDisplay).toContain('Inter')
+    expect(typography.rootMono).toContain('IBM Plex Mono')
+    expect(typography.body?.fontFamily).toContain('Inter')
+    expect(typography.brandTitle?.fontFamily).toContain('Inter')
+    expect(typography.modePill?.fontFamily).toContain('Inter')
+    expect(typography.editorTitle?.fontFamily).toContain('Inter')
+    expect(typography.editorTab?.fontFamily).toContain('Inter')
+    expect(typography.calendarDay?.fontFamily).toContain('Inter')
+    expect(typography.editorTitle?.letterSpacing).toBe('normal')
+
+    await page.getByTestId('editor-tab-workbook').click()
+    await expect(page.locator('.workbook-grid')).toBeVisible()
+    const workbookFont = await page.locator('.workbook-grid').evaluate((element) => window.getComputedStyle(element).fontFamily)
+    expect(workbookFont).toContain('IBM Plex Mono')
+  })
+
   test('calendar filters entries by date', async ({ page }) => {
     await boot(page, { noFail: '1' })
     const today = new Date()
