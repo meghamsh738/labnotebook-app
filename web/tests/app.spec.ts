@@ -1209,31 +1209,56 @@ test.describe('Lab note taking app', () => {
     await boot(page, { noFail: '1' })
     const modeToggle = page.locator('.connected-mode-toggle')
     const labels = ['Entries', 'Protocols', 'File Hub', 'Devices', 'Transfers', 'Sync', 'Entries']
-    const rects: string[] = []
+    const geometrySnapshots: string[] = []
 
     for (const label of labels) {
       await modeToggle.getByRole('tab', { name: label }).click()
       await expect(modeToggle.getByRole('tab')).toHaveCount(6)
-      rects.push(
+      geometrySnapshots.push(
         JSON.stringify(
           await modeToggle.evaluate((element) => {
-            const parent = element.getBoundingClientRect()
-            return Array.from(element.querySelectorAll('button')).map((button) => {
-              const box = button.getBoundingClientRect()
+            const round = (value: number) => Math.round(value)
+            const readShell = (target: Element | null) => {
+              if (!target) return null
+              const box = target.getBoundingClientRect()
               return {
-                text: button.textContent?.trim(),
-                x: Math.round(box.x - parent.x),
-                y: Math.round(box.y - parent.y),
-                width: Math.round(box.width),
-                height: Math.round(box.height),
+                x: round(box.x),
+                y: round(box.y),
+                width: round(box.width),
               }
-            })
+            }
+            const readBox = (target: Element) => {
+              const box = target.getBoundingClientRect()
+              return {
+                x: round(box.x),
+                y: round(box.y),
+                width: round(box.width),
+                height: round(box.height),
+              }
+            }
+
+            const parent = element.getBoundingClientRect()
+            return {
+              sidebar: readShell(element.closest('.sidebar')),
+              content: readShell(element.closest('.sidebar-content')),
+              toggle: readBox(element),
+              buttons: Array.from(element.querySelectorAll('button')).map((button) => {
+                const box = button.getBoundingClientRect()
+                return {
+                  text: button.textContent?.trim(),
+                  x: round(box.x - parent.x),
+                  y: round(box.y - parent.y),
+                  width: round(box.width),
+                  height: round(box.height),
+                }
+              }),
+            }
           })
         )
       )
     }
 
-    expect(new Set(rects).size).toBe(1)
+    expect(new Set(geometrySnapshots).size).toBe(1)
   })
 
   test('generated-reference typography stays on Inter with mono reserved for technical data', async ({ page }) => {

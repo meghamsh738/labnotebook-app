@@ -13799,9 +13799,16 @@ kbd {
 
 /* File Hub reference rail: connected panes use a dark brand cap with a lighter workspace rail. */
 @media (min-width: 761px) and (min-height: 521px), (min-width: 761px) and (hover: hover) and (pointer: fine) {
+  .sidebar.sidebar-mode-entries .sidebar-header,
+  .sidebar.sidebar-mode-protocols .sidebar-header,
+  .sidebar.sidebar-mode-connected .sidebar-header {
+    height: 90px;
+    min-height: 90px;
+  }
+
   .sidebar.sidebar-mode-connected {
     background:
-      linear-gradient(180deg, var(--nav-bg) 0 122px, rgba(255, 252, 245, 0.92) 122px),
+      linear-gradient(180deg, var(--nav-bg) 0 114px, rgba(255, 252, 245, 0.92) 114px),
       rgba(255, 252, 245, 0.92);
     color: var(--text);
     border-color: rgba(32, 48, 42, 0.12);
@@ -13809,7 +13816,6 @@ kbd {
   }
 
   .sidebar.sidebar-mode-connected .sidebar-header {
-    min-height: 98px;
     border-color: rgba(255, 252, 245, 0.1);
     background:
       radial-gradient(180px 130px at 18% 0%, rgba(47, 137, 109, 0.38), transparent 68%),
