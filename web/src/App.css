@@ -13923,6 +13923,19 @@ kbd {
   line-height: 1.25;
 }
 
+[data-testid='file-hub-pane'] .filehub-table .connected-table-row.head {
+  color: color-mix(in srgb, var(--text-2) 78%, var(--text-3));
+  font-family: var(--font-body);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+[data-testid='file-hub-pane'] .filehub-table .connected-table-row {
+  grid-template-columns: minmax(245px, 1.35fr) 88px 92px minmax(160px, 0.9fr) minmax(160px, 0.9fr) 90px;
+}
+
 [data-testid='file-hub-pane'] .filehub-table .filehub-entry-cell {
   display: grid;
   grid-template-columns: 18px 32px minmax(0, 1fr);

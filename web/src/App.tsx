@@ -7769,7 +7769,7 @@ function FileHubPane({
         <div className="connected-table filehub-table" data-testid="filehub-entry-table">
           <div className="connected-table-row head">
             <span>Entry</span>
-            <span>Open</span>
+            <span>Open items</span>
             <span>Attached</span>
             <span>Latest transfer</span>
             <span>Sync / Source</span>
