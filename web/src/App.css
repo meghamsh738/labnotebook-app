@@ -13748,3 +13748,51 @@ kbd {
   min-height: 32px;
   padding: 6px 11px;
 }
+
+/* Reference typography calibration: keep mono for true technical data, not every date or helper label. */
+.sidebar .calendar-day,
+.sidebar .entry-item .muted,
+.sidebar .entry-signal,
+.sidebar .pill,
+.connected-table-row small,
+.connected-row-main span,
+.filehub-table small,
+.mobile-pwa-nav,
+.mobile-sync-strip {
+  font-family: var(--font-body);
+  letter-spacing: 0;
+}
+
+.sidebar .calendar-day {
+  font-weight: 500;
+}
+
+.sidebar .entry-item .muted,
+.connected-table-row small,
+.connected-row-main span,
+.filehub-table small {
+  font-weight: 400;
+}
+
+.sidebar .entry-signal,
+.sidebar .pill {
+  font-weight: 600;
+}
+
+.editor-note-status {
+  flex-wrap: wrap;
+  row-gap: 4px;
+  color: var(--text-3);
+  font: 500 12px/1.35 var(--font-body);
+  letter-spacing: 0;
+}
+
+@media (max-width: 760px), (max-height: 520px) and (hover: none) and (pointer: coarse) {
+  .editor-note-status {
+    display: grid;
+    gap: 4px;
+    padding-top: 7px;
+    font-size: 11px;
+    line-height: 1.3;
+  }
+}
