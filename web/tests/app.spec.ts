@@ -1210,52 +1210,58 @@ test.describe('Lab note taking app', () => {
     const modeToggle = page.locator('.connected-mode-toggle')
     const labels = ['Entries', 'Protocols', 'File Hub', 'Devices', 'Transfers', 'Sync', 'Entries']
     const geometrySnapshots: string[] = []
+    const readModeGeometry = async () =>
+      JSON.stringify(
+        await modeToggle.evaluate((element) => {
+          const round = (value: number) => Math.round(value)
+          const readShell = (target: Element | null) => {
+            if (!target) return null
+            const box = target.getBoundingClientRect()
+            return {
+              x: round(box.x),
+              y: round(box.y),
+              width: round(box.width),
+            }
+          }
+          const readBox = (target: Element) => {
+            const box = target.getBoundingClientRect()
+            return {
+              x: round(box.x),
+              y: round(box.y),
+              width: round(box.width),
+              height: round(box.height),
+            }
+          }
+
+          const parent = element.getBoundingClientRect()
+          return {
+            sidebar: readShell(element.closest('.sidebar')),
+            content: readShell(element.closest('.sidebar-content')),
+            toggle: readBox(element),
+            buttons: Array.from(element.querySelectorAll('button')).map((button) => {
+              const box = button.getBoundingClientRect()
+              return {
+                text: button.textContent?.trim(),
+                x: round(box.x - parent.x),
+                y: round(box.y - parent.y),
+                width: round(box.width),
+                height: round(box.height),
+              }
+            }),
+          }
+        })
+      )
 
     for (const label of labels) {
       await modeToggle.getByRole('tab', { name: label }).click()
       await expect(modeToggle.getByRole('tab')).toHaveCount(6)
-      geometrySnapshots.push(
-        JSON.stringify(
-          await modeToggle.evaluate((element) => {
-            const round = (value: number) => Math.round(value)
-            const readShell = (target: Element | null) => {
-              if (!target) return null
-              const box = target.getBoundingClientRect()
-              return {
-                x: round(box.x),
-                y: round(box.y),
-                width: round(box.width),
-              }
-            }
-            const readBox = (target: Element) => {
-              const box = target.getBoundingClientRect()
-              return {
-                x: round(box.x),
-                y: round(box.y),
-                width: round(box.width),
-                height: round(box.height),
-              }
-            }
-
-            const parent = element.getBoundingClientRect()
-            return {
-              sidebar: readShell(element.closest('.sidebar')),
-              content: readShell(element.closest('.sidebar-content')),
-              toggle: readBox(element),
-              buttons: Array.from(element.querySelectorAll('button')).map((button) => {
-                const box = button.getBoundingClientRect()
-                return {
-                  text: button.textContent?.trim(),
-                  x: round(box.x - parent.x),
-                  y: round(box.y - parent.y),
-                  width: round(box.width),
-                  height: round(box.height),
-                }
-              }),
-            }
-          })
-        )
-      )
+      const beforeCollapse = await readModeGeometry()
+      await page.getByTestId('sidebar-toggle').click()
+      await expect(page.locator('.sidebar')).toHaveClass(/collapsed/)
+      await page.getByTestId('sidebar-toggle').click()
+      await expect(page.locator('.sidebar')).not.toHaveClass(/collapsed/)
+      await expect(await readModeGeometry()).toBe(beforeCollapse)
+      geometrySnapshots.push(beforeCollapse)
     }
 
     expect(new Set(geometrySnapshots).size).toBe(1)

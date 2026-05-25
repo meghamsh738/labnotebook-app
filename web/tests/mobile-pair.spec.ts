@@ -152,3 +152,54 @@ test('mobile File Hub shows Drive files as on-demand until opened', async ({ pag
   await expect(fileBoxRow).toContainText('Download the file only when you need to open or attach the local blob.')
   await expect(fileBoxRow.getByRole('button', { name: 'Download' })).toBeVisible()
 })
+
+test('mobile bottom navigation keeps stable geometry while switching panes', async ({ page }) => {
+  await seedRemoteDriveAttachment(page)
+  await page.emulateMedia({ reducedMotion: 'reduce' })
+  await page.goto('/')
+
+  const nav = page.locator('.mobile-pwa-nav')
+  await expect(nav).toBeVisible()
+  const targets = [
+    page.getByTestId('mobile-nav-today'),
+    page.getByTestId('mobile-nav-days'),
+    page.getByTestId('mobile-nav-files'),
+    page.getByTestId('mobile-nav-sync'),
+    page.getByTestId('mobile-nav-today'),
+  ]
+  const snapshots: string[] = []
+
+  const readNavGeometry = async () =>
+    JSON.stringify(
+      await nav.evaluate((element) => {
+        const round = (value: number) => Math.round(value)
+        const parent = element.getBoundingClientRect()
+        return {
+          nav: {
+            x: round(parent.x),
+            y: round(parent.y),
+            width: round(parent.width),
+            height: round(parent.height),
+          },
+          buttons: Array.from(element.querySelectorAll('button')).map((button) => {
+            const box = button.getBoundingClientRect()
+            return {
+              text: button.textContent?.trim(),
+              x: round(box.x - parent.x),
+              y: round(box.y - parent.y),
+              width: round(box.width),
+              height: round(box.height),
+            }
+          }),
+        }
+      })
+    )
+
+  for (const target of targets) {
+    await target.click()
+    await expect(nav.locator('button')).toHaveCount(5)
+    snapshots.push(await readNavGeometry())
+  }
+
+  expect(new Set(snapshots).size).toBe(1)
+})
