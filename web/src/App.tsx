@@ -5336,6 +5336,7 @@ function Sidebar({
   const experimentLookup = useMemo(() => new Map(experiments.map((e) => [e.id, e])), [experiments])
   const isEntriesMode = mode === 'entries'
   const isProtocolsMode = mode === 'protocols'
+  const sidebarModeClass = isEntriesMode ? 'sidebar-mode-entries' : isProtocolsMode ? 'sidebar-mode-protocols' : 'sidebar-mode-connected'
   const calendarLabel = useMemo(() => {
     return new Intl.DateTimeFormat('en-US', { month: 'long', year: 'numeric' }).format(calendarMonth)
   }, [calendarMonth])
@@ -5411,7 +5412,7 @@ function Sidebar({
   }, [calendarDays, selectedDate, todayIso])
 
   return (
-    <aside className={`panel sidebar ${collapsed ? 'collapsed' : ''} ${mobileOpen ? 'mobile-open' : ''}`} aria-label="Lab navigation">
+    <aside className={`panel sidebar ${sidebarModeClass} ${collapsed ? 'collapsed' : ''} ${mobileOpen ? 'mobile-open' : ''}`} aria-label="Lab navigation">
       <div className="sidebar-header">
         <div className="brand-row">
           <img src={logoMark} alt={`${APP_NAME} logo`} className="brand-mark" />
@@ -5839,43 +5840,7 @@ function Sidebar({
                 ))}
               </div>
             </section>
-          ) : (
-            <section className="sidebar-section">
-              <div className="section-title">Connected workspace</div>
-              <div className="entry-list connected-nav-list">
-                <button className={`entry-item ${mode === 'file-hub' ? 'active' : ''}`} type="button" onClick={() => onModeChange('file-hub')}>
-                  <div>
-                    <div className="title-sm">Entry File Box</div>
-                    <p className="muted tiny">Accept, reject, and attach incoming files.</p>
-                  </div>
-                  <span className="entry-signal summary">{fileBoxCount}</span>
-                </button>
-                <button className={`entry-item ${mode === 'devices' ? 'active' : ''}`} type="button" onClick={() => onModeChange('devices')}>
-                  <div>
-                    <div className="title-sm">Devices</div>
-                    <p className="muted tiny">Desktop, mobile PWA, and Drive identity.</p>
-                  </div>
-                  <span className="entry-signal success">1</span>
-                </button>
-                <button className={`entry-item ${mode === 'transfers' ? 'active' : ''}`} type="button" onClick={() => onModeChange('transfers')}>
-                  <div>
-                    <div className="title-sm">Transfers</div>
-                    <p className="muted tiny">Recent file movements and status.</p>
-                  </div>
-                  <span className="entry-signal summary">{transferCount}</span>
-                </button>
-                <button className={`entry-item ${mode === 'sync' ? 'active' : ''}`} type="button" onClick={() => onModeChange('sync')}>
-                  <div>
-                    <div className="title-sm">Google Drive Sync</div>
-                    <p className="muted tiny">OAuth, folder layout, and storage paths.</p>
-                  </div>
-                  <span className={`entry-signal ${driveStatus === 'error' ? 'danger' : driveStatus === 'ready' ? 'success' : 'warning'}`}>
-                    {driveStatus === 'ready' ? 'Ready' : driveStatus === 'syncing' ? 'Syncing' : 'Setup'}
-                  </span>
-                </button>
-              </div>
-            </section>
-          )}
+          ) : null}
         </div>
       )}
 

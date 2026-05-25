@@ -10,6 +10,7 @@
 :root {
   --font-display: 'Segoe UI', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
   --font-body: 'Segoe UI', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-sans: var(--font-body);
   --font-mono: 'Space Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
   --tracking-display: 0;
   --tracking-label: 0;
@@ -187,6 +188,7 @@ textarea::placeholder {
   color-scheme: light;
   --font-display: 'IBM Plex Sans', 'Segoe UI', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
   --font-body: 'IBM Plex Sans', 'Segoe UI', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-sans: var(--font-body);
   --font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
 
   --bg: #f4efe5;

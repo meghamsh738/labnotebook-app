@@ -1266,7 +1266,7 @@
     border-radius: 11px;
     background: rgba(255, 252, 245, 0.74);
     color: color-mix(in srgb, var(--ink) 88%, var(--muted));
-    font: 750 12px/1 var(--font-sans);
+    font: 700 12px/1 var(--font-sans);
     box-shadow: none;
   }
 
@@ -1292,13 +1292,13 @@
   .editor-header .editor-toolbar .toolbar-history .pill[aria-label='Undo']::before {
     content: 'Undo';
     color: var(--ink);
-    font: 750 10px/1 var(--font-sans);
+    font: 700 10px/1 var(--font-sans);
   }
 
   .editor-header .editor-toolbar .toolbar-history .pill[aria-label='Redo']::before {
     content: 'Redo';
     color: var(--ink);
-    font: 750 10px/1 var(--font-sans);
+    font: 700 10px/1 var(--font-sans);
   }
 
   .editor-header .editor-toolbar .toolbar-alignment .pill {
@@ -1329,7 +1329,7 @@
     padding: 8px 2px 0;
     border-top: 1px solid rgba(32, 48, 42, 0.09);
     color: var(--muted);
-    font: 650 11px/1.2 var(--font-mono);
+    font: 600 11px/1.2 var(--font-mono);
   }
 
   .context-panel-body {
@@ -1375,13 +1375,13 @@
   }
 
   .context-drop-target strong {
-    font: 800 13px/1.1 var(--font-sans);
+    font: 700 13px/1.1 var(--font-sans);
   }
 
   .context-drop-target small {
     max-width: 22ch;
     color: var(--muted);
-    font: 650 11px/1.3 var(--font-sans);
+    font: 600 11px/1.3 var(--font-sans);
   }
 
   .context-status-card .context-metrics {
@@ -2223,7 +2223,7 @@
     border-radius: 13px;
     background: transparent;
     color: color-mix(in srgb, var(--ink) 88%, var(--muted));
-    font: 800 13px/1 var(--font-sans);
+    font: 700 13px/1 var(--font-sans);
   }
 
   .editor-header .editor-tabs .tab-button.active {
@@ -2341,13 +2341,13 @@
 
   .mobile-sync-strip span {
     color: var(--muted);
-    font: 650 10px/1 var(--font-sans);
+    font: 600 10px/1 var(--font-sans);
   }
 
   .mobile-sync-strip strong {
     overflow: visible;
     color: var(--ink);
-    font: 800 11px/1.08 var(--font-sans);
+    font: 700 11px/1.08 var(--font-sans);
     text-overflow: clip;
     white-space: normal;
   }
@@ -3316,7 +3316,7 @@
     border-radius: 11px;
     background: rgba(255, 252, 245, 0.74);
     color: color-mix(in srgb, var(--ink) 88%, var(--muted));
-    font: 750 12px/1 var(--font-sans);
+    font: 700 12px/1 var(--font-sans);
     box-shadow: none;
   }
 
@@ -3336,13 +3336,13 @@
   .editor-header .editor-toolbar .toolbar-history .pill[aria-label='Undo']::before {
     content: 'Undo';
     color: var(--ink);
-    font: 750 10px/1 var(--font-sans);
+    font: 700 10px/1 var(--font-sans);
   }
 
   .editor-header .editor-toolbar .toolbar-history .pill[aria-label='Redo']::before {
     content: 'Redo';
     color: var(--ink);
-    font: 750 10px/1 var(--font-sans);
+    font: 700 10px/1 var(--font-sans);
   }
 
   .editor-header .editor-toolbar .toolbar-alignment .pill {
@@ -3365,7 +3365,7 @@
     padding: 8px 2px 0;
     border-top: 1px solid rgba(32, 48, 42, 0.09);
     color: var(--muted);
-    font: 650 11px/1.2 var(--font-mono);
+    font: 600 11px/1.2 var(--font-mono);
   }
 
   .entry-context-panel .context-card {
@@ -3401,13 +3401,13 @@
   }
 
   .context-drop-target strong {
-    font: 800 13px/1.1 var(--font-sans);
+    font: 700 13px/1.1 var(--font-sans);
   }
 
   .context-drop-target small {
     max-width: 22ch;
     color: var(--muted);
-    font: 650 11px/1.3 var(--font-sans);
+    font: 600 11px/1.3 var(--font-sans);
   }
 }
 
@@ -3435,7 +3435,7 @@
   .editor-header .editor-toolbar .toolbar-label {
     gap: 6px !important;
     color: var(--muted) !important;
-    font: 750 10px/1 var(--font-mono) !important;
+    font: 700 10px/1 var(--font-mono) !important;
     text-transform: uppercase;
   }
 }
@@ -3523,7 +3523,7 @@
     padding: 7px 6px;
     border-radius: 13px;
     background: rgba(255, 252, 245, 0.82);
-    font: 750 10px/1.1 var(--font-sans);
+    font: 700 10px/1.1 var(--font-sans);
     text-align: center;
   }
 
@@ -3565,7 +3565,7 @@
     display: block;
     margin-top: 10px;
     color: var(--accent);
-    font: 800 10px/1.2 var(--font-mono);
+    font: 700 10px/1.2 var(--font-mono);
     letter-spacing: 0.02em;
   }
 
@@ -3721,7 +3721,7 @@
   outline: 0;
   background: transparent;
   color: var(--ink);
-  font: 650 0.92rem/1 var(--font-sans);
+  font: 600 0.92rem/1 var(--font-sans);
 }
 
 [data-testid='file-hub-pane'] .filehub-search kbd {
@@ -3751,7 +3751,7 @@
   border-radius: 13px;
   background: rgba(255, 252, 245, 0.84);
   color: color-mix(in srgb, var(--ink) 82%, var(--muted));
-  font: 760 0.78rem/1 var(--font-sans);
+  font: 700 0.78rem/1 var(--font-sans);
 }
 
 [data-testid='file-hub-pane'] .filehub-filter-group .ui-icon {
@@ -3809,13 +3809,13 @@
   [data-testid='file-hub-pane'] .filehub-table .connected-table-row > span:nth-child(4) strong,
   [data-testid='file-hub-pane'] .filehub-table .connected-table-row > span:nth-child(5) strong {
     color: var(--ink);
-    font: 750 0.86rem/1.15 var(--font-sans);
+    font: 700 0.86rem/1.15 var(--font-sans);
   }
 
   [data-testid='file-hub-pane'] .filehub-table .connected-table-row > span:nth-child(4) small,
   [data-testid='file-hub-pane'] .filehub-table .connected-table-row > span:nth-child(5) small {
     color: var(--muted);
-    font: 650 0.72rem/1.2 var(--font-sans);
+    font: 600 0.72rem/1.2 var(--font-sans);
   }
 
   [data-testid='file-hub-pane'] .connected-grid.two {
@@ -4225,7 +4225,7 @@
   margin: 0;
   overflow: hidden;
   color: var(--ink);
-  font: 650 0.76rem/1.25 var(--font-sans);
+  font: 600 0.76rem/1.25 var(--font-sans);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -4241,7 +4241,7 @@
   gap: 7px;
   min-width: 0;
   color: var(--ink);
-  font: 650 0.76rem/1.25 var(--font-sans);
+  font: 600 0.76rem/1.25 var(--font-sans);
 }
 
 .workbook-linked-files .ui-icon {
@@ -4275,13 +4275,13 @@
 
 .workbook-sync-card strong {
   color: var(--ink);
-  font: 750 0.76rem/1.2 var(--font-sans);
+  font: 700 0.76rem/1.2 var(--font-sans);
 }
 
 .workbook-sync-card span {
   margin-top: 2px;
   color: var(--muted);
-  font: 650 0.68rem/1.25 var(--font-sans);
+  font: 600 0.68rem/1.25 var(--font-sans);
 }
 
 .workbook-shell {
@@ -4326,7 +4326,7 @@
 
 .workbook-formula-prefix {
   color: var(--accent);
-  font: 800 0.84rem/1 var(--font-mono);
+  font: 700 0.84rem/1 var(--font-mono);
 }
 
 .workbook-formula-row input {
@@ -4467,7 +4467,7 @@
 }
 
 .workbook-format-button.bold {
-  font-weight: 800;
+  font-weight: 700;
 }
 
 .workbook-format-button.italic {
@@ -4570,7 +4570,7 @@
   border-top: 1px solid rgba(32, 48, 42, 0.1);
   background: rgba(255, 252, 245, 0.82);
   color: var(--muted);
-  font: 650 0.72rem/1 var(--font-sans);
+  font: 600 0.72rem/1 var(--font-sans);
 }
 
 .workbook-sheet-strip button {
@@ -4580,7 +4580,7 @@
   border-radius: 8px;
   background: transparent;
   color: var(--muted);
-  font: 750 0.74rem/1 var(--font-sans);
+  font: 700 0.74rem/1 var(--font-sans);
 }
 
 .workbook-sheet-strip button.active {
@@ -9733,7 +9733,7 @@ code,
 
   .modal.settings-modal .modal-head .title-sm {
     font-size: 18px;
-    font-weight: 800;
+    font-weight: 700;
   }
 
   .modal.settings-modal .modal-head .muted {
@@ -9815,7 +9815,7 @@ code,
   .modal.settings-modal .settings-path-label {
     color: var(--ink);
     font-size: 12px;
-    font-weight: 800;
+    font-weight: 700;
   }
 
   .modal.settings-modal .settings-path-card-head .status-chip {
@@ -9925,7 +9925,7 @@ code,
     justify-self: start;
     color: var(--ink);
     font-size: 22px;
-    font-weight: 800;
+    font-weight: 700;
   }
 
   .sidebar.mobile-open .brand-mark,
@@ -10154,7 +10154,7 @@ code,
   .sidebar.mobile-open .calendar-month {
     color: var(--ink) !important;
     font-size: 14px;
-    font-weight: 800;
+    font-weight: 700;
   }
 
   .sidebar.mobile-open .calendar-nav {
@@ -10411,7 +10411,7 @@ code,
     color: var(--ink);
     font-family: var(--font-sans);
     font-size: 22px;
-    font-weight: 800;
+    font-weight: 700;
     letter-spacing: 0;
   }
 
@@ -10629,7 +10629,7 @@ code,
     color: var(--ink);
     font-family: var(--font-sans);
     font-size: 22px;
-    font-weight: 800;
+    font-weight: 700;
     letter-spacing: 0;
   }
 
@@ -10742,7 +10742,7 @@ code,
     color: var(--accent);
     content: counter(sync-step);
     counter-increment: none;
-    font: 800 11px/1 var(--font-mono);
+    font: 700 11px/1 var(--font-mono);
   }
 
   [data-testid='sync-pane'] .connected-card:first-of-type > p.muted,
@@ -10961,7 +10961,7 @@ code,
     grid-area: label;
     color: var(--ink);
     font-size: 0.82rem;
-    font-weight: 800;
+    font-weight: 700;
   }
 
   [data-testid='transfers-pane'] .transfer-stage small {
@@ -11720,7 +11720,7 @@ code,
     min-height: 52px;
     border-radius: 16px;
     color: color-mix(in srgb, var(--ink) 72%, var(--muted));
-    font: 750 11px/1.1 var(--font-sans);
+    font: 700 11px/1.1 var(--font-sans);
     transition: background 160ms ease, color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
   }
 
@@ -11759,7 +11759,7 @@ code,
     background: linear-gradient(180deg, #08735a 0%, #075c49 100%);
     color: #fffaf0;
     box-shadow: 0 16px 34px rgba(7, 92, 73, 0.24);
-    font: 800 14px/1 var(--font-sans);
+    font: 700 14px/1 var(--font-sans);
   }
 
   .mobile-capture-primary::after {
@@ -13003,7 +13003,7 @@ code,
     border-radius: 13px;
     background: transparent;
     color: color-mix(in srgb, var(--ink) 88%, var(--muted));
-    font: 800 13px/1 var(--font-sans);
+    font: 700 13px/1 var(--font-sans);
   }
 
   .editor-header .editor-tabs .tab-button.active {
@@ -13115,13 +13115,13 @@ code,
 
   .mobile-sync-strip span {
     color: var(--muted);
-    font: 650 10px/1 var(--font-sans);
+    font: 600 10px/1 var(--font-sans);
   }
 
   .mobile-sync-strip strong {
     overflow: visible;
     color: var(--ink);
-    font: 800 11px/1.08 var(--font-sans);
+    font: 700 11px/1.08 var(--font-sans);
     text-overflow: clip;
     white-space: normal;
   }
@@ -13305,4 +13305,151 @@ code,
   [data-testid='file-hub-pane'] > .connected-grid.two {
     margin-top: 0;
   }
+}
+
+/* Final sidebar stability and generated-reference typography pass.
+   Keep this late so older generated CSS cannot reintroduce shifting nav. */
+.sidebar,
+.panel.editor,
+.connected-workspace,
+.modal,
+.settings-modal {
+  font-family: var(--font-body);
+  font-weight: 400;
+  letter-spacing: 0;
+  text-rendering: geometricPrecision;
+}
+
+.sidebar .brand-title,
+.editor-header h1,
+.connected-page-head h1,
+.title-sm,
+.section-title,
+.content-section h2,
+.modal h2 {
+  font-family: var(--font-display);
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
+.sidebar .eyebrow,
+.sidebar .section-title,
+.connected-page-head .eyebrow,
+.toolbar-label,
+.settings-path-label,
+.calendar-weekdays,
+.connected-table-row.head,
+.filehub-filter-group span {
+  font-family: var(--font-body);
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.sidebar .pill,
+.sidebar .entry-signal,
+.sidebar .status-chip,
+.sidebar .mode-toggle .pill,
+.editor-tabs .tab-button,
+.toolbar-label,
+.ghost,
+.accent,
+.connected-metrics span,
+.connected-metrics strong {
+  font-family: var(--font-body);
+  font-weight: 600;
+  letter-spacing: 0;
+}
+
+.settings-path,
+.calendar-day,
+.entry-browser-date,
+.tab-date,
+.workbook-grid,
+.filehub-table small,
+code,
+kbd {
+  font-family: var(--font-mono);
+}
+
+.sidebar .mode-toggle.connected-mode-toggle {
+  order: 1;
+  position: sticky;
+  top: 0;
+  z-index: 7;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+  width: 100%;
+  min-height: 124px;
+  padding: 3px 0 8px;
+  border: 0;
+  background: linear-gradient(180deg, var(--nav-bg) 82%, color-mix(in srgb, var(--nav-bg) 0%, transparent));
+}
+
+.sidebar .mode-toggle.connected-mode-toggle .pill {
+  display: inline-flex;
+  min-width: 0;
+  min-height: 34px;
+  justify-content: center;
+  padding: 7px 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  font-size: 12px;
+  line-height: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar .mode-toggle.connected-mode-toggle .pill.active-pill {
+  background: color-mix(in srgb, var(--nav-accent) 26%, var(--nav-control-bg));
+  border-color: var(--nav-active-border);
+  color: var(--nav-text);
+}
+
+.sidebar .quick-actions,
+.sidebar .connected-sidebar-summary,
+.sidebar-search-reference,
+.sidebar-section {
+  order: 2;
+}
+
+.sidebar.sidebar-mode-entries .quick-actions,
+.sidebar.sidebar-mode-protocols .quick-actions,
+.sidebar.sidebar-mode-connected .connected-sidebar-summary {
+  order: 2;
+}
+
+.sidebar.sidebar-mode-entries .sidebar-content,
+.sidebar.sidebar-mode-protocols .sidebar-content,
+.sidebar.sidebar-mode-connected .sidebar-content {
+  gap: 8px;
+  padding-top: 10px;
+}
+
+.sidebar.sidebar-mode-entries .sidebar-search-reference {
+  order: 3;
+}
+
+.sidebar.sidebar-mode-entries > .sidebar-content > .sidebar-filter-section {
+  order: 4;
+}
+
+.sidebar.sidebar-mode-entries > .sidebar-content > .sidebar-calendar-section {
+  order: 5;
+}
+
+.sidebar.sidebar-mode-entries > .sidebar-content > .sidebar-entries-section {
+  order: 6;
+}
+
+.sidebar.sidebar-mode-protocols .sidebar-section {
+  order: 3;
+}
+
+.sidebar.sidebar-mode-connected .connected-sidebar-summary {
+  min-height: 114px;
+}
+
+.sidebar.sidebar-mode-connected .connected-nav-list {
+  display: none;
 }
