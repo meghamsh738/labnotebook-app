@@ -13488,3 +13488,144 @@ kbd {
 .sidebar.sidebar-mode-connected .connected-nav-list {
   display: none;
 }
+
+/* Final visual-reference tightening pass: rail proportion, File Hub density, workbook grid, and mobile bands. */
+@media (min-width: 761px) and (min-height: 521px), (min-width: 761px) and (hover: hover) and (pointer: fine) {
+  .app-shell {
+    --sidebar-width: 296px;
+    gap: 14px;
+  }
+
+  .sidebar .mode-toggle.connected-mode-toggle {
+    min-height: 104px;
+    gap: 8px;
+  }
+
+  .sidebar .mode-toggle.connected-mode-toggle .pill {
+    min-height: 44px;
+    border-radius: 15px;
+  }
+
+  [data-testid='file-hub-pane'].connected-workspace {
+    gap: 10px;
+    padding: 12px 12px 14px;
+  }
+
+  [data-testid='file-hub-pane'] .connected-page-head {
+    padding: 14px 16px;
+    border-radius: 17px;
+  }
+
+  [data-testid='file-hub-pane'] .connected-page-head h1 {
+    font-size: clamp(1.3rem, 1.75vw, 1.62rem);
+  }
+
+  [data-testid='file-hub-pane'] .connected-metrics div,
+  [data-testid='file-hub-pane'] .connected-metrics div:first-child {
+    min-height: 50px;
+    padding: 8px 10px;
+  }
+
+  [data-testid='file-hub-pane'] .filehub-toolbar {
+    padding: 8px 10px;
+    border-radius: 15px;
+  }
+
+  [data-testid='file-hub-pane'] .filehub-search,
+  [data-testid='file-hub-pane'] .filehub-filter-group span {
+    min-height: 36px;
+  }
+
+  [data-testid='file-hub-pane'] .connected-card {
+    padding: 13px 16px 14px;
+    border-radius: 17px;
+  }
+
+  [data-testid='file-hub-pane'] .connected-card-head {
+    margin-bottom: 8px;
+  }
+
+  [data-testid='file-hub-pane'] .filehub-table .connected-table-row {
+    min-height: 54px;
+    padding: 8px 12px;
+  }
+
+  [data-testid='file-hub-pane'] .filehub-table .connected-table-row.head {
+    min-height: 36px;
+  }
+
+  [data-testid='file-hub-pane'] .connected-empty {
+    min-height: 58px;
+    padding: 15px 18px;
+  }
+
+  [data-testid='file-hub-pane'] .connected-row.filebox-row {
+    min-height: 54px;
+    padding: 10px 12px;
+  }
+
+  .editor-workspace.workbook-active .workbook-panel {
+    border-radius: 16px;
+  }
+
+  .editor-workspace.workbook-active .workbook-header {
+    gap: 8px;
+    padding: 12px 14px;
+  }
+
+  .editor-workspace.workbook-active .workbook-toolbar {
+    row-gap: 8px;
+    padding: 9px 11px;
+  }
+
+  .editor-workspace.workbook-active .workbook-grid td {
+    width: 108px;
+    min-width: 108px;
+    max-width: 108px;
+    height: 34px;
+  }
+
+  .editor-workspace.workbook-active .workbook-grid th:not(.workbook-corner) {
+    width: 108px;
+    min-width: 108px;
+    max-width: 108px;
+    height: 34px;
+  }
+}
+
+@media (max-width: 760px), (max-height: 520px) and (hover: none) and (pointer: coarse) {
+  .mobile-sync-strip {
+    min-height: 42px;
+    border-radius: 15px 15px 0 0;
+  }
+
+  .mobile-sync-strip > div {
+    min-height: 42px;
+    padding: 6px 4px;
+  }
+
+  .mobile-sync-strip p {
+    padding: 6px 10px 8px;
+    font-size: 10px;
+    line-height: 1.25;
+  }
+
+  .mobile-capture-dock {
+    bottom: max(68px, calc(env(safe-area-inset-bottom) + 68px));
+    gap: 7px;
+  }
+
+  .mobile-capture-primary {
+    min-height: 46px;
+    border-radius: 999px;
+  }
+
+  .mobile-pwa-nav {
+    min-height: 56px;
+    padding: 5px 6px max(5px, env(safe-area-inset-bottom));
+  }
+
+  .mobile-pwa-nav button {
+    min-height: 44px;
+  }
+}
