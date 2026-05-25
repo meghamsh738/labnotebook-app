@@ -13913,3 +13913,61 @@ kbd {
     color: var(--text-2);
   }
 }
+
+/* File Hub table reference details: row affordances and calm title-case section labels. */
+[data-testid='file-hub-pane'] .connected-card-head .section-title,
+[data-testid='file-hub-pane'] .connected-card > .section-title {
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 14px;
+  line-height: 1.25;
+}
+
+[data-testid='file-hub-pane'] .filehub-table .filehub-entry-cell {
+  display: grid;
+  grid-template-columns: 18px 32px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+}
+
+[data-testid='file-hub-pane'] .filehub-row-expand {
+  display: inline-flex;
+  justify-content: center;
+  color: color-mix(in srgb, var(--text-3) 82%, transparent);
+}
+
+[data-testid='file-hub-pane'] .filehub-row-expand .ui-icon {
+  width: 14px;
+  height: 14px;
+}
+
+[data-testid='file-hub-pane'] .filehub-row-folder {
+  display: inline-grid;
+  width: 31px;
+  height: 31px;
+  place-items: center;
+  border: 1px solid rgba(32, 48, 42, 0.14);
+  border-radius: 9px;
+  background:
+    linear-gradient(145deg, rgba(255, 252, 245, 0.95), rgba(239, 231, 217, 0.72)),
+    var(--surface-2);
+  color: var(--text-2);
+}
+
+[data-testid='file-hub-pane'] .filehub-row-folder .ui-icon {
+  width: 16px;
+  height: 16px;
+}
+
+[data-testid='file-hub-pane'] .filehub-row-title {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+[data-testid='file-hub-pane'] .filehub-row-title strong,
+[data-testid='file-hub-pane'] .filehub-row-title small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

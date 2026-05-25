@@ -7780,9 +7780,13 @@ function FileHubPane({
           ) : (
             entryRows.map(({ entry, openCount, attachedCount, latestTransfer }) => (
               <div className="connected-table-row" key={entry.id}>
-                <span data-label="Entry">
-                  <strong>{entry.title}</strong>
-                  <small>{entry.dateBucket}</small>
+                <span className="filehub-entry-cell" data-label="Entry">
+                  <span className="filehub-row-expand" aria-hidden="true"><UiIcon name="chevronRight" /></span>
+                  <span className="filehub-row-folder" aria-hidden="true"><UiIcon name="folder" /></span>
+                  <span className="filehub-row-title">
+                    <strong>{entry.title}</strong>
+                    <small>{entry.dateBucket}</small>
+                  </span>
                 </span>
                 <span data-label="Open">{openCount}</span>
                 <span data-label="Attached">{attachedCount}</span>
