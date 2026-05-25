@@ -5454,7 +5454,8 @@ function Sidebar({
               aria-selected={isEntriesMode}
               onClick={() => onModeChange('entries')}
             >
-              Entries
+              <UiIcon name="note" />
+              <span>Entries</span>
             </button>
             <button
               className={`pill soft ${isProtocolsMode ? 'active-pill' : ''}`}
@@ -5463,7 +5464,8 @@ function Sidebar({
               aria-selected={isProtocolsMode}
               onClick={() => onModeChange('protocols')}
             >
-              Protocols
+              <UiIcon name="book" />
+              <span>Protocols</span>
             </button>
             <button
               className={`pill soft ${mode === 'file-hub' ? 'active-pill' : ''}`}
@@ -5472,7 +5474,8 @@ function Sidebar({
               aria-selected={mode === 'file-hub'}
               onClick={() => onModeChange('file-hub')}
             >
-              File Hub
+              <UiIcon name="paperclip" />
+              <span>File Hub</span>
             </button>
             <button
               className={`pill soft ${mode === 'devices' ? 'active-pill' : ''}`}
@@ -5481,7 +5484,8 @@ function Sidebar({
               aria-selected={mode === 'devices'}
               onClick={() => onModeChange('devices')}
             >
-              Devices
+              <UiIcon name="settings" />
+              <span>Devices</span>
             </button>
             <button
               className={`pill soft ${mode === 'transfers' ? 'active-pill' : ''}`}
@@ -5490,7 +5494,8 @@ function Sidebar({
               aria-selected={mode === 'transfers'}
               onClick={() => onModeChange('transfers')}
             >
-              Transfers
+              <UiIcon name="refresh" />
+              <span>Transfers</span>
             </button>
             <button
               className={`pill soft ${mode === 'sync' ? 'active-pill' : ''}`}
@@ -5499,7 +5504,8 @@ function Sidebar({
               aria-selected={mode === 'sync'}
               onClick={() => onModeChange('sync')}
             >
-              Sync
+              <UiIcon name="drive" />
+              <span>Sync</span>
             </button>
           </div>
 
@@ -9803,7 +9809,7 @@ function EditorInsertBar({
 
         <div className="toolbar-group toolbar-type">
           <label className="toolbar-label">
-            Font
+            <span className="toolbar-label-text">Font</span>
             <select
               value={activeFont}
               onChange={(event) => setFontMark(editor, event.target.value as FontStyle)}
@@ -9815,7 +9821,7 @@ function EditorInsertBar({
             </select>
           </label>
           <label className="toolbar-label">
-            Size
+            <span className="toolbar-label-text">Size</span>
             <select
               value={activeFontSize}
               onChange={(event) => setFontSizeMark(editor, Number(event.target.value) as FontSize)}
@@ -9829,7 +9835,7 @@ function EditorInsertBar({
             </select>
           </label>
           <label className="toolbar-label">
-            Color
+            <span className="toolbar-label-text">Color</span>
             <input
               type="color"
               value={activeColor}
@@ -9860,7 +9866,7 @@ function EditorInsertBar({
             ))}
           </div>
           <label className="toolbar-label">
-            Highlight
+            <span className="toolbar-label-text">Highlight</span>
             <input
               type="color"
               value={activeHighlight}
@@ -10158,7 +10164,7 @@ function ProtocolInsertBar({ editor, revision }: { editor: HistoryReactEditor; r
 
       <div className="toolbar-group">
         <label className="toolbar-label">
-          Font
+          <span className="toolbar-label-text">Font</span>
           <select
             value={activeFont}
             onChange={(event) => setFontMark(editor, event.target.value as FontStyle)}
@@ -10170,7 +10176,7 @@ function ProtocolInsertBar({ editor, revision }: { editor: HistoryReactEditor; r
           </select>
         </label>
         <label className="toolbar-label">
-          Size
+          <span className="toolbar-label-text">Size</span>
           <select
             value={activeFontSize}
             onChange={(event) => setFontSizeMark(editor, Number(event.target.value) as FontSize)}
@@ -10184,7 +10190,7 @@ function ProtocolInsertBar({ editor, revision }: { editor: HistoryReactEditor; r
           </select>
         </label>
         <label className="toolbar-label">
-          Color
+          <span className="toolbar-label-text">Color</span>
           <input
             type="color"
             value={activeColor}
@@ -10215,7 +10221,7 @@ function ProtocolInsertBar({ editor, revision }: { editor: HistoryReactEditor; r
           ))}
         </div>
         <label className="toolbar-label">
-          Highlight
+          <span className="toolbar-label-text">Highlight</span>
           <input
             type="color"
             value={activeHighlight}
