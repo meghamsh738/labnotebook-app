@@ -15,6 +15,8 @@ const activityName = process.env.LABNOTE_PIXEL_ACTIVITY || 'org.chromium.webapk.
 const port = Number(process.env.LABNOTE_PIXEL_PORT || 4173)
 const minScreenshotBytes = Number(process.env.LABNOTE_PIXEL_MIN_SCREENSHOT_BYTES || 50000)
 const requestedPane = (process.env.LABNOTE_PIXEL_PANE || 'sync').toLowerCase()
+const devtoolsPort = Number(process.env.LABNOTE_PIXEL_DEVTOOLS_PORT || 9222)
+const requirePaneEvidence = process.env.LABNOTE_PIXEL_REQUIRE_PANE !== '0'
 
 function adbArgs(args) {
   const serial = process.env.LABNOTE_PIXEL_SERIAL?.trim()
@@ -88,8 +90,18 @@ function tryWakeAndLaunch() {
   safe(['shell', 'svc', 'power', 'stayon', 'true'])
   safe(['shell', 'input', 'keyevent', 'KEYCODE_WAKEUP'])
   safe(['shell', 'wm', 'dismiss-keyguard'])
-  safe(['shell', 'input', 'keyevent', 'BACK'])
+  safe(['shell', 'am', 'force-stop', packageName])
   safe(['shell', 'am', 'start', '-n', `${packageName}/${activityName}`])
+}
+
+function closeTransientDrawerThenRelaunchIfNeeded() {
+  runAdb(['shell', 'input', 'keyevent', 'BACK'])
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 900)
+  const state = getPowerAndWindowState()
+  if (!hasExpectedForeground(state)) {
+    runAdb(['shell', 'am', 'start', '-n', `${packageName}/${activityName}`])
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1200)
+  }
 }
 
 function tapRequestedPane() {
@@ -109,6 +121,100 @@ function tapRequestedPane() {
   const x = Math.round(width * ratio)
   const y = Math.round(height - 145)
   runAdb(['shell', 'input', 'tap', String(x), String(y)])
+}
+
+function evalDevTools(webSocketDebuggerUrl, expression) {
+  return new Promise((resolve, reject) => {
+    const socket = new WebSocket(webSocketDebuggerUrl)
+    const timeout = setTimeout(() => {
+      try {
+        socket.close()
+      } catch {
+        // Ignore close failures while rejecting the timed-out DevTools call.
+      }
+      reject(new Error('DevTools evaluation timed out.'))
+    }, 5000)
+
+    socket.addEventListener('open', () => {
+      socket.send(JSON.stringify({
+        id: 1,
+        method: 'Runtime.evaluate',
+        params: {
+          expression,
+          awaitPromise: true,
+          returnByValue: true,
+        },
+      }))
+    })
+
+    socket.addEventListener('message', (event) => {
+      const message = JSON.parse(event.data)
+      if (message.id !== 1) return
+      clearTimeout(timeout)
+      socket.close()
+      if (message.error) {
+        reject(new Error(message.error.message || 'DevTools evaluation failed.'))
+        return
+      }
+      resolve(message.result?.result?.value)
+    })
+
+    socket.addEventListener('error', () => {
+      clearTimeout(timeout)
+      reject(new Error('DevTools WebSocket failed.'))
+    })
+  })
+}
+
+async function ensureRequestedPaneViaDevTools() {
+  if (requestedPane === 'none') return { checked: false, reason: 'No pane requested.' }
+  if (typeof fetch !== 'function' || typeof WebSocket !== 'function') {
+    return { checked: false, reason: 'Node runtime does not expose fetch/WebSocket.' }
+  }
+
+  try {
+    runAdb(['forward', `tcp:${devtoolsPort}`, 'localabstract:chrome_devtools_remote'])
+    const response = await fetch(`http://127.0.0.1:${devtoolsPort}/json`, { signal: AbortSignal.timeout(5000) })
+    const pages = await response.json()
+    const page = pages.find((candidate) => String(candidate.url || '').includes(`127.0.0.1:${port}`)) || pages[0]
+    if (!page?.webSocketDebuggerUrl) {
+      return { checked: false, reason: 'No DevTools page was available for the Pixel PWA.' }
+    }
+
+    const expression = `
+      (async () => {
+        const pane = ${JSON.stringify(requestedPane)};
+        const selectorsByPane = {
+          today: ['[data-testid="slate-editor"]', '[data-testid="entry-view"]'],
+          days: ['.sidebar.mobile-open'],
+          files: ['[data-testid="file-hub-pane"]'],
+          sync: ['[data-testid="sync-pane"]'],
+          settings: ['.settings-modal']
+        };
+        const nav = document.querySelector('[data-testid="mobile-nav-' + pane + '"]');
+        nav?.click();
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        const targetSelectors = selectorsByPane[pane] || [];
+        const activeElement = targetSelectors.map((selector) => document.querySelector(selector)).find(Boolean);
+        const active = targetSelectors.length ? Boolean(activeElement) : true;
+        return {
+          checked: true,
+          pane,
+          clicked: Boolean(nav),
+          active,
+          viewport: { width: window.innerWidth, height: window.innerHeight },
+          title: document.title,
+          visibleText: (activeElement?.innerText || document.body.innerText).slice(0, 240)
+        };
+      })()
+    `
+    return await evalDevTools(page.webSocketDebuggerUrl, expression)
+  } catch (error) {
+    return {
+      checked: false,
+      reason: error instanceof Error ? error.message : String(error),
+    }
+  }
 }
 
 function captureEvidence() {
@@ -155,8 +261,21 @@ try {
     })
   }
 
+  if (requestedPane !== 'days') {
+    closeTransientDrawerThenRelaunchIfNeeded()
+  }
   tapRequestedPane()
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1500)
+  const paneEvidence = await ensureRequestedPaneViaDevTools()
+  if (requirePaneEvidence && requestedPane !== 'none' && (!paneEvidence.checked || !paneEvidence.active)) {
+    fail('Pixel PWA smoke could not verify that the requested pane is active.', {
+      adb,
+      packageName,
+      activityName,
+      requestedPane,
+      paneEvidence,
+    })
+  }
   state = getPowerAndWindowState()
   if (!hasExpectedForeground(state)) {
     fail('Pixel PWA smoke cannot accept evidence because Lab Notebook is no longer the foreground app.', {
@@ -211,6 +330,7 @@ try {
     screenshotFile,
     screenshotSize,
     uiDumpFile,
+    paneEvidence,
     evidence: {
       hasLabNotebookUi,
       hasChromeWebViewSurface,

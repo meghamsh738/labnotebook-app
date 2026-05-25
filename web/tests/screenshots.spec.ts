@@ -67,6 +67,11 @@ test('generate feature screenshots', async ({ page }) => {
   await expect(page.getByRole('heading', { name: formatUiDate('2025-12-07') })).toBeVisible()
   await page.screenshot({ path: path.join(outDir, '01-dashboard.png'), fullPage: true })
 
+  await page.getByTestId('editor-tab-workbook').click()
+  await expect(page.getByTestId('entry-workbook')).toBeVisible()
+  await page.screenshot({ path: path.join(outDir, '07-workbook.png'), fullPage: true })
+  await page.getByTestId('editor-tab-note').click()
+
   await page.getByTestId('editor-tab-details').click()
   await page.screenshot({ path: path.join(outDir, '02-details.png'), fullPage: true })
   await page.getByTestId('editor-tab-note').click()
@@ -93,9 +98,41 @@ test('generate feature screenshots', async ({ page }) => {
   await page.getByRole('tab', { name: 'File Hub' }).click()
   await expect(page.getByTestId('file-hub-pane')).toBeVisible()
   await page.screenshot({ path: path.join(outDir, '06-file-hub.png'), fullPage: true })
+  await page.getByRole('tab', { name: 'Devices' }).click()
+  await expect(page.getByTestId('devices-pane')).toBeVisible()
+  await page.screenshot({ path: path.join(outDir, '06b-devices.png'), fullPage: true })
+  await page.getByRole('tab', { name: 'Transfers' }).click()
+  await expect(page.getByTestId('transfers-pane')).toBeVisible()
+  await page.screenshot({ path: path.join(outDir, '06c-transfers.png'), fullPage: true })
   await page.getByRole('tab', { name: 'Sync' }).click()
   await expect(page.getByTestId('sync-pane')).toBeVisible()
   await page.screenshot({ path: path.join(outDir, '07-sync-pane.png'), fullPage: true })
+
+  await page.getByRole('tab', { name: 'Entries' }).click()
+  await openOrCreateCalendarEntry(page, '2025-12-07')
+  await page.evaluate(() => {
+    window.localStorage.setItem('labnote.mockSync.noFail', '0')
+    window.localStorage.setItem('labnote.mockSync.failNext', '1')
+    ;(window as unknown as { __labnoteMockSync?: { noFail?: boolean; failNext?: boolean } }).__labnoteMockSync = {
+      noFail: false,
+      failNext: true,
+    }
+  })
+  await page.getByTestId('edit-note-btn').click()
+  await page.getByTestId('slate-editor').click()
+  await page.keyboard.type(' Failed sync screenshot note.')
+  await page.getByTestId('entry-save').click()
+  await expect(page.getByTestId('sync-status-chip')).toContainText(/failed/i)
+  await page.screenshot({ path: path.join(outDir, '05-sync-failed.png'), fullPage: true })
+
+  const [popup] = await Promise.all([
+    page.context().waitForEvent('page'),
+    page.getByTestId('export-pdf').click(),
+  ])
+  await popup.waitForLoadState('domcontentloaded')
+  await expect(popup.locator('text=Print / Save to PDF')).toBeVisible()
+  await popup.screenshot({ path: path.join(outDir, '06-export-pdf.png'), fullPage: true })
+  await popup.close()
 })
 
 test('mobile landing', async ({ page }) => {
@@ -124,4 +161,19 @@ test('mobile landing', async ({ page }) => {
   await page.goto('/')
   await expect(page.locator('.mobile-pwa-nav')).toBeVisible()
   await page.screenshot({ path: path.join(outDir, '08-mobile-landing.png'), fullPage: true })
+  await page.getByTestId('mobile-nav-days').click()
+  await page.waitForTimeout(260)
+  await page.screenshot({ path: path.join(outDir, '09-mobile-days.png'), fullPage: true })
+  await page.getByTestId('mobile-nav-files').click()
+  await page.waitForTimeout(260)
+  await expect(page.getByTestId('file-hub-pane')).toBeVisible()
+  await page.screenshot({ path: path.join(outDir, '10-mobile-files.png'), fullPage: true })
+  await page.getByTestId('mobile-nav-sync').click()
+  await page.waitForTimeout(260)
+  await expect(page.getByTestId('sync-pane')).toBeVisible()
+  await page.screenshot({ path: path.join(outDir, '11-mobile-sync.png'), fullPage: true })
+  await page.getByTestId('mobile-nav-settings').click()
+  await page.waitForTimeout(260)
+  await expect(page.getByRole('dialog')).toBeVisible()
+  await page.screenshot({ path: path.join(outDir, '12-mobile-settings.png'), fullPage: true })
 })

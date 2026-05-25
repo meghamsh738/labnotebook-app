@@ -1,4 +1,4 @@
-import type React from 'react'
+﻿import type React from 'react'
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { createEditor, Editor, Element as SlateElement, Node, Path, Range, Text, Transforms } from 'slate'
 import { HistoryEditor, withHistory } from 'slate-history'
@@ -132,6 +132,7 @@ type UiIconName =
   | 'chevronRight'
   | 'chevronUp'
   | 'download'
+  | 'drive'
   | 'edit'
   | 'file'
   | 'folder'
@@ -144,11 +145,14 @@ type UiIconName =
   | 'plus'
   | 'refresh'
   | 'save'
+  | 'search'
   | 'settings'
   | 'spark'
   | 'tag'
   | 'table'
   | 'trash'
+  | 'undo'
+  | 'redo'
   | 'x'
 
 function UiIcon({ name, className, title }: { name: UiIconName; className?: string; title?: string }) {
@@ -184,6 +188,8 @@ function UiIcon({ name, className, title }: { name: UiIconName; className?: stri
       return <svg {...common}>{titleNode}<path d="m18 15-6-6-6 6" /></svg>
     case 'download':
       return <svg {...common}>{titleNode}<path d="M12 4v10" /><path d="m7.5 10 4.5 4.5L16.5 10" /><path d="M5 20h14" /></svg>
+    case 'drive':
+      return <svg {...common}>{titleNode}<path d="M12 3.8 21 18.8H3L12 3.8Z" /><path d="m8.6 11.5 3.4-5.7 3.4 5.7" /><path d="M8.2 18.8 12 12.3l3.8 6.5" /></svg>
     case 'edit':
       return <svg {...common}>{titleNode}<path d="M4 20h4.6L19.3 9.3a2.1 2.1 0 0 0 0-3l-1.6-1.6a2.1 2.1 0 0 0-3 0L4 15.4V20Z" /><path d="m13.7 5.7 4.6 4.6" /></svg>
     case 'file':
@@ -208,6 +214,8 @@ function UiIcon({ name, className, title }: { name: UiIconName; className?: stri
       return <svg {...common}>{titleNode}<path d="M20 12a8 8 0 0 1-13.7 5.7" /><path d="M4 12A8 8 0 0 1 17.7 6.3" /><path d="M18 3v4h-4" /><path d="M6 21v-4h4" /></svg>
     case 'save':
       return <svg {...common}>{titleNode}<path d="M5 4h11l3 3v13H5V4Z" /><path d="M8 4v6h8" /><path d="M8 20v-6h8v6" /></svg>
+    case 'search':
+      return <svg {...common}>{titleNode}<circle cx="10.5" cy="10.5" r="6.5" /><path d="m16 16 4 4" /></svg>
     case 'settings':
       return <svg {...common}>{titleNode}<path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z" /><path d="M19.4 15a1.8 1.8 0 0 0 .4 2l.1.1-2.1 3.6-.2-.1a1.8 1.8 0 0 0-2 .3 1.8 1.8 0 0 0-.6 1.9h-4a1.8 1.8 0 0 0-.6-1.9 1.8 1.8 0 0 0-2-.3l-.2.1-2.1-3.6.1-.1a1.8 1.8 0 0 0 .4-2A1.8 1.8 0 0 0 5 13.7H4V10h1a1.8 1.8 0 0 0 1.6-1.2 1.8 1.8 0 0 0-.4-2l-.1-.1 2.1-3.6.2.1a1.8 1.8 0 0 0 2-.3A1.8 1.8 0 0 0 11 1h4a1.8 1.8 0 0 0 .6 1.9 1.8 1.8 0 0 0 2 .3l.2-.1 2.1 3.6-.1.1a1.8 1.8 0 0 0-.4 2A1.8 1.8 0 0 0 21 10h1v3.7h-1a1.8 1.8 0 0 0-1.6 1.3Z" /></svg>
     case 'spark':
@@ -218,6 +226,10 @@ function UiIcon({ name, className, title }: { name: UiIconName; className?: stri
       return <svg {...common}>{titleNode}<rect x="4" y="5" width="16" height="14" rx="2" /><path d="M4 10h16" /><path d="M4 15h16" /><path d="M10 5v14" /><path d="M16 5v14" /></svg>
     case 'trash':
       return <svg {...common}>{titleNode}<path d="M5 7h14" /><path d="M10 11v6" /><path d="M14 11v6" /><path d="M8 7l1-3h6l1 3" /><path d="M7 7l1 13h8l1-13" /></svg>
+    case 'undo':
+      return <svg {...common}>{titleNode}<path d="M9 7H4v5" /><path d="M4 12a7 7 0 0 1 12-5l3 3" /></svg>
+    case 'redo':
+      return <svg {...common}>{titleNode}<path d="M15 7h5v5" /><path d="M20 12a7 7 0 0 0-12-5l-3 3" /></svg>
     case 'x':
       return <svg {...common}>{titleNode}<path d="m6 6 12 12" /><path d="M18 6 6 18" /></svg>
     default:
@@ -282,6 +294,16 @@ const readStoredPaths = (): AppPaths | null => {
     console.warn('Unable to read stored paths', err)
     return null
   }
+}
+
+const formatDisplayPath = (value?: string | null) => {
+  const raw = String(value ?? '').trim()
+  if (!raw) return ''
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(raw)) return raw
+
+  const isUnc = raw.startsWith('\\\\') || raw.startsWith('//')
+  const normalized = raw.replace(/[\\/]+/g, '\\')
+  return isUnc ? `\\\\${normalized.replace(/^\\+/, '')}` : normalized
 }
 
 const writeStoredPaths = (paths: AppPaths) => {
@@ -663,7 +685,7 @@ const parseEntryMarkdown = (markdown: string, folderName: string): ParsedMarkdow
         entryId,
         type: link.type,
         filename: filename,
-        filesize: '—',
+        filesize: '-',
         storagePath: path || filename,
       })
       if (link.type === 'image') {
@@ -1238,10 +1260,10 @@ const entryBundleFileBase = (entry: Entry) => safeFileName(`${entry.dateBucket}-
 const attachmentExportName = (attachment: Attachment) => `${attachment.id}-${safeFileName(attachment.filename)}`
 const LIST_STYLE_SYMBOLS: Record<ListStyle, string> = {
   dot: '•',
-  circle: '◦',
-  square: '▪',
-  dash: '–',
-  arrow: '→',
+  circle: 'o',
+  square: '-',
+  dash: '-',
+  arrow: '->',
 }
 const LIST_STYLE_OPTIONS: Array<{ id: ListStyle; label: string; symbol: string }> = [
   { id: 'dot', label: 'Dot list', symbol: LIST_STYLE_SYMBOLS.dot },
@@ -1614,7 +1636,7 @@ function blocksToHtml(blocks: Block[], attachmentsById: Record<string, Attachmen
         case 'checklist':
           return `<ul class="checklist">${block.items
             .filter((i) => i.text.trim() || !i.guide)
-            .map((i) => `<li><span class="cb">${i.done ? '☑' : '☐'}</span> ${esc(i.text)}</li>`)
+            .map((i) => `<li><span class="cb">${i.done ? '[x]' : '[ ]'}</span> ${esc(i.text)}</li>`)
             .join('')}</ul>`
         case 'list': {
           const symbol = getListSymbol(block.style)
@@ -1740,7 +1762,7 @@ async function buildEntryPdf(
     `Last edited ${dateOnly.format(new Date(entry.lastEditedDatetime))}`,
   ]
     .filter(Boolean)
-    .join(' · ')
+    .join(' - ')
   addParagraph(metaLine, font, 10, 12, rgb(0.45, 0.45, 0.5))
 
   for (const block of entry.content) {
@@ -1754,7 +1776,7 @@ async function buildEntryPdf(
         addParagraph(block.text, font, 11)
         break
       case 'quote':
-        addParagraph(`“${block.text}”`, font, 11, 10, rgb(0.3, 0.3, 0.35))
+        addParagraph(`"${block.text}"`, font, 11, 10, rgb(0.3, 0.3, 0.35))
         break
       case 'checklist':
         block.items
@@ -2165,6 +2187,7 @@ function App() {
   const [selectedDate, setSelectedDate] = useState<string | null>(null)
   const [dateRange, setDateRange] = useState<DateRange>({ start: '', end: '' })
   const [calendarMonth, setCalendarMonth] = useState<Date>(() => monthStartFromIso(initialCalendarSeed))
+  const selectedEntryDateBucket = selectedEntryId ? entryDrafts[selectedEntryId]?.dateBucket : ''
   const [masterSyncPath, setMasterSyncPath] = useState<string>(() => {
     if (typeof window === 'undefined' || resetSeed) return labStoragePath
     try {
@@ -2215,6 +2238,15 @@ function App() {
     if (!selectedEntryId) return
     setOpenEntryIds((prev) => (prev.includes(selectedEntryId) ? prev : [selectedEntryId, ...prev].slice(0, 5)))
   }, [selectedEntryId])
+
+  useEffect(() => {
+    if (!selectedEntryDateBucket) return
+    const entryMonth = monthStartFromIso(selectedEntryDateBucket)
+    setCalendarMonth((current) => {
+      if (current.getFullYear() === entryMonth.getFullYear() && current.getMonth() === entryMonth.getMonth()) return current
+      return entryMonth
+    })
+  }, [selectedEntryDateBucket])
 
   useEffect(() => {
     setDeviceProfile((prev) => createDeviceProfile(prev))
@@ -2787,7 +2819,7 @@ function App() {
     const handleWithPerm = handle as FsDirectoryWithPerm
     if (handleWithPerm.queryPermission) {
       const perm = await handleWithPerm.queryPermission({ mode: 'readwrite' })
-      if (perm !== 'granted') return { ok: false, message: 'Permission not granted (read/write). Click “Enable” or re-pick the folder.' }
+      if (perm !== 'granted') return { ok: false, message: 'Permission not granted (read/write). Click "Enable" or re-pick the folder.' }
     }
 
     try {
@@ -2954,7 +2986,7 @@ function App() {
       const now = new Date()
       const nowIso = now.toISOString()
       const protocolId = newId('protocol-')
-      const title = opts.title?.trim() || `Untitled protocol – ${dateOnly.format(now)}`
+      const title = opts.title?.trim() || `Untitled protocol - ${dateOnly.format(now)}`
       const { content } = buildTemplate(opts.templateId, protocolId, nowIso)
 
       const protocol: Protocol = {
@@ -3228,7 +3260,7 @@ function App() {
           entryId: att.entryId,
           type: att.type ?? 'file',
           filename: att.filename ?? 'file',
-          filesize: att.filesize ?? '—',
+          filesize: att.filesize ?? '-',
           storagePath: att.storagePath ?? '',
           thumbnail: att.thumbnail,
           linkedRegionId: att.linkedRegionId,
@@ -3420,7 +3452,7 @@ function App() {
 
   const importLegacyState = useCallback(async (): Promise<{ ok: boolean; message: string }> => {
     if (typeof (window as unknown as DirectoryPickerWindow).showDirectoryPicker !== 'function') {
-      return { ok: false, message: 'Folder picker not supported in this browser. Use “Import from file” instead.' }
+      return { ok: false, message: 'Folder picker not supported in this browser. Use "Import from file" instead.' }
     }
     const dir = await pickCacheDir()
     if (!dir) return { ok: false, message: 'No folder selected.' }
@@ -4250,7 +4282,7 @@ function App() {
       entryId,
       type: 'raw',
       filename: filename.trim() || 'file',
-      filesize: '—',
+      filesize: '-',
       storagePath,
     }
 
@@ -4426,39 +4458,76 @@ function App() {
     <title>${safeFileName(experiment.title)}</title>
     <style>
       :root { color-scheme: light; }
-      body { font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 28px; color: #111113; }
-      header { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 18px; }
-      h1 { margin: 0; font-size: 22px; }
-      h2 { margin: 18px 0 6px; font-size: 18px; }
-      h3 { margin: 14px 0 6px; font-size: 15px; color: #5E5E66; }
-      .meta { color: #5E5E66; font-size: 12px; }
-      .entry { border-top: 1px solid #E7E7EA; padding-top: 14px; margin-top: 14px; }
-      blockquote { border-left: 3px solid #4F7CF7; padding: 10px 12px; margin: 10px 0; background: rgba(79,124,247,0.14); }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        color: #142620;
+        background:
+          linear-gradient(rgba(32, 48, 42, 0.035) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(32, 48, 42, 0.035) 1px, transparent 1px),
+          #f4efe5;
+        background-size: 20px 20px;
+        font-family: "IBM Plex Sans", Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+      }
+      .document { max-width: 1040px; margin: 24px auto; padding: 0 24px 48px; }
+      header {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        gap: 18px;
+        padding: 20px 22px;
+        margin-bottom: 18px;
+        border: 1px solid rgba(32, 48, 42, 0.12);
+        border-radius: 14px;
+        background: rgba(255, 252, 245, 0.94);
+        box-shadow: 0 16px 44px rgba(20, 38, 32, 0.08);
+      }
+      h1 { margin: 0; font-size: 26px; line-height: 1.1; letter-spacing: 0; }
+      h2 { margin: 0 0 8px; font-size: 19px; line-height: 1.2; }
+      h3 { margin: 16px 0 8px; font-size: 14px; color: #405049; text-transform: uppercase; letter-spacing: 0.04em; }
+      p { line-height: 1.58; }
+      .meta { color: #68736d; font-size: 12px; font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Consolas, monospace; }
+      .entry {
+        margin-top: 14px;
+        padding: 20px 22px;
+        border: 1px solid rgba(32, 48, 42, 0.12);
+        border-radius: 14px;
+        background: rgba(255, 252, 245, 0.92);
+      }
+      blockquote { border-left: 3px solid #075c49; padding: 10px 12px; margin: 12px 0; background: rgba(7, 92, 73, 0.08); }
       ul.checklist { list-style: none; padding-left: 0; }
-      ul.checklist li { margin: 6px 0; }
-      .cb { display: inline-block; width: 20px; }
+      ul.checklist li { margin: 7px 0; }
+      .cb { display: inline-block; width: 22px; color: #075c49; }
       ul.symbol-list { list-style: none; padding-left: 0; }
-      ul.symbol-list li { margin: 6px 0; display: flex; gap: 8px; }
-      ul.symbol-list .symbol { width: 18px; display: inline-block; text-align: center; font-weight: 600; }
-      figure { margin: 12px 0; }
-      figure img { max-width: 100%; border-radius: 10px; border: 1px solid #E7E7EA; }
-      figcaption { font-size: 12px; color: #5E5E66; margin-top: 6px; }
-      table { border-collapse: collapse; width: 100%; }
-      th, td { border: 1px solid #E7E7EA; padding: 8px 10px; font-size: 12px; text-align: left; }
-      th { background: #FBFBFC; }
-      .caption { font-size: 12px; color: #5E5E66; margin-top: 6px; }
-      .toolbar { margin-top: 8px; }
-      .toolbar button { border-radius: 10px; border: 1px solid #D7D7DD; background: #ffffff; padding: 8px 12px; cursor: pointer; }
-      @media print { .toolbar { display: none; } body { margin: 0.5in; } }
+      ul.symbol-list li { margin: 7px 0; display: flex; gap: 8px; }
+      ul.symbol-list .symbol { width: 18px; display: inline-block; text-align: center; font-weight: 700; color: #075c49; }
+      figure { margin: 14px 0; }
+      figure img { max-width: 100%; border-radius: 10px; border: 1px solid rgba(32, 48, 42, 0.16); }
+      figcaption { font-size: 12px; color: #68736d; margin-top: 6px; }
+      table { border-collapse: separate; border-spacing: 0; width: 100%; overflow: hidden; border: 1px solid rgba(32, 48, 42, 0.14); border-radius: 10px; }
+      th, td { border-right: 1px solid rgba(32, 48, 42, 0.12); border-bottom: 1px solid rgba(32, 48, 42, 0.12); padding: 9px 10px; font-size: 12px; text-align: left; }
+      th:last-child, td:last-child { border-right: 0; }
+      tr:last-child td { border-bottom: 0; }
+      th { background: rgba(7, 92, 73, 0.08); font-weight: 700; }
+      .caption { font-size: 12px; color: #68736d; margin-top: 6px; }
+      .toolbar { margin-top: 0; }
+      .toolbar button { border-radius: 999px; border: 1px solid rgba(7, 92, 73, 0.28); background: #075c49; color: #fff; padding: 9px 14px; cursor: pointer; font-weight: 700; }
+      @media print {
+        body { margin: 0.5in; background: #fff; }
+        .document { max-width: none; margin: 0; padding: 0; }
+        header, .entry { box-shadow: none; background: #fff; }
+        .toolbar { display: none; }
+      }
     </style>
   </head>
   <body>
+    <main class="document">
     <header>
       <div>
         <h1>${experiment.title}</h1>
         <div class="meta">
-          ${project ? `Project: ${project.title} · ` : ''}
-          ${experiment.protocolRef ? `Protocol: ${experiment.protocolRef} · ` : ''}
+          ${project ? `Project: ${project.title} - ` : ''}
+          ${experiment.protocolRef ? `Protocol: ${experiment.protocolRef} - ` : ''}
           Exported: ${new Date().toLocaleString()}
         </div>
       </div>
@@ -4472,12 +4541,13 @@ function App() {
         (e) => `
       <section class="entry">
         <h2>${e.title}</h2>
-        <div class="meta">Created ${new Date(e.createdDatetime).toLocaleString()} · Last edited ${new Date(e.lastEditedDatetime).toLocaleString()}</div>
+        <div class="meta">Created ${new Date(e.createdDatetime).toLocaleString()} - Last edited ${new Date(e.lastEditedDatetime).toLocaleString()}</div>
         ${blocksToHtml(e.content, attachmentsById, attachmentUrls)}
       </section>
     `
       )
       .join('\n')}
+    </main>
   </body>
 </html>
         `.trim()
@@ -4517,7 +4587,7 @@ function App() {
         '',
         ...entries.flatMap((e) => {
           const header = `## ${e.title}`
-          const meta = `Created ${dateOnly.format(new Date(e.createdDatetime))} · Last edited ${dateOnly.format(new Date(e.lastEditedDatetime))}`
+          const meta = `Created ${dateOnly.format(new Date(e.createdDatetime))} - Last edited ${dateOnly.format(new Date(e.lastEditedDatetime))}`
           const md = blocksToMarkdown(e.content, attachmentsById, attachmentExportPathById)
           return [header, meta, '', md, '']
         }),
@@ -4837,6 +4907,19 @@ function App() {
     return () => root.removeEventListener('wheel', handleSuiteShellWheel, true)
   }, [handleSuiteShellWheel, isSuiteShell])
 
+  const selectedMobileAttachmentCount = selectedEntryId
+    ? attachmentsStore.filter((item) => item.entryId === selectedEntryId).length +
+      fileBoxItems.filter((item) => item.entryId === selectedEntryId && item.status !== 'rejected' && item.status !== 'removed').length
+    : 0
+  const selectedMobileHasFailedWork = changeQueue.some((item) => item.entryId === selectedEntryId && item.status === 'failed')
+  const selectedMobileHasPendingWork = changeQueue.some((item) => item.entryId === selectedEntryId && item.status === 'pending')
+  const mobileCaptureStatusSummary = {
+    local: syncing ? 'Syncing' : selectedMobileHasFailedWork ? 'Issue' : selectedMobileHasPendingWork ? 'Queued' : 'Up to date',
+    drive: driveConnection.folderId ? 'Linked' : driveConnection.status === 'ready' ? 'Ready' : 'Not synced',
+    attachments: selectedEntryId ? `${selectedMobileAttachmentCount} item${selectedMobileAttachmentCount === 1 ? '' : 's'}` : 'None',
+    hint: 'Offline-first. Drive syncs notes and metadata; larger files stay on demand.',
+  }
+
   return (
     <div ref={appBgRef} className={`app-bg ${isSuiteShell ? 'suite-shell' : ''}`}>
       <div className={`app-shell ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
@@ -5064,6 +5147,8 @@ function App() {
       </div>
       <MobilePwaNav
         activePane={activePane}
+        daysOpen={mobileSidebarOpen}
+        settingsOpen={settingsOpen}
         onToday={() => {
           handleOpenToday()
           setMobileSidebarOpen(false)
@@ -5079,18 +5164,21 @@ function App() {
         }}
         onSettings={() => setSettingsOpen(true)}
       />
-      <MobileCaptureAction
-        disabled={!selectedEntryId}
-        onQuickNote={() => {
-          if (selectedEntryId) setAutoEditEntryId(selectedEntryId)
-          setActivePane('entries')
-        }}
-        onCaptureFiles={(files) => {
-          if (!selectedEntryId) return Promise.resolve()
-          setActivePane('entries')
-          return queueFileBoxFiles(selectedEntryId, files)
-        }}
-      />
+      {(activePane === 'entries' || activePane === 'file-hub') && !mobileSidebarOpen && (
+        <MobileCaptureAction
+          disabled={!selectedEntryId}
+          onQuickNote={() => {
+            if (selectedEntryId) setAutoEditEntryId(selectedEntryId)
+            setActivePane('entries')
+          }}
+          onCaptureFiles={(files) => {
+            if (!selectedEntryId) return Promise.resolve()
+            if (activePane !== 'file-hub') setActivePane('entries')
+            return queueFileBoxFiles(selectedEntryId, files)
+          }}
+          statusSummary={mobileCaptureStatusSummary}
+        />
+      )}
       {newProtocolOpen && (
         <NewProtocolModal
           onClose={() => setNewProtocolOpen(false)}
@@ -5314,6 +5402,13 @@ function Sidebar({
 
   const today = new Date()
   const todayIso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`
+  const mobileCalendarDays = useMemo(() => {
+    const currentMonthDays = calendarDays.filter((day) => !day.isOutside)
+    const anchorIso = selectedDate ?? todayIso
+    const anchorIndex = currentMonthDays.findIndex((day) => day.iso === anchorIso)
+    const start = Math.max(0, Math.min(anchorIndex < 0 ? 0 : anchorIndex - 3, Math.max(0, currentMonthDays.length - 7)))
+    return currentMonthDays.slice(start, start + 7)
+  }, [calendarDays, selectedDate, todayIso])
 
   return (
     <aside className={`panel sidebar ${collapsed ? 'collapsed' : ''} ${mobileOpen ? 'mobile-open' : ''}`} aria-label="Lab navigation">
@@ -5461,7 +5556,7 @@ function Sidebar({
                 <div className="tag-filter-stack">
                   <TagFilterDropdown
                     label="Project tags"
-                    icon="🗂"
+                    icon="P"
                     options={projectTagOptions}
                     selected={selectedProjectTags}
                     onToggle={onToggleProjectTag}
@@ -5471,7 +5566,7 @@ function Sidebar({
                   />
                   <TagFilterDropdown
                     label="Experiment tags"
-                    icon="🧪"
+                    icon="E"
                     options={experimentTagOptions}
                     selected={selectedExperimentTags}
                     onToggle={onToggleExperimentTag}
@@ -5502,6 +5597,56 @@ function Sidebar({
 
               <section className="sidebar-section sidebar-calendar-section">
                 <div className="section-title">Calendar</div>
+                <div className="mobile-days-calendar-strip" aria-label="Mobile calendar">
+                  <div className="mobile-days-calendar-head">
+                    <button
+                      type="button"
+                      aria-label="Previous month"
+                      onClick={() =>
+                        onCalendarMonthChange(new Date(calendarMonth.getFullYear(), calendarMonth.getMonth() - 1, 1))
+                      }
+                    >
+                      {'<'}
+                    </button>
+                    <strong>{calendarLabel}</strong>
+                    <button
+                      type="button"
+                      aria-label="Next month"
+                      onClick={() =>
+                        onCalendarMonthChange(new Date(calendarMonth.getFullYear(), calendarMonth.getMonth() + 1, 1))
+                      }
+                    >
+                      {'>'}
+                    </button>
+                  </div>
+                  <div className="mobile-days-calendar-row">
+                    {mobileCalendarDays.map((day) => {
+                      const isSelected = selectedDate === day.iso
+                      const isToday = todayIso === day.iso
+                      const hasEntry = entryDateSet.has(day.iso)
+                      const weekday = new Intl.DateTimeFormat('en-US', { weekday: 'short' }).format(new Date(`${day.iso}T00:00:00`))
+                      return (
+                        <button
+                          key={day.iso}
+                          type="button"
+                          className={`${isSelected ? 'selected' : ''}${isToday ? ' today' : ''}${hasEntry ? ' has-entry' : ''}`}
+                          onClick={() => {
+                            if (isSelected) {
+                              onSelectDate(null)
+                              return
+                            }
+                            onSelectDate(day.iso)
+                          }}
+                          aria-pressed={isSelected}
+                        >
+                          <span>{weekday.slice(0, 1)}</span>
+                          <strong>{day.day}</strong>
+                          {hasEntry && <i aria-hidden="true" />}
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
                 <div className="calendar-range">
                   <label className="field">
                     <span className="muted tiny">From</span>
@@ -5541,7 +5686,7 @@ function Sidebar({
                           onCalendarMonthChange(new Date(calendarMonth.getFullYear(), calendarMonth.getMonth() - 1, 1))
                         }
                       >
-                        ‹
+                        {'<'}
                       </button>
                       <button
                         type="button"
@@ -5550,7 +5695,7 @@ function Sidebar({
                           onCalendarMonthChange(new Date(calendarMonth.getFullYear(), calendarMonth.getMonth() + 1, 1))
                         }
                       >
-                        ›
+                        {'>'}
                       </button>
                     </div>
                   </div>
@@ -5754,6 +5899,8 @@ function Sidebar({
 
 function MobilePwaNav({
   activePane,
+  daysOpen,
+  settingsOpen,
   onToday,
   onDays,
   onFiles,
@@ -5761,6 +5908,8 @@ function MobilePwaNav({
   onSettings,
 }: {
   activePane: AppPane
+  daysOpen: boolean
+  settingsOpen: boolean
   onToday: () => void
   onDays: () => void
   onFiles: () => void
@@ -5769,11 +5918,11 @@ function MobilePwaNav({
 }) {
   return (
     <nav className="mobile-pwa-nav" aria-label="Mobile notebook navigation">
-      <button className={activePane === 'entries' ? 'active' : ''} type="button" onClick={onToday} data-testid="mobile-nav-today">
+      <button className={!daysOpen && activePane === 'entries' ? 'active' : ''} type="button" onClick={onToday} data-testid="mobile-nav-today">
         <UiIcon name="note" />
         <span>Today</span>
       </button>
-      <button type="button" onClick={onDays} data-testid="mobile-nav-days">
+      <button className={daysOpen ? 'active' : ''} type="button" onClick={onDays} data-testid="mobile-nav-days">
         <UiIcon name="list" />
         <span>Days</span>
       </button>
@@ -5785,7 +5934,7 @@ function MobilePwaNav({
         <UiIcon name="refresh" />
         <span>Sync</span>
       </button>
-      <button type="button" onClick={onSettings} data-testid="mobile-nav-settings">
+      <button className={settingsOpen ? 'active' : ''} type="button" onClick={onSettings} data-testid="mobile-nav-settings">
         <UiIcon name="settings" />
         <span>Settings</span>
       </button>
@@ -5797,10 +5946,17 @@ function MobileCaptureAction({
   disabled,
   onQuickNote,
   onCaptureFiles,
+  statusSummary,
 }: {
   disabled: boolean
   onQuickNote: () => void
   onCaptureFiles: (files: File[]) => Promise<void>
+  statusSummary: {
+    local: string
+    drive: string
+    attachments: string
+    hint: string
+  }
 }) {
   const inputRef = useRef<HTMLInputElement | null>(null)
   const [busy, setBusy] = useState(false)
@@ -5826,13 +5982,31 @@ function MobileCaptureAction({
 
   return (
     <div className="mobile-capture-dock" aria-label="Mobile capture actions">
+      <div className="mobile-sync-strip" aria-label="Entry sync and attachment status">
+        <div>
+          <UiIcon name="note" />
+          <span>Local</span>
+          <strong>{statusSummary.local}</strong>
+        </div>
+        <div>
+          <UiIcon name="drive" />
+          <span>Drive</span>
+          <strong>{statusSummary.drive}</strong>
+        </div>
+        <div>
+          <UiIcon name="paperclip" />
+          <span>Files</span>
+          <strong>{statusSummary.attachments}</strong>
+        </div>
+        <p>{statusSummary.hint}</p>
+      </div>
       <button className="mobile-capture-secondary" type="button" onClick={onQuickNote} disabled={disabled || busy}>
         <UiIcon name="edit" />
         <span>Note</span>
       </button>
       <button className="mobile-capture-primary" type="button" onClick={() => inputRef.current?.click()} disabled={disabled || busy}>
         <UiIcon name="camera" />
-        <span>{busy ? 'Adding...' : 'Capture'}</span>
+        <span>{busy ? 'Adding...' : 'Capture image/file'}</span>
       </button>
       <input
         ref={inputRef}
@@ -6001,6 +6175,12 @@ function EditorPane({
     if (!isEditing) return
     window.requestAnimationFrame(() => focusEditor())
   }, [focusEditor, isEditing])
+
+  useEffect(() => {
+    if (activeTab === 'workbook' || activeTab === 'filebox') {
+      setContextCollapsed(true)
+    }
+  }, [activeTab])
 
   const attachmentMap = useMemo(
     () => Object.fromEntries(attachments.map((a) => [a.id, a])),
@@ -6226,7 +6406,7 @@ function EditorPane({
                       aria-label={`Close ${tab.title}`}
                       disabled={openEntries.length <= 1}
                     >
-                      ×
+                      x
                     </button>
                   </div>
                   )
@@ -6298,7 +6478,7 @@ function EditorPane({
                         aria-label={`Close ${tab.title}`}
                         disabled={openEntries.length <= 1}
                       >
-                        ×
+                        x
                       </button>
                     </div>
                   )
@@ -6452,7 +6632,7 @@ function EditorPane({
             <TagPicker
               variant="inline"
               label="Project tags"
-              icon="🗂"
+              icon="P"
               options={projectTagOptions}
               selected={entry.projectTags ?? []}
               onToggle={(tag) => {
@@ -6467,7 +6647,7 @@ function EditorPane({
             <TagPicker
               variant="inline"
               label="Experiment tags"
-              icon="🧪"
+              icon="E"
               options={experimentTagOptions}
               selected={entry.experimentTags ?? []}
               onToggle={(tag) => {
@@ -6559,7 +6739,7 @@ function EditorPane({
         </div>
       </div>
 
-      <div className={`editor-workspace ${contextCollapsed ? 'context-collapsed' : ''}`}>
+      <div className={`editor-workspace ${contextCollapsed ? 'context-collapsed' : ''} ${activeTab === 'workbook' ? 'workbook-active' : ''}`}>
         <aside className="entry-browser-rail" aria-label="Entries">
           <div className="entry-browser-head">
             <div>
@@ -6593,6 +6773,18 @@ function EditorPane({
         </aside>
 
         <div className="editor-main-stack">
+          {failedCount > 0 && (
+            <div className="sync-recovery-banner" data-testid="sync-recovery-banner">
+              <div>
+                <strong>{failedCount} sync issue{failedCount === 1 ? '' : 's'} need review</strong>
+                <span>Local edits are still saved on this device. Retry sync when Drive is available.</span>
+              </div>
+              <button className="ghost subtle" type="button" onClick={() => onSyncNow(true)} disabled={syncing}>
+                <span className="icon"><UiIcon name="refresh" /></span>
+                Retry
+              </button>
+            </div>
+          )}
 
       {activeTab === 'note' && !isEditing && (
         <div className="blocks" data-testid="entry-view" key={`entry-view-${entry.id}`}>
@@ -6772,8 +6964,9 @@ function EditorPane({
                 </Slate>
               </TableEditContext.Provider>
             </EditorAttachmentContext.Provider>
-            <div className="muted tiny">
-              Tip: use the insert bar above; drag/drop or paste files into the editor.
+            <div className="editor-note-status">
+              <span>Saved locally while you write</span>
+              <span>Drag, paste, or attach files to this day</span>
             </div>
           </div>
         </>
@@ -6793,20 +6986,68 @@ function EditorPane({
                 {workbookHasContent(workbookData) ? 'Will save with entry' : 'Not saved while empty'}
               </span>
             </div>
-            <WorkbookSheet
-              data={workbookData}
-              styles={workbookStyles}
-              isEditing={isEditing}
-              onRequestEdit={() => setIsEditing(true)}
-              onChange={setWorkbookData}
-              onStylesChange={setWorkbookStyles}
-            />
-            {!isEditing && !workbookHasContent(workbookData) && (
-              <div className="file-drop-empty workbook-empty-state">
-                <strong>No workbook data for this day</strong>
-                <span>Click any cell or paste a table to start editing. If the grid is cleared later, the workbook block is removed from the entry.</span>
+            <div className="workbook-stage">
+              <div className="workbook-main-pane">
+                <WorkbookSheet
+                  data={workbookData}
+                  styles={workbookStyles}
+                  isEditing={isEditing}
+                  onRequestEdit={() => setIsEditing(true)}
+                  onChange={setWorkbookData}
+                  onStylesChange={setWorkbookStyles}
+                />
+                {!isEditing && !workbookHasContent(workbookData) && (
+                  <div className="file-drop-empty workbook-empty-state">
+                    <strong>No workbook data for this day</strong>
+                    <span>Click any cell or paste a table to start editing. If the grid is cleared later, the workbook block is removed from the entry.</span>
+                  </div>
+                )}
               </div>
-            )}
+              <aside className="workbook-context-rail" aria-label="Workbook context">
+                <section>
+                  <div className="section-title">Entry context</div>
+                  <dl>
+                    <div><dt>Project</dt><dd>{entry.projectTags?.[0] ?? entry.tags[0] ?? 'Not tagged'}</dd></div>
+                    <div><dt>Experiment</dt><dd>{entry.experimentTags?.[0] ?? 'General'}</dd></div>
+                    <div><dt>Notebook</dt><dd>{entry.isDaily ? 'Daily entry' : 'Notebook record'}</dd></div>
+                    <div><dt>Updated</dt><dd>{dateOnly.format(new Date(entry.lastEditedDatetime))}</dd></div>
+                  </dl>
+                </section>
+                <section>
+                  <div className="section-title">Workbook state</div>
+                  <dl>
+                    <div><dt>Rows</dt><dd>{workbookData.length}</dd></div>
+                    <div><dt>Columns</dt><dd>{workbookData[0]?.length ?? 0}</dd></div>
+                    <div><dt>Saved</dt><dd>{workbookHasContent(workbookData) ? 'With entry' : 'Ignored while empty'}</dd></div>
+                  </dl>
+                </section>
+                <section>
+                  <div className="section-title">Linked files</div>
+                  {attachments.length ? (
+                    <div className="workbook-linked-files">
+                      {attachments.slice(0, 3).map((file) => (
+                        <span key={`workbook-file-${file.id}`}>
+                          <UiIcon name={file.type === 'image' ? 'image' : 'file'} />
+                          {file.filename}
+                        </span>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="muted tiny">Files attached to this daily entry will appear here.</p>
+                  )}
+                </section>
+                <section>
+                  <div className="section-title">Sync status</div>
+                  <div className="workbook-sync-card">
+                    <UiIcon name="drive" />
+                    <div>
+                      <strong>{entry.syncStatus === 'synced' ? 'Synced with Drive' : 'Saved locally'}</strong>
+                      <span>{entry.syncStatus === 'synced' ? 'Available across devices' : 'Will sync when connected'}</span>
+                    </div>
+                  </div>
+                </section>
+              </aside>
+            </div>
           </div>
         </div>
       )}
@@ -6924,7 +7165,7 @@ function EditorPane({
             <div className="section-title">Entry tags</div>
             <TagPicker
               label="Project tags"
-              icon="🗂"
+              icon="P"
               options={projectTagOptions}
               selected={entry.projectTags ?? []}
               onToggle={(tag) => {
@@ -6938,7 +7179,7 @@ function EditorPane({
             />
             <TagPicker
               label="Experiment tags"
-              icon="🧪"
+              icon="E"
               options={experimentTagOptions}
               selected={entry.experimentTags ?? []}
               onToggle={(tag) => {
@@ -6954,15 +7195,15 @@ function EditorPane({
 
           <div className="panel-card">
             <div className="section-title">Assignment</div>
-            <div className="muted tiny">Project: {project?.title ?? '—'}</div>
-            <div className="muted tiny">Experiment: {experiment?.title ?? '—'}</div>
+            <div className="muted tiny">Project: {project?.title ?? '-'}</div>
+            <div className="muted tiny">Experiment: {experiment?.title ?? '-'}</div>
           </div>
 
           <div className="panel-card">
             <div className="section-title">Sync queue</div>
             <div className="muted tiny" style={{ marginBottom: 6 }}>
               {syncing
-                ? 'Syncing changes…'
+                ? 'Syncing changes...'
                 : failedCount
                   ? `${failedCount} failed`
                   : pendingCount
@@ -7012,7 +7253,7 @@ function EditorPane({
 
           {!contextCollapsed && (
             <div className="context-panel-body">
-              <section className="context-card context-card-primary">
+              <section className="context-card context-card-primary context-status-card">
                 <div className="context-card-head">
                   <div>
                     <div className="section-title">Entry status</div>
@@ -7042,7 +7283,7 @@ function EditorPane({
                 </div>
               </section>
 
-              <section className="context-card">
+              <section className="context-card context-workspace-card">
                 <div className="context-card-head">
                   <div>
                     <div className="section-title">Workspace</div>
@@ -7065,18 +7306,24 @@ function EditorPane({
                 </div>
               </section>
 
-              <section className="context-card">
+              <section className="context-card context-attachment-card">
                 <div className="context-card-head">
                   <div>
                     <div className="section-title">Attachments</div>
-                    <div className="muted tiny">{imageCount} images · {fileCount} files</div>
+                    <div className="muted tiny">{imageCount} images - {fileCount} files</div>
                   </div>
                   <button className="ghost subtle" type="button" onClick={() => setActiveTab('files')}>
                     View
                   </button>
                 </div>
                 <div className="context-list">
-                  {latestAttachments.length === 0 && <div className="muted tiny">Drop files into the note to attach them.</div>}
+                  {latestAttachments.length === 0 && (
+                    <button type="button" className="context-drop-target" onClick={() => setActiveTab('files')}>
+                      <span className="icon"><UiIcon name="paperclip" /></span>
+                      <strong>Drop files here</strong>
+                      <small>Images, PDFs, raw exports, and notes attach to this day.</small>
+                    </button>
+                  )}
                   {latestAttachments.map((file) => (
                     <button key={`ctx-file-${file.id}`} type="button" className="context-list-item" onClick={() => setActiveTab('files')}>
                       <span className="context-file-icon">{file.type === 'image' ? 'IMG' : 'FILE'}</span>
@@ -7089,7 +7336,7 @@ function EditorPane({
                 </div>
               </section>
 
-              <section className="context-card">
+              <section className="context-card context-capture-card">
                 <div className="section-title">Capture inbox</div>
                 <div className="context-intake-grid">
                   <div>
@@ -7104,7 +7351,7 @@ function EditorPane({
                 <div className="muted tiny">Phone intake stays local and appears here when messages are imported.</div>
               </section>
 
-              <section className="context-card">
+              <section className="context-card context-actions-card">
                 <div className="section-title">Quick actions</div>
                 <div className="context-actions">
                   <button className="ghost" type="button" onClick={() => setActiveTab('note')}>Note</button>
@@ -7291,7 +7538,7 @@ function EntryFileBoxPanel({
         }}
       >
         <UiIcon name="paperclip" />
-        <strong>{busy ? 'Adding files…' : 'Drop files into this entry file box'}</strong>
+        <strong>{busy ? 'Adding files...' : 'Drop files into this entry file box'}</strong>
         <span>Images, PDFs, CSV/TSV, spreadsheets, Word docs, and raw instrument exports are accepted.</span>
       </div>
 
@@ -7320,7 +7567,7 @@ function EntryFileBoxPanel({
                 <div className="connected-row-icon"><UiIcon name={item.contentType?.startsWith('image') ? 'image' : 'file'} /></div>
                 <div className="connected-row-main">
                   <strong>{item.filename}</strong>
-                  <span>{item.filesize} · {item.sourceDeviceName} · {fileBoxStatusLabel(transfer?.status ?? item.status)}</span>
+                  <span>{item.filesize} - {item.sourceDeviceName} - {fileBoxStatusLabel(transfer?.status ?? item.status)}</span>
                   {recovery && (
                     <div className="filebox-recovery">
                       <span className={`status-chip ${recovery.tone === 'danger' ? 'danger' : 'warning'}`}>{recovery.label}</span>
@@ -7406,9 +7653,52 @@ function FileHubPane({
   onOpenAttachment: (attachmentId: string) => void
   onRemoveLocalAttachmentCopy: (attachmentId: string) => void
 }) {
+  const [hubQuery, setHubQuery] = useState('')
   const attachmentsById = useMemo(() => new Map(attachments.map((att) => [att.id, att])), [attachments])
   const openItems = fileBoxItems.filter((item) => item.status !== 'attached' && item.status !== 'rejected' && item.status !== 'removed')
   const attachedItems = fileBoxItems.filter((item) => item.status === 'attached')
+  const queuedItems = fileBoxItems.filter((item) => item.status === 'queued' || item.status === 'uploading')
+  const failedTransfers = transfers.filter((transfer) => transfer.status === 'failed' || transfer.status === 'conflict')
+  const normalizedHubQuery = hubQuery.trim().toLowerCase()
+  const entryRows = useMemo(() => {
+    return Object.values(entries)
+      .sort((a, b) => new Date(b.lastEditedDatetime).getTime() - new Date(a.lastEditedDatetime).getTime())
+      .slice(0, 10)
+      .map((entry) => {
+        const entryItems = fileBoxItems.filter((item) => item.entryId === entry.id)
+        const entryTransfers = transfers
+          .filter((transfer) => transfer.entryId === entry.id)
+          .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
+        const linkedIds = new Set(entry.linkedFiles)
+        const linkedAttachments = attachments.filter((attachment) => attachment.entryId === entry.id || linkedIds.has(attachment.id))
+        return {
+          entry,
+          openCount: entryItems.filter((item) => item.status !== 'attached' && item.status !== 'rejected' && item.status !== 'removed').length,
+          attachedCount: linkedAttachments.length,
+          latestTransfer: entryTransfers[0],
+        }
+      })
+      .filter(({ entry, latestTransfer }) => {
+        if (!normalizedHubQuery) return true
+        return [
+          entry.title,
+          entry.dateBucket,
+          latestTransfer?.filename,
+          latestTransfer?.fromDeviceName,
+        ]
+          .filter(Boolean)
+          .some((value) => String(value).toLowerCase().includes(normalizedHubQuery))
+      })
+  }, [attachments, entries, fileBoxItems, normalizedHubQuery, transfers])
+  const visibleOpenItems = useMemo(() => {
+    if (!normalizedHubQuery) return openItems
+    return openItems.filter((item) => {
+      const entry = entries[item.entryId]
+      return [item.filename, item.filesize, item.sourceDeviceName, entry?.title, entry?.dateBucket]
+        .filter(Boolean)
+        .some((value) => String(value).toLowerCase().includes(normalizedHubQuery))
+    })
+  }, [entries, normalizedHubQuery, openItems])
 
   return (
     <main className="panel editor connected-workspace" data-testid="file-hub-pane">
@@ -7416,14 +7706,80 @@ function FileHubPane({
         <div>
           <div className="eyebrow">File Hub</div>
           <h1>Entry file boxes and incoming lab files</h1>
-          <p className="muted">A TeamViewer-style file transfer layer for Lab Notebook entries: send, accept, attach, and track files without leaving the notebook.</p>
+          <p className="muted">Send, accept, attach, and track entry-owned files from desktop and mobile without leaving the notebook.</p>
         </div>
         <div className="connected-metrics">
           <div><strong>{openItems.length}</strong><span>Open</span></div>
           <div><strong>{attachedItems.length}</strong><span>Attached</span></div>
           <div><strong>{transfers.length}</strong><span>Transfers</span></div>
+          <div><strong>{queuedItems.length}</strong><span>Queue</span></div>
+          <div><strong>{failedTransfers.length}</strong><span>Review</span></div>
         </div>
       </div>
+
+      <div className="filehub-toolbar" aria-label="File Hub controls">
+        <label className="filehub-search">
+          <UiIcon name="search" />
+          <input
+            type="search"
+            value={hubQuery}
+            onChange={(event) => setHubQuery(event.target.value)}
+            placeholder="Search entries, files, devices..."
+          />
+          <kbd>Ctrl K</kbd>
+        </label>
+        <div className="filehub-filter-group" aria-label="File Hub status filters">
+          <span><UiIcon name="folder" /> Entry boxes</span>
+          <span><UiIcon name="drive" /> Google Drive</span>
+          <span><UiIcon name="refresh" /> Newest first</span>
+        </div>
+      </div>
+
+      <section className="connected-card filehub-entry-table-card">
+        <div className="connected-card-head">
+          <div>
+            <div className="section-title">Daily entry file boxes</div>
+            <div className="muted tiny">Each day owns its attachments, pending files, and transfer history.</div>
+          </div>
+        </div>
+        <div className="connected-table filehub-table" data-testid="filehub-entry-table">
+          <div className="connected-table-row head">
+            <span>Entry</span>
+            <span>Open</span>
+            <span>Attached</span>
+            <span>Latest transfer</span>
+            <span>Sync / Source</span>
+            <span>Action</span>
+          </div>
+          {entryRows.length === 0 ? (
+            <div className="connected-empty">No entries yet. Create a daily entry to start a file box.</div>
+          ) : (
+            entryRows.map(({ entry, openCount, attachedCount, latestTransfer }) => (
+              <div className="connected-table-row" key={entry.id}>
+                <span data-label="Entry">
+                  <strong>{entry.title}</strong>
+                  <small>{entry.dateBucket}</small>
+                </span>
+                <span data-label="Open">{openCount}</span>
+                <span data-label="Attached">{attachedCount}</span>
+                <span data-label="Latest transfer">
+                  <strong>{latestTransfer ? fileBoxStatusLabel(latestTransfer.status) : 'No transfer'}</strong>
+                  <small>{latestTransfer ? new Date(latestTransfer.updatedAt).toLocaleString() : 'Awaiting files'}</small>
+                </span>
+                <span data-label="Sync / Source">
+                  <strong>{latestTransfer?.fromDeviceName ?? 'Google Drive'}</strong>
+                  <small>{latestTransfer ? latestTransfer.provider.replace('-', ' ') : 'Ready for Drive sync'}</small>
+                </span>
+                <span data-label="Action">
+                  <button className="pill soft" type="button" onClick={() => onSelectEntry(entry.id)}>
+                    Open
+                  </button>
+                </span>
+              </div>
+            ))
+          )}
+        </div>
+      </section>
 
       <div className="connected-grid two">
         <section className="connected-card">
@@ -7434,8 +7790,12 @@ function FileHubPane({
             </div>
           </div>
           <div className="connected-list">
-            {openItems.length === 0 && <div className="connected-empty">No waiting files. Drop files into an entry File Box to start.</div>}
-            {openItems.map((item) => {
+            {visibleOpenItems.length === 0 && (
+              <div className="connected-empty">
+                No waiting files. Attach a photo or file from Today, then it will appear here until it is accepted into the entry.
+              </div>
+            )}
+            {visibleOpenItems.map((item) => {
               const entry = entries[item.entryId]
               const attachment = item.attachmentId ? attachmentsById.get(item.attachmentId) : undefined
               const transfer = transfers.find((candidate) => candidate.fileBoxItemId === item.id)
@@ -7446,7 +7806,7 @@ function FileHubPane({
                   <div className="connected-row-icon"><UiIcon name={attachment?.type === 'image' ? 'image' : 'file'} /></div>
                   <div className="connected-row-main">
                     <strong>{item.filename}</strong>
-                    <span>{entry?.title ?? 'Entry'} · {item.filesize} · {fileBoxStatusLabel(transfer?.status ?? item.status)}</span>
+                    <span>{entry?.title ?? 'Entry'} - {item.filesize} - {fileBoxStatusLabel(transfer?.status ?? item.status)}</span>
                     {recovery && (
                       <div className="filebox-recovery">
                         <span className={`status-chip ${recovery.tone === 'danger' ? 'danger' : 'warning'}`}>{recovery.label}</span>
@@ -7474,15 +7834,16 @@ function FileHubPane({
           </div>
         </section>
 
-        <section className="connected-card">
-          <div className="section-title">Recent transfer activity</div>
-          <div className="connected-list">
-            {transfers.length === 0 && <div className="connected-empty">Transfer activity appears here after files are added or synced.</div>}
-            {transfers.slice(0, 12).map((transfer) => (
-              <TransferRow key={transfer.id} transfer={transfer} />
-            ))}
-          </div>
-        </section>
+        {transfers.length > 0 && (
+          <section className="connected-card">
+            <div className="section-title">Recent transfer activity</div>
+            <div className="connected-list">
+              {transfers.slice(0, 12).map((transfer) => (
+                <TransferRow key={transfer.id} transfer={transfer} />
+              ))}
+            </div>
+          </section>
+        )}
       </div>
     </main>
   )
@@ -7499,6 +7860,9 @@ function DevicesPane({
   driveConnection: DriveConnectionState
   transferRecords: TransferRecord[]
 }) {
+  const deviceTransferCount = transferRecords.filter((transfer) => transfer.fromDeviceId === device.id).length
+  const driveStatusLabel = driveConnection.folderId ? 'Linked' : driveConnection.status === 'ready' ? 'Ready' : 'Not linked'
+  const lastSeenLabel = new Date(device.lastSeenAt).toLocaleString()
   return (
     <main className="panel editor connected-workspace" data-testid="devices-pane">
       <div className="connected-page-head">
@@ -7507,7 +7871,47 @@ function DevicesPane({
           <h1>Connected Lab Notebook devices</h1>
           <p className="muted">This first version registers the current desktop/PWA device locally and publishes it into the Google Drive manifest during sync.</p>
         </div>
+        <div className="connected-metrics">
+          <div><strong>1</strong><span>Device</span></div>
+          <div><strong>{driveConnection.status === 'ready' ? 'Ready' : 'Setup'}</strong><span>Drive</span></div>
+          <div><strong>{deviceTransferCount}</strong><span>Transfers</span></div>
+        </div>
       </div>
+      <section className="connected-card devices-table-card">
+        <div className="connected-card-head">
+          <div>
+            <div className="section-title">Registered devices</div>
+            <div className="muted tiny">Device records published to the Drive manifest. More desktop and PWA devices will appear here after sync.</div>
+          </div>
+        </div>
+        <div className="device-toolbar">
+          <div className="device-filters" aria-label="Device filters">
+            <span className="status-chip success">Current device</span>
+            <span className="status-chip warning">{driveStatusLabel}</span>
+          </div>
+        </div>
+        <div className="connected-table devices-table">
+          <div className="connected-table-row head">
+            <span>Device</span>
+            <span>Platform</span>
+            <span>Last seen</span>
+            <span>Drive</span>
+            <span>Transfers</span>
+            <span>Status</span>
+          </div>
+          <div className="connected-table-row">
+            <span data-label="Device">
+              <strong>{device.name}</strong>
+              <small>{device.id}</small>
+            </span>
+            <span data-label="Platform">{device.platform}</span>
+            <span data-label="Last seen">{lastSeenLabel}</span>
+            <span data-label="Drive">{driveStatusLabel}</span>
+            <span data-label="Transfers">{deviceTransferCount}</span>
+            <span data-label="Status"><span className="status-chip success">Local device</span></span>
+          </div>
+        </div>
+      </section>
       <div className="connected-grid two">
         <section className="connected-card">
           <div className="section-title">This device</div>
@@ -7532,7 +7936,7 @@ function DevicesPane({
             </label>
             <label className="field">
               <span>Last seen</span>
-              <input value={new Date(device.lastSeenAt).toLocaleString()} readOnly />
+              <input value={lastSeenLabel} readOnly />
             </label>
           </div>
         </section>
@@ -7545,11 +7949,11 @@ function DevicesPane({
             </div>
             <div className="settings-path-card">
               <div className="settings-path-label">Status</div>
-              <div className="settings-path">{driveConnection.status}</div>
+              <div className="settings-path">{driveStatusLabel}</div>
             </div>
             <div className="settings-path-card">
               <div className="settings-path-label">Transfers from this device</div>
-              <div className="settings-path">{transferRecords.filter((transfer) => transfer.fromDeviceId === device.id).length}</div>
+              <div className="settings-path">{deviceTransferCount}</div>
             </div>
           </div>
         </section>
@@ -7568,6 +7972,16 @@ function TransfersPane({
   onOpenEntry: (entryId: string) => void
 }) {
   const itemById = useMemo(() => new Map(fileBoxItems.map((item) => [item.id, item])), [fileBoxItems])
+  const queuedCount = transfers.filter((transfer) => transfer.status === 'queued').length
+  const uploadingCount = transfers.filter((transfer) => transfer.status === 'uploading').length
+  const availableCount = transfers.filter((transfer) => transfer.status === 'available' || transfer.status === 'attached').length
+  const failedCount = transfers.filter((transfer) => transfer.status === 'failed' || transfer.status === 'conflict').length
+  const transferStages: Array<{ label: string; value: number; hint: string; icon: UiIconName; tone: 'success' | 'warning' | 'danger' }> = [
+    { label: 'Queued', value: queuedCount, hint: 'Waiting to upload', icon: 'list', tone: 'warning' },
+    { label: 'Uploading', value: uploadingCount, hint: 'Sending to Drive', icon: 'refresh', tone: 'warning' },
+    { label: 'Available', value: availableCount, hint: 'Ready on devices', icon: 'check', tone: 'success' },
+    { label: 'Review', value: failedCount, hint: 'Failed or conflict', icon: 'alert', tone: failedCount ? 'danger' : 'success' },
+  ]
   return (
     <main className="panel editor connected-workspace" data-testid="transfers-pane">
       <div className="connected-page-head">
@@ -7576,8 +7990,32 @@ function TransfersPane({
           <h1>File transfer activity</h1>
           <p className="muted">Every file-box action creates an auditable transfer row that can later be synced through Google Drive.</p>
         </div>
+        <div className="connected-metrics">
+          <div><strong>{transfers.length}</strong><span>Total</span></div>
+          <div><strong>{transfers.filter((transfer) => transfer.status === 'queued' || transfer.status === 'uploading').length}</strong><span>Active</span></div>
+          <div><strong>{transfers.filter((transfer) => transfer.status === 'failed' || transfer.status === 'conflict').length}</strong><span>Needs review</span></div>
+        </div>
       </div>
       <section className="connected-card">
+        <div className="transfer-stage-grid" aria-label="Transfer status summary">
+          {transferStages.map((stage) => (
+            <div className={`transfer-stage ${stage.tone}`} key={stage.label}>
+              <span className="transfer-stage-icon"><UiIcon name={stage.icon} /></span>
+              <strong>{stage.value}</strong>
+              <span>{stage.label}</span>
+              <small>{stage.hint}</small>
+            </div>
+          ))}
+        </div>
+        <div className="transfer-toolbar">
+          <div className="transfer-filters" aria-label="Transfer status filters">
+            <span className="status-chip success">All</span>
+            <span className="status-chip warning">Queued</span>
+            <span className="status-chip warning">Uploading</span>
+            <span className="status-chip success">Available</span>
+            <span className="status-chip danger">Failed</span>
+          </div>
+        </div>
         <div className="connected-table">
           <div className="connected-table-row head">
             <span>File</span>
@@ -7586,16 +8024,23 @@ function TransfersPane({
             <span>Updated</span>
             <span>Entry</span>
           </div>
-          {transfers.length === 0 && <div className="connected-empty">No transfers yet.</div>}
+          {transfers.length === 0 && (
+            <div className="connected-empty transfer-empty-state">
+              <div className="transfer-empty-icon"><UiIcon name="folder" /></div>
+              <strong>No transfers yet</strong>
+              <span>Files attached from the desktop, Android PWA, or entry File Box will appear here with queue, sync, and conflict status.</span>
+              <small>Try dropping a file into an entry or capturing a photo from the mobile app.</small>
+            </div>
+          )}
           {transfers.map((transfer) => {
             const item = transfer.fileBoxItemId ? itemById.get(transfer.fileBoxItemId) : undefined
             return (
               <div className="connected-table-row" key={transfer.id}>
-                <span>{transfer.filename}</span>
-                <span>{transfer.fromDeviceName}</span>
-                <span><span className={`status-chip ${transfer.status === 'failed' || transfer.status === 'conflict' ? 'danger' : transfer.status === 'attached' || transfer.status === 'available' ? 'success' : 'warning'}`}>{transferStatusLabel(transfer.status)}</span></span>
-                <span>{new Date(transfer.updatedAt).toLocaleString()}</span>
-                <span>{transfer.entryId ? <button className="ghost subtle" type="button" onClick={() => onOpenEntry(transfer.entryId!)}>Open</button> : item?.entryId ? <button className="ghost subtle" type="button" onClick={() => onOpenEntry(item.entryId)}>Open</button> : '—'}</span>
+                <span data-label="File">{transfer.filename}</span>
+                <span data-label="From">{transfer.fromDeviceName}</span>
+                <span data-label="Status"><span className={`status-chip ${transfer.status === 'failed' || transfer.status === 'conflict' ? 'danger' : transfer.status === 'attached' || transfer.status === 'available' ? 'success' : 'warning'}`}>{transferStatusLabel(transfer.status)}</span></span>
+                <span data-label="Updated">{new Date(transfer.updatedAt).toLocaleString()}</span>
+                <span>{transfer.entryId ? <button className="ghost subtle" type="button" onClick={() => onOpenEntry(transfer.entryId!)}>Open</button> : item?.entryId ? <button className="ghost subtle" type="button" onClick={() => onOpenEntry(item.entryId)}>Open</button> : '-'}</span>
               </div>
             )
           })}
@@ -7765,8 +8210,21 @@ function SyncPane({
         </div>
         <button className="accent icon-btn" type="button" onClick={() => void onRunDriveSync()} disabled={syncing}>
           <span className="icon"><UiIcon name="refresh" /></span>
-          {syncing ? 'Syncing…' : 'Connect / Sync Drive'}
+          {syncing ? 'Syncing...' : 'Connect / Sync Drive'}
         </button>
+      </div>
+
+      <div className="sync-mobile-status-grid" aria-label="Sync status summary">
+        <div>
+          <span className="icon"><UiIcon name="note" /></span>
+          <strong>Local first</strong>
+          <small>On this device</small>
+        </div>
+        <div>
+          <span className="icon"><UiIcon name="folder" /></span>
+          <strong>Google Drive</strong>
+          <small>{driveConnection.folderId ? 'Connected' : driveConnection.status === 'needs-auth' ? 'Needs sign-in' : 'Not connected'}</small>
+        </div>
       </div>
 
       <div className="connected-grid two">
@@ -7774,9 +8232,9 @@ function SyncPane({
           <div className="section-title">First sync setup</div>
           <p className="muted">Local entries stay on this device first. When you connect Drive, the app creates an Easylab Lab Notebook folder and syncs only app-owned files with the narrow Drive file scope.</p>
           <ol className="sync-setup-list">
-            <li><strong>Choose the Drive folder name.</strong><span>Use the default unless you want a separate test folder.</span></li>
-            <li><strong>Connect Google Drive.</strong><span>Desktop uses a Google OAuth desktop client; browser/PWA installs use a web client for their origin.</span></li>
-            <li><strong>Run sync and review the result.</strong><span>Entries, file-box metadata, transfers, conflicts, tombstones, and attachments are written under that Drive folder.</span></li>
+            <li><strong>Choose the Drive folder.</strong><span>Use the default or name a separate notebook folder.</span></li>
+            <li><strong>Connect Google Drive.</strong><span>Desktop and PWA use the matching OAuth client ID.</span></li>
+            <li><strong>Run sync.</strong><span>Entries, files, and conflicts sync there.</span></li>
           </ol>
           <div className="settings-grid">
             <label className="field">
@@ -7873,10 +8331,10 @@ function SyncPane({
         <section className="connected-card">
           <div className="section-title">Where files go</div>
           <div className="settings-output-grid compact">
-            <div className="settings-path-card"><div className="settings-path-label">Local data</div><div className="settings-path">{appPaths.dataRoot}</div></div>
-            <div className="settings-path-card"><div className="settings-path-label">Local attachments</div><div className="settings-path">{appPaths.attachmentsRoot}</div></div>
-            <div className="settings-path-card"><div className="settings-path-label">Exports</div><div className="settings-path">{appPaths.exportRoot}</div></div>
-            <div className="settings-path-card"><div className="settings-path-label">Legacy sync root</div><div className="settings-path">{masterSyncPath || appPaths.syncRoot}</div></div>
+            <div className="settings-path-card"><div className="settings-path-label">Local data</div><div className="settings-path" title={formatDisplayPath(appPaths.dataRoot)}>{formatDisplayPath(appPaths.dataRoot)}</div></div>
+            <div className="settings-path-card"><div className="settings-path-label">Local attachments</div><div className="settings-path" title={formatDisplayPath(appPaths.attachmentsRoot)}>{formatDisplayPath(appPaths.attachmentsRoot)}</div></div>
+            <div className="settings-path-card"><div className="settings-path-label">Exports</div><div className="settings-path" title={formatDisplayPath(appPaths.exportRoot)}>{formatDisplayPath(appPaths.exportRoot)}</div></div>
+            <div className="settings-path-card"><div className="settings-path-label">Legacy sync root</div><div className="settings-path" title={formatDisplayPath(masterSyncPath || appPaths.syncRoot)}>{formatDisplayPath(masterSyncPath || appPaths.syncRoot)}</div></div>
             <div className="settings-path-card"><div className="settings-path-label">Drive folder id</div><div className="settings-path">{driveConnection.folderId ?? 'Created after first successful sync'}</div></div>
             <div className="settings-path-card"><div className="settings-path-label">Drive layout</div><div className="settings-path">manifest.json, devices, entries, attachments, filebox, transfers, conflicts, tombstones</div></div>
           </div>
@@ -7982,7 +8440,7 @@ function SyncPane({
               <div className="connected-row" key={conflict.id}>
                 <div className="connected-row-icon"><UiIcon name="alert" /></div>
                 <div className="connected-row-main">
-                  <strong>{conflict.entityKind} · {conflict.entityId}</strong>
+                  <strong>{conflict.entityKind} - {conflict.entityId}</strong>
                   <span>{conflict.summary}</span>
                   {conflict.resolution === 'pending' ? (
                     <div className="conflict-actions">
@@ -8009,7 +8467,7 @@ function TransferRow({ transfer, compact = false }: { transfer: TransferRecord; 
       <div className="connected-row-icon"><UiIcon name="refresh" /></div>
       <div className="connected-row-main">
         <strong>{transfer.filename}</strong>
-        <span>{transfer.fromDeviceName} · {new Date(transfer.updatedAt).toLocaleString()}</span>
+        <span>{transfer.fromDeviceName} - {new Date(transfer.updatedAt).toLocaleString()}</span>
       </div>
       <span className={`status-chip ${transfer.status === 'failed' || transfer.status === 'conflict' ? 'danger' : transfer.status === 'attached' || transfer.status === 'available' ? 'success' : 'warning'}`}>
         {transferStatusLabel(transfer.status)}
@@ -8985,18 +9443,36 @@ function WorkbookSheet({
           </button>
         </div>
       </div>
+      <div className="workbook-formula-row">
+        <span className="workbook-formula-cell">{selectedRangeLabel}</span>
+        <span className="workbook-formula-prefix">fx</span>
+        <input
+          value={grid[selectedCell.rowIdx]?.[selectedCell.colIdx] ?? ''}
+          onFocus={ensureEditing}
+          onChange={(event) => updateCell(selectedCell.rowIdx, selectedCell.colIdx, event.target.value)}
+          placeholder="Enter value or formula"
+          aria-label={`Formula bar for ${selectedRangeLabel}`}
+        />
+      </div>
       <div className="workbook-commandbar" aria-label="Workbook structure commands">
-        <button type="button" onClick={() => void copySelection()}>Copy</button>
-        <button type="button" onClick={() => void cutCell()}>Cut</button>
-        <button type="button" onClick={() => void pasteFromClipboard()}>Paste</button>
-        <span className="workbook-format-divider" />
-        <button type="button" onClick={() => insertRow(selectedCell.rowIdx)} disabled={grid.length >= WORKBOOK_MAX_ROWS}>Row above</button>
-        <button type="button" onClick={() => insertRow(selectedCell.rowIdx + 1)} disabled={grid.length >= WORKBOOK_MAX_ROWS}>Row below</button>
-        <button type="button" onClick={deleteRow}>Delete row</button>
-        <span className="workbook-format-divider" />
-        <button type="button" onClick={() => insertColumn(selectedCell.colIdx)} disabled={(grid[0]?.length ?? 0) >= WORKBOOK_MAX_COLS}>Col left</button>
-        <button type="button" onClick={() => insertColumn(selectedCell.colIdx + 1)} disabled={(grid[0]?.length ?? 0) >= WORKBOOK_MAX_COLS}>Col right</button>
-        <button type="button" onClick={deleteColumn}>Delete col</button>
+        <div className="workbook-command-group">
+          <button type="button" onClick={() => void copySelection()}>Copy</button>
+          <button type="button" onClick={() => void cutCell()}>Cut</button>
+          <button type="button" onClick={() => void pasteFromClipboard()}>Paste</button>
+          <span className="workbook-command-label">Clipboard</span>
+        </div>
+        <div className="workbook-command-group">
+          <button type="button" onClick={() => insertRow(selectedCell.rowIdx)} disabled={grid.length >= WORKBOOK_MAX_ROWS} title="Insert row above">+ Row</button>
+          <button type="button" onClick={() => insertColumn(selectedCell.colIdx + 1)} disabled={(grid[0]?.length ?? 0) >= WORKBOOK_MAX_COLS} title="Insert column right">+ Col</button>
+          <span className="workbook-command-label">Insert</span>
+        </div>
+        <div className="workbook-command-group">
+          <button type="button" onClick={() => insertRow(selectedCell.rowIdx + 1)} disabled={grid.length >= WORKBOOK_MAX_ROWS} title="Insert row below">Row below</button>
+          <button type="button" onClick={deleteRow} title="Delete selected row">Del row</button>
+          <button type="button" onClick={() => insertColumn(selectedCell.colIdx)} disabled={(grid[0]?.length ?? 0) >= WORKBOOK_MAX_COLS} title="Insert column left">Col left</button>
+          <button type="button" onClick={deleteColumn} title="Delete selected column">Del col</button>
+          <span className="workbook-command-label">Rows / columns</span>
+        </div>
       </div>
       <div className="workbook-formatbar" aria-label="Workbook cell formatting">
         <span className="workbook-format-label">Cell</span>
@@ -9078,6 +9554,16 @@ function WorkbookSheet({
             ))}
           </tbody>
         </table>
+      </div>
+      <div className="workbook-sheet-strip">
+        <button className="active" type="button">Data</button>
+        <button type="button">Summary</button>
+        <button type="button">qPCR</button>
+        <button type="button">ELISA</button>
+        <button type="button" aria-label="Add sheet">+</button>
+        <span>Ready</span>
+        <span>Selected: {selectedRangeLabel}</span>
+        <span>{grid.length} x {grid[0]?.length ?? 0}</span>
       </div>
     </div>
   )
@@ -9260,7 +9746,7 @@ function EditorInsertBar({
             onClick={() => HistoryEditor.undo(editor)}
             aria-label="Undo"
           >
-            Undo
+            <UiIcon name="undo" />
           </button>
           <button
             className="pill soft"
@@ -9270,7 +9756,7 @@ function EditorInsertBar({
             onClick={() => HistoryEditor.redo(editor)}
             aria-label="Redo"
           >
-            Redo
+            <UiIcon name="redo" />
           </button>
         </div>
         <div className="toolbar-group">
@@ -9303,38 +9789,27 @@ function EditorInsertBar({
           </button>
         </div>
         <div className="toolbar-group">
-          <button className="pill soft" type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => insertHeadingBlock(editor, 2)}>
+          <button className="pill soft" type="button" aria-label="Header" title="Header" onMouseDown={(e) => e.preventDefault()} onClick={() => insertHeadingBlock(editor, 2)}>
             <UiIcon name="note" />
-            Header
+            H
           </button>
-          <button className="pill soft" type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => insertChecklistBlock(editor)}>
+          <button className="pill soft" type="button" aria-label="Checklist" title="Checklist" onMouseDown={(e) => e.preventDefault()} onClick={() => insertChecklistBlock(editor)}>
             <UiIcon name="check" />
-            Checks
           </button>
-          <button className="pill soft" type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => insertTableBlock(editor, [['Sample', 'Value']])}>
+          <button className="pill soft" type="button" aria-label="Table" title="Table" onMouseDown={(e) => e.preventDefault()} onClick={() => insertTableBlock(editor, [['Sample', 'Value']])}>
             <UiIcon name="table" />
-            Table
           </button>
         </div>
         <div className="toolbar-group">
-          <button className="pill soft" type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => cameraRef.current?.click()}>
-            <UiIcon name="camera" />
-            Photo
-          </button>
-          <button className="pill soft" type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => fileRef.current?.click()}>
-            <UiIcon name="file" />
-            File
-          </button>
           {onShowTags && (
-            <button className="pill soft" type="button" onMouseDown={(e) => e.preventDefault()} onClick={onShowTags}>
+            <button className="pill soft" type="button" aria-label="Tags" title="Tags" onMouseDown={(e) => e.preventDefault()} onClick={onShowTags}>
               <UiIcon name="tag" />
-              Tags
             </button>
           )}
         </div>
       </div>
       <div className="editor-toolbar" contentEditable={false} data-testid="editor-toolbar">
-        <div className="toolbar-group">
+        <div className="toolbar-group toolbar-history">
           <button
             className="pill soft"
             type="button"
@@ -9344,7 +9819,7 @@ function EditorInsertBar({
             aria-label="Undo"
             data-testid="editor-undo"
           >
-            ↶
+            <UiIcon name="undo" />
           </button>
           <button
             className="pill soft"
@@ -9355,13 +9830,13 @@ function EditorInsertBar({
             aria-label="Redo"
             data-testid="editor-redo"
           >
-            ↷
+            <UiIcon name="redo" />
           </button>
         </div>
 
         <div className="toolbar-sep" />
 
-        <div className="toolbar-group">
+        <div className="toolbar-group toolbar-type">
           <label className="toolbar-label">
             Font
             <select
@@ -9505,7 +9980,7 @@ function EditorInsertBar({
 
         <div className="toolbar-sep" />
 
-        <div className="toolbar-group">
+        <div className="toolbar-group toolbar-alignment">
           <button
             className={`pill soft align-pill ${activeAlign === 'left' ? 'active-pill' : ''}`}
             type="button"
@@ -9550,7 +10025,7 @@ function EditorInsertBar({
 
         <div className="toolbar-sep" />
 
-        <div className="toolbar-group">
+        <div className="toolbar-group toolbar-structure">
           <button className="pill soft" type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => insertHeadingBlock(editor, 2)}>
             <UiIcon name="note" />
             Header
@@ -9582,7 +10057,7 @@ function EditorInsertBar({
 
         <div className="toolbar-sep" />
 
-        <div className="toolbar-group">
+        <div className="toolbar-group toolbar-sections">
           <button className="pill soft" type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => insertSection(editor, 'Context')}>
             + Context
           </button>
@@ -9596,7 +10071,7 @@ function EditorInsertBar({
 
         <div className="toolbar-sep" />
 
-        <div className="toolbar-group">
+        <div className="toolbar-group toolbar-insert">
           <button className="pill soft" type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => imgRef.current?.click()}>
             <UiIcon name="image" />
             Image
@@ -9699,7 +10174,7 @@ function ProtocolInsertBar({ editor, revision }: { editor: HistoryReactEditor; r
           aria-label="Undo"
           data-testid="protocol-undo"
         >
-          ↶
+          <UiIcon name="undo" />
         </button>
         <button
           className="pill soft"
@@ -9710,7 +10185,7 @@ function ProtocolInsertBar({ editor, revision }: { editor: HistoryReactEditor; r
           aria-label="Redo"
           data-testid="protocol-redo"
         >
-          ↷
+          <UiIcon name="redo" />
         </button>
       </div>
 
@@ -10632,7 +11107,7 @@ function BlockRenderer({ block, attachments, attachmentUrls, onUpdateBlock }: Bl
           </div>
           <div className="media-mobile-row" data-testid="image-block-mobile">
             <span className="media-mobile-icon" aria-hidden="true">
-              🖼️
+              Image
             </span>
             <div className="media-mobile-meta">
               <div className="title-sm">{imageTitle}</div>
@@ -10766,7 +11241,7 @@ function TagFilterDropdown({
         data-testid={`${testId}-trigger`}
       >
         <span>{selected.length ? `${selected.length} selected` : placeholder ?? `Select ${label.toLowerCase()}`}</span>
-        <span className="icon">▾</span>
+        <span className="icon">v</span>
       </button>
       {selected.length > 0 && (
         <div className="tag-selected-row" data-testid={`${testId}-selected`}>
@@ -10780,7 +11255,7 @@ function TagFilterDropdown({
             >
               {tag}
               <span className="icon" aria-hidden="true">
-                ×
+                x
               </span>
             </button>
           ))}
@@ -10884,6 +11359,8 @@ function TagPicker({
         {showMeta &&
           (selected.length ? (
             <span className="pill soft">{selected.length} selected</span>
+          ) : options.length ? (
+            <span className="muted tiny">Choose tags</span>
           ) : (
             <span className="muted tiny">No tags yet</span>
           ))}
@@ -11170,26 +11647,29 @@ function SettingsModal({
             </button>
           </div>
           <div className="settings-output-grid">
-            {outputDestinations.map((item) => (
-              <div className="settings-path-card" key={item.label}>
-                <div className="settings-path-card-head">
-                  <div className="settings-path-label">{item.label}</div>
-                  <span className={`status-chip ${item.path ? 'success' : 'warning'}`}>
-                    {item.path ? 'Set' : 'Missing'}
-                  </span>
+            {outputDestinations.map((item) => {
+              const displayPath = formatDisplayPath(item.path)
+              return (
+                <div className="settings-path-card" key={item.label}>
+                  <div className="settings-path-card-head">
+                    <div className="settings-path-label">{item.label}</div>
+                    <span className={`status-chip ${item.path ? 'success' : 'warning'}`}>
+                      {item.path ? 'Set' : 'Missing'}
+                    </span>
+                  </div>
+                  <div className="settings-path" title={displayPath || undefined}>{displayPath || 'Not set'}</div>
+                  <div className="settings-path-use">{item.use}</div>
                 </div>
-                <div className="settings-path">{item.path || 'Not set'}</div>
-                <div className="settings-path-use">{item.use}</div>
-              </div>
-            ))}
+              )
+            })}
           </div>
           <div className="settings-notes">
             <div className="muted tiny">
-              <strong>Export buttons:</strong> use <code>{appPaths.exportRoot || 'Generated exports'}</code> as the intended output folder. Chrome/Edge folder exports may still ask you to confirm a location; fallback downloads go to the browser Downloads folder.
+              <strong>Export buttons:</strong> use <code>{formatDisplayPath(appPaths.exportRoot) || 'Generated exports'}</code> as the intended output folder. Chrome/Edge folder exports may still ask you to confirm a location; fallback downloads go to the browser Downloads folder.
             </div>
             <div className="muted tiny">
               <strong>Phone intake:</strong> Telegram and WhatsApp captures save files under{' '}
-              <code>{appPaths.attachmentsRoot || 'Attachment intake'}</code> and then link them into the daily note.
+              <code>{formatDisplayPath(appPaths.attachmentsRoot) || 'Attachment intake'}</code> and then link them into the daily note.
             </div>
           </div>
         </div>
@@ -11399,7 +11879,7 @@ function SettingsModal({
                 }
               }}
             >
-              {importing ? 'Importing…' : 'Import from folder'}
+              {importing ? 'Importing...' : 'Import from folder'}
             </button>
             <button
               className="ghost"
@@ -11618,7 +12098,7 @@ function SetupWizard({
             on this machine. You can edit these later in Settings.
           </p>
           <p className="muted tiny">
-            These folders do not need to exist yet — Easylab will create them when you finish setup.
+            These folders do not need to exist yet - Easylab will create them when you finish setup.
           </p>
 
           <div className="setup-grid">
@@ -11727,7 +12207,7 @@ function SetupWizard({
               onClick={handleComplete}
               disabled={creating}
             >
-              {creating ? 'Creating…' : 'Finish setup'}
+              {creating ? 'Creating...' : 'Finish setup'}
             </button>
           </div>
         </div>
