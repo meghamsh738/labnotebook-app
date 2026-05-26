@@ -14011,7 +14011,7 @@ kbd {
 
   .app-shell {
     --sidebar-width: 320px;
-    gap: 24px;
+    gap: 0;
   }
 
   .sidebar {
@@ -14060,7 +14060,42 @@ kbd {
   }
 
   .editor-header .editor-toolbar .toolbar-group {
-    gap: 7px;
+    gap: 5px;
+  }
+
+  .editor-header .editor-toolbar .toolbar-sections,
+  .editor-header .editor-toolbar .toolbar-sections + .toolbar-sep {
+    display: none;
+  }
+
+  .editor-header .editor-toolbar .toolbar-structure .pill,
+  .editor-header .editor-toolbar .toolbar-insert .pill {
+    width: 30px;
+    min-width: 30px;
+    padding-inline: 0;
+    justify-content: center;
+    font-size: 0;
+  }
+
+  .editor-header .editor-toolbar .toolbar-structure .pill[data-testid^='editor-list'] {
+    font-size: 13px;
+  }
+
+  .editor-header .editor-toolbar .toolbar-structure .pill .ui-icon,
+  .editor-header .editor-toolbar .toolbar-insert .pill .ui-icon {
+    width: 16px;
+    height: 16px;
+  }
+
+  .editor-header .editor-toolbar .toolbar-insert .pill:not([aria-label='File destination']) {
+    display: none;
+  }
+
+  .editor-header .editor-toolbar .color-swatches,
+  .editor-header .editor-toolbar [data-testid='editor-superscript'],
+  .editor-header .editor-toolbar [data-testid='editor-subscript'],
+  .editor-header .editor-toolbar .toolbar-structure .pill:not([aria-label='Checks']):not([data-testid='editor-list-dot']):not([aria-label='Tags']) {
+    display: none;
   }
 
   .editor-header .editor-toolbar .pill,

@@ -10070,11 +10070,11 @@ function EditorInsertBar({
         <div className="toolbar-sep" />
 
         <div className="toolbar-group toolbar-structure">
-          <button className="pill soft" type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => insertHeadingBlock(editor, 2)}>
+          <button className="pill soft" type="button" aria-label="Header" title="Insert header" onMouseDown={(e) => e.preventDefault()} onClick={() => insertHeadingBlock(editor, 2)}>
             <UiIcon name="note" />
             Header
           </button>
-          <button className="pill soft" type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => insertChecklistBlock(editor)}>
+          <button className="pill soft" type="button" aria-label="Checks" title="Insert checklist" onMouseDown={(e) => e.preventDefault()} onClick={() => insertChecklistBlock(editor)}>
             <UiIcon name="check" />
             Checks
           </button>
@@ -10092,7 +10092,7 @@ function EditorInsertBar({
             </button>
           ))}
           {onShowTags && (
-            <button className="pill soft" type="button" onMouseDown={(e) => e.preventDefault()} onClick={onShowTags}>
+            <button className="pill soft" type="button" aria-label="Tags" title="Manage tags" onMouseDown={(e) => e.preventDefault()} onClick={onShowTags}>
               <UiIcon name="tag" />
               Tags
             </button>
@@ -10102,13 +10102,13 @@ function EditorInsertBar({
         <div className="toolbar-sep" />
 
         <div className="toolbar-group toolbar-sections">
-          <button className="pill soft" type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => insertSection(editor, 'Context')}>
+          <button className="pill soft" type="button" aria-label="Add context section" title="Add context section" onMouseDown={(e) => e.preventDefault()} onClick={() => insertSection(editor, 'Context')}>
             + Context
           </button>
-          <button className="pill soft" type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => insertSectionWithChecklist(editor, 'Setup')}>
+          <button className="pill soft" type="button" aria-label="Add setup checklist section" title="Add setup checklist section" onMouseDown={(e) => e.preventDefault()} onClick={() => insertSectionWithChecklist(editor, 'Setup')}>
             + Setup
           </button>
-          <button className="pill soft" type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => insertSection(editor, 'Observations')}>
+          <button className="pill soft" type="button" aria-label="Add observations section" title="Add observations section" onMouseDown={(e) => e.preventDefault()} onClick={() => insertSection(editor, 'Observations')}>
             + Observations
           </button>
         </div>
@@ -10116,27 +10116,27 @@ function EditorInsertBar({
         <div className="toolbar-sep" />
 
         <div className="toolbar-group toolbar-insert">
-          <button className="pill soft" type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => imgRef.current?.click()}>
+          <button className="pill soft" type="button" aria-label="Image" title="Insert image" onMouseDown={(e) => e.preventDefault()} onClick={() => imgRef.current?.click()}>
             <UiIcon name="image" />
             Image
           </button>
-          <button className="pill soft" type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => cameraRef.current?.click()}>
+          <button className="pill soft" type="button" aria-label="Camera" title="Capture photo" onMouseDown={(e) => e.preventDefault()} onClick={() => cameraRef.current?.click()}>
             <UiIcon name="camera" />
             Camera
           </button>
-          <button className="pill soft" type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => insertTableBlock(editor, [['Sample', 'Value']])}>
+          <button className="pill soft" type="button" aria-label="Table" title="Insert table" onMouseDown={(e) => e.preventDefault()} onClick={() => insertTableBlock(editor, [['Sample', 'Value']])}>
             <UiIcon name="table" />
             Table
           </button>
-          <button className="pill soft" type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => fileRef.current?.click()}>
+          <button className="pill soft" type="button" aria-label="File" title="Attach file" onMouseDown={(e) => e.preventDefault()} onClick={() => fileRef.current?.click()}>
             <UiIcon name="file" />
             File
           </button>
-          <button className="pill soft" type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => setDestOpen(true)}>
+          <button className="pill soft" type="button" aria-label="File destination" title="Set file destination" onMouseDown={(e) => e.preventDefault()} onClick={() => setDestOpen(true)}>
             <UiIcon name="folder" />
             File destination
           </button>
-          <button className="pill soft" type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => insertDividerBlock(editor)}>
+          <button className="pill soft" type="button" aria-label="Divider" title="Insert divider" onMouseDown={(e) => e.preventDefault()} onClick={() => insertDividerBlock(editor)}>
             <UiIcon name="minus" />
             Divider
           </button>
