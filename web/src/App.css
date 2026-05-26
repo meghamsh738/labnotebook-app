@@ -7866,7 +7866,7 @@
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
   gap: 5px;
   align-items: end;
-  margin-bottom: 4px;
+  margin: 7px 0 0;
 }
 
 .sidebar-content:has(.sidebar-search-reference) > .sidebar-calendar-section .field {

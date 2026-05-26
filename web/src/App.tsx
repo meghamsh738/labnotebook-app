@@ -5707,34 +5707,6 @@ function Sidebar({
                     })}
                   </div>
                 </div>
-                <div className="calendar-range">
-                  <label className="field">
-                    <span className="muted tiny">From</span>
-                    <input
-                      type="date"
-                      value={dateRange.start}
-                      onChange={(e) => onDateRangeChange({ start: e.target.value, end: dateRange.end })}
-                      data-testid="date-range-start"
-                    />
-                  </label>
-                  <label className="field">
-                    <span className="muted tiny">To</span>
-                    <input
-                      type="date"
-                      value={dateRange.end}
-                      onChange={(e) => onDateRangeChange({ start: dateRange.start, end: e.target.value })}
-                      data-testid="date-range-end"
-                    />
-                  </label>
-                  <button
-                    className="ghost"
-                    type="button"
-                    onClick={() => onDateRangeChange({ start: '', end: '' })}
-                    data-testid="date-range-clear"
-                  >
-                    All
-                  </button>
-                </div>
                 <div className="calendar" data-testid="calendar">
                   <div className="calendar-header">
                     <div className="calendar-month">{calendarLabel}</div>
@@ -5818,6 +5790,34 @@ function Sidebar({
                       </button>
                     </div>
                   )}
+                </div>
+                <div className="calendar-range">
+                  <label className="field">
+                    <span className="muted tiny">From</span>
+                    <input
+                      type="date"
+                      value={dateRange.start}
+                      onChange={(e) => onDateRangeChange({ start: e.target.value, end: dateRange.end })}
+                      data-testid="date-range-start"
+                    />
+                  </label>
+                  <label className="field">
+                    <span className="muted tiny">To</span>
+                    <input
+                      type="date"
+                      value={dateRange.end}
+                      onChange={(e) => onDateRangeChange({ start: dateRange.start, end: e.target.value })}
+                      data-testid="date-range-end"
+                    />
+                  </label>
+                  <button
+                    className="ghost"
+                    type="button"
+                    onClick={() => onDateRangeChange({ start: '', end: '' })}
+                    data-testid="date-range-clear"
+                  >
+                    All
+                  </button>
                 </div>
               </section>
 
