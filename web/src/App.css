@@ -13799,6 +13799,10 @@ kbd {
 
 /* File Hub reference rail: connected panes use a dark brand cap with a lighter workspace rail. */
 @media (min-width: 761px) and (min-height: 521px), (min-width: 761px) and (hover: hover) and (pointer: fine) {
+  .sidebar .sidebar-header-actions .mobile-close-sidebar {
+    display: none !important;
+  }
+
   .sidebar.sidebar-mode-entries .sidebar-header,
   .sidebar.sidebar-mode-protocols .sidebar-header,
   .sidebar.sidebar-mode-connected .sidebar-header {

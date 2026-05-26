@@ -160,6 +160,7 @@ test.describe('Lab note taking app', () => {
     await expect(page.getByRole('button', { name: /today's entry/i })).toBeVisible()
     await expect(page.getByTestId('project-tag-filter-trigger')).toBeVisible()
     await expect(page.getByTestId('sidebar-toggle')).toBeVisible()
+    await expect(page.locator('.mobile-close-sidebar')).toBeHidden()
     await expect(page.getByTestId('calendar')).toBeVisible()
   })
 
