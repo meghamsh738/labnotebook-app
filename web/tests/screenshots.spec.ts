@@ -101,10 +101,10 @@ test('generate feature screenshots', async ({ page }) => {
   await page.getByRole('tab', { name: 'Devices' }).click()
   await expect(page.getByTestId('devices-pane')).toBeVisible()
   await page.screenshot({ path: path.join(outDir, '06b-devices.png'), fullPage: true })
-  await page.getByRole('tab', { name: 'Transfers' }).click()
+  await page.getByRole('button', { name: /Transfers/i }).click()
   await expect(page.getByTestId('transfers-pane')).toBeVisible()
   await page.screenshot({ path: path.join(outDir, '06c-transfers.png'), fullPage: true })
-  await page.getByRole('tab', { name: 'Sync' }).click()
+  await page.getByRole('button', { name: /Google Drive Sync/i }).click()
   await expect(page.getByTestId('sync-pane')).toBeVisible()
   await page.screenshot({ path: path.join(outDir, '07-sync-pane.png'), fullPage: true })
 

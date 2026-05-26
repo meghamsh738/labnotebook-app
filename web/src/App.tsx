@@ -5488,7 +5488,7 @@ function Sidebar({
               <span>Devices</span>
             </button>
             <button
-              className={`pill soft ${mode === 'transfers' ? 'active-pill' : ''}`}
+              className={`pill soft desktop-secondary-tab ${mode === 'transfers' ? 'active-pill' : ''}`}
               type="button"
               role="tab"
               aria-selected={mode === 'transfers'}
@@ -5498,7 +5498,7 @@ function Sidebar({
               <span>Transfers</span>
             </button>
             <button
-              className={`pill soft ${mode === 'sync' ? 'active-pill' : ''}`}
+              className={`pill soft desktop-secondary-tab ${mode === 'sync' ? 'active-pill' : ''}`}
               type="button"
               role="tab"
               aria-selected={mode === 'sync'}

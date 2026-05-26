@@ -783,10 +783,10 @@ test.describe('Lab note taking app', () => {
     await page.getByRole('tab', { name: 'Devices' }).click()
     await expect(page.getByTestId('devices-pane')).toBeVisible()
 
-    await page.getByRole('tab', { name: 'Transfers' }).click()
+    await page.getByRole('button', { name: /Transfers/i }).click()
     await expect(page.getByTestId('transfers-pane')).toBeVisible()
 
-    await page.getByRole('tab', { name: 'Sync' }).click()
+    await page.getByRole('button', { name: /Google Drive Sync/i }).click()
     await expect(page.getByTestId('sync-pane')).toBeVisible()
     await expect(page.getByRole('heading', { name: 'Device-owned sync without an Easylab cloud server' })).toBeVisible()
     await expect(page.getByText('First sync setup', { exact: true })).toBeVisible()
@@ -830,7 +830,8 @@ test.describe('Lab note taking app', () => {
     })
     await boot(page, { noFail: '1' })
 
-    await page.getByRole('tab', { name: 'Sync' }).click()
+    await page.getByRole('tab', { name: 'File Hub' }).click()
+    await page.getByRole('button', { name: /Google Drive Sync/i }).click()
     await expect(page.getByTestId('storage-health-card')).toBeVisible()
     await expect(page.getByText('Attachment metadata syncs automatically')).toBeVisible()
     await expect(page.getByTestId('storage-persistence-status')).toHaveText('Best effort')
@@ -1025,7 +1026,8 @@ test.describe('Lab note taking app', () => {
       }],
     })
 
-    await page.getByRole('tab', { name: 'Sync' }).click()
+    await page.getByRole('tab', { name: 'File Hub' }).click()
+    await page.getByRole('button', { name: /Google Drive Sync/i }).click()
     await page.getByRole('button', { name: 'Keep both' }).click()
     await expect(page.getByText('kept-copy')).toBeVisible()
     await expect
@@ -1040,7 +1042,8 @@ test.describe('Lab note taking app', () => {
 
   test('journal data core migrates local entries into IndexedDB', async ({ page }) => {
     await boot(page, { noFail: '1' })
-    await page.getByRole('tab', { name: 'Sync' }).click()
+    await page.getByRole('tab', { name: 'File Hub' }).click()
+    await page.getByRole('button', { name: /Google Drive Sync/i }).click()
     await expect(page.getByText('Local data core', { exact: true })).toBeVisible()
 
     await expect
@@ -1209,7 +1212,8 @@ test.describe('Lab note taking app', () => {
   test('sidebar mode options keep stable geometry when switching sections', async ({ page }) => {
     await boot(page, { noFail: '1' })
     const modeToggle = page.locator('.connected-mode-toggle')
-    const labels = ['Entries', 'Protocols', 'File Hub', 'Devices', 'Transfers', 'Sync', 'Entries']
+    const labels = ['Entries', 'Protocols', 'File Hub', 'Devices', 'Entries']
+    const secondaryLabels = [/Transfers/i, /Google Drive Sync/i]
     const geometrySnapshots: string[] = []
     const readModeGeometry = async () =>
       JSON.stringify(
@@ -1239,7 +1243,9 @@ test.describe('Lab note taking app', () => {
             sidebar: readShell(element.closest('.sidebar')),
             content: readShell(element.closest('.sidebar-content')),
             toggle: readBox(element),
-            buttons: Array.from(element.querySelectorAll('button')).map((button) => {
+            buttons: Array.from(element.querySelectorAll('button'))
+              .filter((button) => window.getComputedStyle(button).display !== 'none')
+              .map((button) => {
               const box = button.getBoundingClientRect()
               return {
                 text: button.textContent?.trim(),
@@ -1255,7 +1261,7 @@ test.describe('Lab note taking app', () => {
 
     for (const label of labels) {
       await modeToggle.getByRole('tab', { name: label }).click()
-      await expect(modeToggle.getByRole('tab')).toHaveCount(6)
+      await expect(modeToggle.getByRole('tab')).toHaveCount(4)
       const beforeCollapse = await readModeGeometry()
       await page.getByTestId('sidebar-toggle').click()
       await expect(page.locator('.sidebar')).toHaveClass(/collapsed/)
@@ -1263,6 +1269,13 @@ test.describe('Lab note taking app', () => {
       await expect(page.locator('.sidebar')).not.toHaveClass(/collapsed/)
       await expect(await readModeGeometry()).toBe(beforeCollapse)
       geometrySnapshots.push(beforeCollapse)
+    }
+
+    await modeToggle.getByRole('tab', { name: 'File Hub' }).click()
+    for (const name of secondaryLabels) {
+      await page.getByRole('button', { name }).click()
+      await expect(modeToggle.getByRole('tab')).toHaveCount(4)
+      geometrySnapshots.push(await readModeGeometry())
     }
 
     expect(new Set(geometrySnapshots).size).toBe(1)

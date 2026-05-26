@@ -13500,9 +13500,15 @@ kbd {
   }
 
   .sidebar .mode-toggle.connected-mode-toggle {
-    height: 114px;
-    min-height: 114px;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-rows: 48px;
+    height: 58px;
+    min-height: 58px;
     gap: 8px;
+  }
+
+  .sidebar .mode-toggle.connected-mode-toggle .desktop-secondary-tab {
+    display: none !important;
   }
 
   .sidebar .mode-toggle.connected-mode-toggle .pill {
@@ -13844,10 +13850,12 @@ kbd {
   }
 
   .sidebar.sidebar-mode-connected .mode-toggle.connected-mode-toggle {
-    position: relative;
-    top: auto;
-    height: 114px;
-    min-height: 114px;
+    position: sticky;
+    top: 0;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-rows: 48px;
+    height: 58px;
+    min-height: 58px;
     padding: 3px 0 8px;
     background: transparent;
   }
