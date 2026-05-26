@@ -14002,3 +14002,82 @@ kbd {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* Desktop reference geometry: match the generated standalone-app shell more closely. */
+@media (min-width: 761px) and (min-height: 521px), (min-width: 761px) and (hover: hover) and (pointer: fine) {
+  .app-bg {
+    padding: 0;
+  }
+
+  .app-shell {
+    --sidebar-width: 320px;
+    gap: 24px;
+  }
+
+  .sidebar {
+    border-width: 0 1px 0 0;
+    border-radius: 0 14px 14px 0;
+  }
+
+  .panel.editor {
+    margin: 0;
+    border-width: 0;
+    border-radius: 18px 0 0 18px;
+  }
+
+  .editor-header {
+    padding: 24px 40px 16px;
+  }
+
+  .editor-header-inner {
+    row-gap: 13px;
+  }
+
+  .editor-header .title-row h1 {
+    font-size: clamp(1.55rem, 2vw, 1.85rem);
+  }
+
+  .editor-header .editor-tabs .tab-button {
+    min-height: 40px;
+    padding-inline: 16px;
+  }
+
+  .editor-header .tag-editor {
+    padding-right: 28px;
+  }
+
+  .editor-header .tag-picker.inline .pill {
+    min-height: 27px;
+    padding: 4px 10px;
+    font-size: 12px;
+  }
+
+  .editor-header .editor-toolbar {
+    min-height: 50px;
+    max-height: 52px;
+    padding: 8px 12px;
+    gap: 8px;
+  }
+
+  .editor-header .editor-toolbar .toolbar-group {
+    gap: 7px;
+  }
+
+  .editor-header .editor-toolbar .pill,
+  .editor-header .editor-toolbar .ghost,
+  .editor-header .editor-toolbar button,
+  .editor-header .editor-toolbar .toolbar-label select,
+  .editor-header .editor-toolbar .toolbar-label input {
+    min-height: 34px;
+    padding-inline: 12px;
+    font-size: 13px;
+  }
+
+  .editor-surface {
+    padding: 34px 48px 18px;
+  }
+
+  .slate-editor {
+    min-height: 570px;
+  }
+}
