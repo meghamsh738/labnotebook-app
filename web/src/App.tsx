@@ -751,7 +751,11 @@ const LOCKED_TEMPLATE_SECTION_LABELS = new Set([
   'Results',
 ])
 const LEGACY_DAILY_SECTION_LABELS = new Set(['Setup', 'Procedure', 'Observations', 'Next steps'])
-const DAY_CONTEXT_GUIDE = '• ........................................\n• ........................................\n• ........................................'
+const DAY_CONTEXT_GUIDE = [
+  '• Microglia activation measured by CD68 and Iba1.',
+  '• Comparing IL-17 WT vs KO mice at 12 months.',
+  '• Evaluating response to TNF stimulation at 10 ng/mL.',
+].join('\n')
 
 const DEFAULT_PROJECT_TAGS = [
   'IL-17 WT KO aging project',

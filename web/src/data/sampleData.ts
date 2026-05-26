@@ -67,6 +67,11 @@ const seedYesterdayBucket = `${seedYesterday.getFullYear()}-${String(seedYesterd
 const dateTitleFormat = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
 const seedTitle = dateTitleFormat.format(seedNow)
 const seedYesterdayTitle = dateTitleFormat.format(seedYesterday)
+const seedContextGuide = [
+  '• Microglia activation measured by CD68 and Iba1.',
+  '• Comparing IL-17 WT vs KO mice at 12 months.',
+  '• Evaluating response to TNF stimulation at 10 ng/mL.',
+].join('\n')
 
 const experiments: Experiment[] = [
   {
@@ -95,7 +100,7 @@ const entries: Entry[] = [
         id: 'b-context',
         type: 'paragraph',
         text: '',
-        guide: '• ........................................\n• ........................................\n• ........................................',
+        guide: seedContextGuide,
         updatedAt: seedTimestamp,
         updatedBy: 'me',
       },
@@ -125,7 +130,7 @@ const entries: Entry[] = [
         id: 'b-y-context',
         type: 'paragraph',
         text: '',
-        guide: '• ........................................\n• ........................................\n• ........................................',
+        guide: seedContextGuide,
         updatedAt: seedYesterdayTimestamp,
         updatedBy: 'me',
       },

@@ -319,7 +319,7 @@ test.describe('Lab note taking app', () => {
     await page.getByTestId('today-entry').click()
     await ensureEditMode(page)
 
-    const guideText = '• ........................................'
+    const guideText = '• Microglia activation measured by CD68 and Iba1.'
     const guideLocator = page.getByText(guideText)
     await expect(guideLocator).toBeVisible()
 
@@ -334,7 +334,7 @@ test.describe('Lab note taking app', () => {
     await page.getByTestId('today-entry').click()
     await ensureEditMode(page)
 
-    const guideText = '• ........................................'
+    const guideText = '• Microglia activation measured by CD68 and Iba1.'
 
     await focusBlockById(page, 'b-context')
     await page.keyboard.press('Enter')
