@@ -1,0 +1,8 @@
+{
+  "id": "del-attachment-att-deleted",
+  "entityKind": "attachment",
+  "entityId": "att-deleted",
+  "deletedAt": "2026-05-23T09:50:00.000Z",
+  "deletedByDeviceId": "dev-contract",
+  "reason": "Removed from the contract entry"
+}

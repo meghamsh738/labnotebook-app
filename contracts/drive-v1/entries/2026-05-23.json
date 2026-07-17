@@ -1,0 +1,41 @@
+{
+  "id": "entry-contract",
+  "kind": "entry",
+  "version": 1,
+  "updatedAt": "2026-05-23T09:30:00.000Z",
+  "updatedByDeviceId": "dev-contract",
+  "payload": {
+    "id": "entry-contract",
+    "authorId": "user-contract",
+    "title": "Drive v1 contract entry",
+    "dateBucket": "2026-05-23",
+    "isDaily": true,
+    "createdDatetime": "2026-05-23T08:30:00.000Z",
+    "lastEditedDatetime": "2026-05-23T09:30:00.000Z",
+    "content": [
+      {
+        "id": "block-contract",
+        "type": "paragraph",
+        "text": "Golden contract content",
+        "runs": [
+          { "text": "Golden contract content", "bold": true }
+        ]
+      }
+    ],
+    "tags": ["contract"],
+    "searchTerms": ["golden"],
+    "linkedFiles": ["att-contract"],
+    "pinnedRegions": [
+      {
+        "id": "region-contract",
+        "entryId": "entry-contract",
+        "label": "Result",
+        "blockIds": ["block-contract"],
+        "linkedAttachments": ["att-contract"]
+      }
+    ],
+    "version": 1,
+    "updatedByDeviceId": "dev-contract",
+    "syncStatus": "synced"
+  }
+}

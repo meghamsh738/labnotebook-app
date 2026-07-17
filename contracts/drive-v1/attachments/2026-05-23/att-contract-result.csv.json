@@ -1,0 +1,23 @@
+{
+  "id": "att-contract",
+  "kind": "attachment",
+  "version": 1,
+  "updatedAt": "2026-05-23T09:35:00.000Z",
+  "updatedByDeviceId": "dev-contract",
+  "payload": {
+    "id": "att-contract",
+    "entryId": "entry-contract",
+    "type": "file",
+    "filename": "result.csv",
+    "filesize": "12 bytes",
+    "bytes": 12,
+    "storagePath": "attachments/2026-05-23/att-contract-result.csv",
+    "contentType": "text/csv",
+    "mimeType": "text/csv",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "driveFileId": "drive-file-contract",
+    "syncStatus": "synced",
+    "createdAt": "2026-05-23T09:34:00.000Z",
+    "updatedAt": "2026-05-23T09:35:00.000Z"
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "id": "filebox-contract",
+  "kind": "fileBoxItem",
+  "version": 1,
+  "updatedAt": "2026-05-23T09:40:00.000Z",
+  "updatedByDeviceId": "dev-contract",
+  "payload": {
+    "id": "filebox-contract",
+    "entryId": "entry-contract",
+    "attachmentId": "att-contract",
+    "filename": "result.csv",
+    "filesize": "12 bytes",
+    "contentType": "text/csv",
+    "sourceDeviceId": "dev-contract",
+    "sourceDeviceName": "Contract desktop",
+    "status": "available",
+    "createdAt": "2026-05-23T09:39:00.000Z",
+    "updatedAt": "2026-05-23T09:40:00.000Z",
+    "driveFileId": "drive-file-contract"
+  }
+}
