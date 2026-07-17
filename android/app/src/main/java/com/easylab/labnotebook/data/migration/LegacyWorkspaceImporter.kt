@@ -10,10 +10,12 @@ import com.easylab.labnotebook.data.local.deleteQueueEventId
 import com.easylab.labnotebook.data.local.upsertQueueEventId
 import com.easylab.labnotebook.sync.DriveV1Attachment
 import com.easylab.labnotebook.sync.DriveV1Conflict
+import com.easylab.labnotebook.sync.DriveV1Device
 import com.easylab.labnotebook.sync.DriveV1Entry
 import com.easylab.labnotebook.sync.DriveV1FileBoxItem
 import com.easylab.labnotebook.sync.DriveV1Tombstone
 import com.easylab.labnotebook.sync.DriveV1Transfer
+import com.easylab.labnotebook.sync.compareIsoTimestamps
 
 enum class LegacyImportPolicy {
     RequireEmptyWorkspace,
@@ -46,7 +48,7 @@ class LegacyWorkspaceImporter(
     ): LegacyImportResult {
         require(activeDeviceId.isNotBlank()) { "Active device id must not be blank." }
         val export = LegacyWorkspaceExportV1.parse(rawJson)
-        val initialPlan = buildPlan(database.dao(), accountId, export.snapshot, policy)
+        val initialPlan = buildPlan(database.dao(), accountId, export.snapshot, export.blobs, export.exportedAt, policy)
         val blobSelection = selectBlobs(initialPlan.attachments, export.blobs)
         val stored = linkedMapOf<String, StoredLegacyBlob>()
 
@@ -56,7 +58,7 @@ class LegacyWorkspaceImporter(
             }
             val pendingQueueItems = database.withTransaction {
                 val dao = database.dao()
-                val committedPlan = buildPlan(dao, accountId, export.snapshot, policy)
+                val committedPlan = buildPlan(dao, accountId, export.snapshot, export.blobs, export.exportedAt, policy)
                 check(committedPlan.sameRecordsAs(initialPlan)) {
                     "The native workspace changed while the legacy export was being prepared. Try the import again."
                 }
@@ -104,7 +106,14 @@ class LegacyWorkspaceImporter(
             }
         }
         plan.entries.forEach { entry ->
-            val entity = entry.toLegacyEntity(accountId, activeDeviceId)
+            val imported = entry.toLegacyEntity(accountId, activeDeviceId)
+            // Verified-unsynced legacy entries have no Drive baseline. Browser-local
+            // edit counts are therefore not valid Drive versions for their first upload.
+            val entity = if (isVerifiedUnsynced(imported.syncStatus)) {
+                imported.copy(version = 1)
+            } else {
+                imported
+            }
             dao.upsertEntry(entity)
             if (isVerifiedUnsynced(entity.syncStatus)) {
                 dao.upsertQueueItem(
@@ -206,22 +215,89 @@ private data class ImportPlan(
             tombstones.map { it.entityKind to it.entityId } == other.tombstones.map { it.entityKind to it.entityId }
 }
 
+private data class LiveImportSelection(
+    val entries: List<DriveV1Entry>,
+    val attachments: List<DriveV1Attachment>,
+    val attachmentUpsertIds: Set<String>,
+    val fileBoxItems: List<DriveV1FileBoxItem>,
+    val transfers: List<DriveV1Transfer>,
+    val device: DriveV1Device?,
+    val exportedAt: String,
+)
+
+private fun liveImportSelection(
+    accountId: AccountId,
+    snapshot: LegacyWorkspaceSnapshotV1,
+    blobs: List<LegacyWorkspaceBlobV1>,
+    entries: List<DriveV1Entry>,
+    attachments: List<DriveV1Attachment>,
+    fileBoxItems: List<DriveV1FileBoxItem>,
+    transfers: List<DriveV1Transfer>,
+    exportedAt: String,
+): LiveImportSelection {
+    val attachmentIdsWithSelectedBlobs = selectBlobs(attachments, blobs).keys
+    val attachmentUpsertIds = attachments.mapNotNullTo(mutableSetOf()) { attachment ->
+        val plannedBlob = if (attachment.id in attachmentIdsWithSelectedBlobs) {
+            StoredLegacyBlob(attachment.id, "planned/${attachment.id}", createdByImport = false)
+        } else {
+            null
+        }
+        val mapped = attachment.toLegacyEntity(
+            accountId = accountId,
+            entry = snapshot.entries.getValue(attachment.entryId),
+            exportedAt = exportedAt,
+            storedBlob = plannedBlob,
+        )
+        attachment.id.takeIf { isVerifiedUnsynced(mapped.syncStatus) }
+    }
+    return LiveImportSelection(
+        entries = entries,
+        attachments = attachments,
+        attachmentUpsertIds = attachmentUpsertIds,
+        fileBoxItems = fileBoxItems,
+        transfers = transfers,
+        device = snapshot.device,
+        exportedAt = exportedAt,
+    )
+}
+
 private suspend fun buildPlan(
     dao: LabNotebookDao,
     accountId: AccountId,
     snapshot: LegacyWorkspaceSnapshotV1,
+    blobs: List<LegacyWorkspaceBlobV1>,
+    exportedAt: String,
     policy: LegacyImportPolicy,
 ): ImportPlan = when (policy) {
     LegacyImportPolicy.RequireEmptyWorkspace -> {
         requireWorkspaceEmpty(dao, accountId)
+        val entries = snapshot.entries.values.sortedBy { it.id }
+        val attachments = snapshot.attachments.sortedBy { it.id }
+        val fileBoxItems = snapshot.fileBoxItems.sortedBy { it.id }
+        val transfers = snapshot.transfers.sortedBy { it.id }
+        val tombstones = safeTombstones(
+            dao,
+            accountId,
+            snapshot.tombstones,
+            liveImportSelection(
+                accountId,
+                snapshot,
+                blobs,
+                entries,
+                attachments,
+                fileBoxItems,
+                transfers,
+                exportedAt,
+            ),
+        )
         ImportPlan(
-            entries = snapshot.entries.values.sortedBy { it.id },
-            attachments = snapshot.attachments.sortedBy { it.id },
-            fileBoxItems = snapshot.fileBoxItems.sortedBy { it.id },
-            transfers = snapshot.transfers.sortedBy { it.id },
+            entries = entries,
+            attachments = attachments,
+            fileBoxItems = fileBoxItems,
+            transfers = transfers,
             conflicts = snapshot.conflicts.sortedBy { it.id },
-            tombstones = snapshot.tombstones.sortedBy { it.id },
-            skippedRecords = 0,
+            tombstones = tombstones,
+            skippedRecords = snapshot.tombstones.size - tombstones.size,
         )
     }
     LegacyImportPolicy.MergeVerifiedUnsyncedOnly -> {
@@ -276,16 +352,187 @@ private suspend fun buildPlan(
         val conflicts = snapshot.conflicts
             .filter { it.resolution == "pending" && it.id !in existingConflicts }
             .sortedBy { it.id }
-        val existingTombstones = dao.tombstones(accountId.value)
-            .mapTo(hashSetOf()) { it.entityKind to it.entityId }
-        val tombstones = snapshot.tombstones
-            .filter { (it.entityKind to it.entityId) !in existingTombstones }
-            .sortedBy { it.id }
+        val tombstones = safeTombstones(
+            dao,
+            accountId,
+            snapshot.tombstones,
+            liveImportSelection(
+                accountId,
+                snapshot,
+                blobs,
+                entries,
+                attachments,
+                fileBoxItems,
+                transfers,
+                exportedAt,
+            ),
+        )
         val selected = entries.size + attachments.size + fileBoxItems.size + transfers.size + conflicts.size + tombstones.size
         val total = snapshot.entries.size + snapshot.attachments.size + snapshot.fileBoxItems.size +
             snapshot.transfers.size + snapshot.conflicts.size + snapshot.tombstones.size
         ImportPlan(entries, attachments, fileBoxItems, transfers, conflicts, tombstones, total - selected)
     }
+}
+
+private suspend fun safeTombstones(
+    dao: LabNotebookDao,
+    accountId: AccountId,
+    candidates: List<DriveV1Tombstone>,
+    selection: LiveImportSelection,
+): List<DriveV1Tombstone> {
+    val existingTombstoneRows = dao.tombstones(accountId.value)
+    val existingTargets = existingTombstoneRows
+        .mapTo(hashSetOf()) { it.entityKind to it.entityId }
+    val existingTombstonesById = existingTombstoneRows.associateBy { it.id }
+    val pendingUpserts = dao.pendingQueue(accountId.value)
+        .asSequence()
+        .filter { it.operation == "upsert" }
+        .mapTo(mutableSetOf()) { it.entityKind to it.entityId }
+        .apply {
+            selection.entries.filter { it.syncStatus == null || isVerifiedUnsynced(it.syncStatus) }
+                .forEach { add("entry" to it.id) }
+            selection.attachmentUpsertIds.forEach { add("attachment" to it) }
+            selection.fileBoxItems.filter { it.status in LOCAL_FILE_BOX_STATUSES }
+                .forEach { add("fileBoxItem" to it.id) }
+            selection.transfers.filter { it.status in LOCAL_TRANSFER_STATUSES }
+                .forEach { add("transfer" to it.id) }
+        }
+    val fileBoxRows = dao.fileBoxItems(accountId.value)
+    val transferRows = dao.transfers(accountId.value)
+    val deviceUpdatedAt = dao.devices(accountId.value).associate { it.id to it.lastSeenAt }
+    val liveTargetUpdatedAt = linkedMapOf<Pair<String, String>, String?>()
+    candidates.forEach { tombstone ->
+        val target = tombstone.entityKind to tombstone.entityId
+        if (target !in liveTargetUpdatedAt) {
+            liveTargetUpdatedAt[target] = when (tombstone.entityKind) {
+                "entry" -> dao.entry(accountId.value, tombstone.entityId)?.updatedAt
+                "attachment" -> dao.attachment(accountId.value, tombstone.entityId)?.updatedAt
+                "fileBoxItem" -> fileBoxRows.firstOrNull { it.id == tombstone.entityId }?.updatedAt
+                "transfer" -> transferRows.firstOrNull { it.id == tombstone.entityId }?.updatedAt
+                "device" -> deviceUpdatedAt[tombstone.entityId]
+                "tombstone" -> existingTombstoneRows.firstOrNull { it.id == tombstone.entityId }?.deletedAt
+                else -> null
+            }
+        }
+    }
+    selection.entries.forEach { liveTargetUpdatedAt.putIfMissing("entry" to it.id, it.lastEditedDatetime) }
+    selection.attachments.forEach {
+        liveTargetUpdatedAt.putIfMissing("attachment" to it.id, it.updatedAt ?: it.createdAt ?: selection.exportedAt)
+    }
+    selection.fileBoxItems.forEach { liveTargetUpdatedAt.putIfMissing("fileBoxItem" to it.id, it.updatedAt) }
+    selection.transfers.forEach { liveTargetUpdatedAt.putIfMissing("transfer" to it.id, it.updatedAt) }
+    selection.device?.takeIf { it.id !in deviceUpdatedAt }?.let {
+        liveTargetUpdatedAt.putIfMissing("device" to it.id, it.lastSeenAt)
+    }
+
+    val unsafeParentTargets = mutableSetOf<Pair<String, String>>()
+    for (tombstone in candidates) {
+        if (tombstone.entityKind !in setOf("entry", "attachment", "fileBoxItem")) continue
+        val dependents = dependentRecords(dao, accountId, tombstone, selection, fileBoxRows, transferRows)
+        val hasPendingChild = dependents.keys.any { it in pendingUpserts }
+        val hasNewerOrEqualChild = dependents.values.any { updatedAt ->
+            compareIsoTimestamps(tombstone.deletedAt, updatedAt) <= 0
+        }
+        if (hasPendingChild || hasNewerOrEqualChild) {
+            unsafeParentTargets += tombstone.entityKind to tombstone.entityId
+        }
+    }
+
+    return candidates
+        .filter { (it.entityKind to it.entityId) !in existingTargets }
+        .filter { tombstone ->
+            existingTombstonesById[tombstone.id]?.let { existing ->
+                existing.entityKind == tombstone.entityKind && existing.entityId == tombstone.entityId
+            } != false
+        }
+        .filter { tombstone ->
+            val target = tombstone.entityKind to tombstone.entityId
+            val localUpdatedAt = liveTargetUpdatedAt[target]
+            target !in pendingUpserts && target !in unsafeParentTargets &&
+                (localUpdatedAt == null || compareIsoTimestamps(tombstone.deletedAt, localUpdatedAt) > 0)
+        }
+        .sortedBy { it.id }
+}
+
+private data class AttachmentDependency(val id: String, val entryId: String, val updatedAt: String)
+
+private data class FileBoxDependency(
+    val id: String,
+    val entryId: String,
+    val attachmentId: String?,
+    val updatedAt: String,
+)
+
+private data class TransferDependency(
+    val id: String,
+    val entryId: String?,
+    val attachmentId: String?,
+    val fileBoxItemId: String?,
+    val updatedAt: String,
+)
+
+private suspend fun dependentRecords(
+    dao: LabNotebookDao,
+    accountId: AccountId,
+    tombstone: DriveV1Tombstone,
+    selection: LiveImportSelection,
+    localFileBoxItems: List<com.easylab.labnotebook.data.local.FileBoxItemEntity>,
+    localTransfers: List<com.easylab.labnotebook.data.local.TransferEntity>,
+): Map<Pair<String, String>, String> {
+    val attachments = when (tombstone.entityKind) {
+        "entry" -> (
+            dao.attachmentsForEntry(accountId.value, tombstone.entityId)
+                .map { AttachmentDependency(it.id, it.entryId, it.updatedAt) } +
+                selection.attachments.filter { it.entryId == tombstone.entityId }
+                    .map {
+                        AttachmentDependency(
+                            it.id,
+                            it.entryId,
+                            it.updatedAt ?: it.createdAt ?: selection.exportedAt,
+                        )
+                    }
+            ).distinctBy { it.id }
+        else -> emptyList()
+    }
+    val attachmentIds = attachments.mapTo(hashSetOf()) { it.id }
+    val fileBoxItems = (
+        localFileBoxItems.map { FileBoxDependency(it.id, it.entryId, it.attachmentId, it.updatedAt) } +
+            selection.fileBoxItems.map { FileBoxDependency(it.id, it.entryId, it.attachmentId, it.updatedAt) }
+        ).filter { item ->
+        when (tombstone.entityKind) {
+            "entry" -> item.entryId == tombstone.entityId || item.attachmentId in attachmentIds
+            "attachment" -> item.attachmentId == tombstone.entityId
+            else -> false
+        }
+    }.distinctBy { it.id }
+    val fileBoxIds = fileBoxItems.mapTo(hashSetOf()) { it.id }
+    val transfers = (
+        localTransfers.map {
+            TransferDependency(it.id, it.entryId, it.attachmentId, it.fileBoxItemId, it.updatedAt)
+        } + selection.transfers.map {
+            TransferDependency(it.id, it.entryId, it.attachmentId, it.fileBoxItemId, it.updatedAt)
+        }
+        ).filter { transfer ->
+        when (tombstone.entityKind) {
+            "entry" -> transfer.entryId == tombstone.entityId ||
+                transfer.attachmentId in attachmentIds || transfer.fileBoxItemId in fileBoxIds
+            "attachment" -> transfer.attachmentId == tombstone.entityId || transfer.fileBoxItemId in fileBoxIds
+            "fileBoxItem" -> transfer.fileBoxItemId == tombstone.entityId
+            else -> false
+        }
+    }.distinctBy { it.id }
+    return buildMap {
+        attachments.forEach { put("attachment" to it.id, it.updatedAt) }
+        fileBoxItems.forEach { put("fileBoxItem" to it.id, it.updatedAt) }
+        transfers.forEach { put("transfer" to it.id, it.updatedAt) }
+    }
+}
+
+private fun MutableMap<Pair<String, String>, String?>.putIfMissing(
+    target: Pair<String, String>,
+    updatedAt: String,
+) {
+    if (this[target] == null) this[target] = updatedAt
 }
 
 private suspend fun requireWorkspaceEmpty(dao: LabNotebookDao, accountId: AccountId) {
