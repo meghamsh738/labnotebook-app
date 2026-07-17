@@ -13,18 +13,35 @@
     "screenshots": "npm --prefix web run screenshots",
     "standalone:dev": "set EASYLAB_LABNOTE_DEV=1&& concurrently \"npm --prefix web run dev -- --host 127.0.0.1\" \"wait-on http://127.0.0.1:5173 && electron desktop/main.cjs\"",
     "standalone:build": "npm --prefix web run build && electron-builder --config electron-builder.json",
+    "android:sync": "npm run android:legacy:sync",
+    "android:legacy:sync": "npm run build && npx cap sync android",
+    "android:open": "npx cap open android",
+    "android:gradle": "node scripts/android-gradle.mjs",
+    "android:test": "node scripts/android-gradle.mjs :app:testDebugUnitTest",
+    "android:build:debug": "node scripts/android-gradle.mjs :app:assembleDebug",
+    "android:build:debug:with-legacy-assets": "npm run android:legacy:sync && npm run android:build:debug",
+    "android:install:debug": "node scripts/android-gradle.mjs :app:installDebug",
     "preflight:drive-oauth": "node scripts/preflight-drive-oauth.mjs",
     "smoke:drive-loop": "node scripts/smoke-drive-loop.mjs",
     "smoke:real-drive-content": "node scripts/smoke-real-drive-content.mjs",
+    "smoke:real-drive-sync-loop": "node scripts/smoke-real-drive-sync-loop.mjs",
     "smoke:packaged-oauth": "node scripts/smoke-packaged-oauth.mjs",
+    "test:desktop-oauth": "node --test desktop/oauthScopes.test.cjs",
     "smoke:pixel-pwa": "node scripts/smoke-pixel-pwa.mjs",
     "smoke:pixel-capture": "node scripts/smoke-pixel-pwa-capture.mjs",
     "smoke:pixel-drive-roundtrip": "node scripts/smoke-pixel-drive-roundtrip.mjs"
   },
   "devDependencies": {
+    "@capacitor/cli": "^8.4.0",
     "concurrently": "^9.2.1",
-    "electron": "^38.4.0",
+    "electron": "^38.8.6",
     "electron-builder": "^26.0.12",
+    "typescript": "~5.9.3",
     "wait-on": "^8.0.5"
+  },
+  "dependencies": {
+    "@capacitor/android": "^8.4.0",
+    "@capacitor/core": "^8.4.0",
+    "keytar": "^7.9.0"
   }
 }

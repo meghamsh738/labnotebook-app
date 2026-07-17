@@ -8,8 +8,15 @@ import {
   buildPendingSyncQueue,
   hashBlobSha256,
   mergeEntryEnvelopes,
+  safeDriveSegment,
 } from '../src/sync/dataCore'
-import { normalizeDriveConnection, parseGoogleOAuthClientConfig, resolveDriveClientId } from '../src/sync/connectedSync'
+import {
+  DEFAULT_WEB_OAUTH_CLIENT_ID,
+  normalizeDriveConnection,
+  parseGoogleOAuthClientConfig,
+  resolveDriveClientId,
+  resolveGoogleAccountStorageScope,
+} from '../src/sync/connectedSync'
 import { hashJsonSha256, stableStringify } from '../src/sync/hashing'
 import {
   buildInvalidRemoteJsonConflict,
@@ -66,7 +73,27 @@ test('builds deterministic Drive paths for daily entries and attachments', () =>
   const att = attachment('att-1', daily.id, 'raw:data?.csv')
 
   expect(buildEntryDriveFileName(daily, { [daily.id]: daily })).toBe('2026-05-23.json')
-  expect(buildAttachmentDrivePath(att, daily)).toBe('attachments/2026-05-23/att-1-raw-data-.csv')
+  expect(buildAttachmentDrivePath(att, daily)).toBe('attachments/2026-05-23/att-1-raw%3Adata%3F.csv')
+})
+
+test('Drive path segments are collision-resistant and match the native UTF-8 percent encoding contract', () => {
+  expect(safeDriveSegment('safe_ID-123.abc')).toBe('safe_ID-123.abc')
+  expect([
+    safeDriveSegment('a/b'),
+    safeDriveSegment('a?b'),
+    safeDriveSegment('a-b'),
+  ]).toEqual(['a%2Fb', 'a%3Fb', 'a-b'])
+  expect(new Set([
+    safeDriveSegment('a/b'),
+    safeDriveSegment('a?b'),
+    safeDriveSegment('a-b'),
+  ]).size).toBe(3)
+  expect(safeDriveSegment('100%')).toBe('100%25')
+  expect(safeDriveSegment(`space\u00A0em\u2003tab\t`)).toBe('space%C2%A0em%E2%80%83tab%09')
+  expect(safeDriveSegment('caf\u00E9/\u732B')).toBe('caf%C3%A9%2F%E7%8C%AB')
+  expect(safeDriveSegment('')).toBe('untitled')
+  expect(safeDriveSegment('x'.repeat(121))).toBe('x'.repeat(121))
+  expect(() => safeDriveSegment('\uD800')).toThrow('valid Unicode')
 })
 
 test('queues entries, unsynced attachments, and tombstones after last sync', () => {
@@ -135,6 +162,19 @@ test('hashes attachment blobs for sync identity', async () => {
   await expect(hashBlobSha256(new Blob(['abc']))).resolves.toBe('ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad')
 })
 
+test('Google account cache scopes resist collisions and can remain pinned across profile upgrades', () => {
+  const plusEmail = resolveGoogleAccountStorageScope({ provider: 'google', email: 'a+b@example.com' })
+  const underscoreEmail = resolveGoogleAccountStorageScope({ provider: 'google', email: 'a_b@example.com' })
+  expect(plusEmail).not.toBe(underscoreEmail)
+
+  expect(resolveGoogleAccountStorageScope({
+    provider: 'google',
+    email: 'researcher@example.com',
+    subject: 'new-google-subject',
+    storageScope: 'researcher_example.com',
+  })).toBe('researcher_example.com')
+})
+
 test('canonical JSON hashing is stable across object key order', async () => {
   const left = { title: 'May 23', tags: ['qPCR', 'ELISA'], body: { b: 2, a: 1 } }
   const right = { body: { a: 1, b: 2 }, tags: ['qPCR', 'ELISA'], title: 'May 23' }
@@ -143,7 +183,7 @@ test('canonical JSON hashing is stable across object key order', async () => {
   await expect(hashJsonSha256(left)).resolves.toBe(await hashJsonSha256(right))
 })
 
-test('Drive OAuth client resolution separates desktop and web clients with legacy fallback', () => {
+test('Drive OAuth client resolution separates desktop and web clients with default PWA client', () => {
   const connection = normalizeDriveConnection({
     clientId: 'legacy-client',
     desktopClientId: 'desktop-client',
@@ -152,10 +192,37 @@ test('Drive OAuth client resolution separates desktop and web clients with legac
   })
 
   expect(connection.status).toBe('needs-auth')
+  expect(connection.storageMode).toBe('local-only')
   expect(resolveDriveClientId(connection, 'desktop')).toEqual({ clientId: 'desktop-client', preferredKind: 'desktop' })
   expect(resolveDriveClientId(connection, 'web')).toEqual({ clientId: 'web-client', preferredKind: 'web' })
-  expect(resolveDriveClientId(normalizeDriveConnection({ clientId: 'legacy-client' }), 'desktop').clientId).toBe('legacy-client')
-  expect(resolveDriveClientId(normalizeDriveConnection({ clientId: 'legacy-client' }), 'web').clientId).toBe('legacy-client')
+  const legacyConnection = normalizeDriveConnection({ clientId: 'legacy-client' })
+  expect(legacyConnection.desktopClientId).toBe('legacy-client')
+  expect(legacyConnection.webClientId).toBe('legacy-client')
+  expect(resolveDriveClientId(legacyConnection, 'desktop').clientId).toBe('legacy-client')
+  expect(resolveDriveClientId(legacyConnection, 'web').clientId).toBe('legacy-client')
+  expect(resolveDriveClientId({ clientId: 'legacy-client' }, 'desktop').clientId).toBe('legacy-client')
+  expect(resolveDriveClientId({ clientId: 'legacy-client' }, 'web').clientId).toBe('legacy-client')
+  expect(resolveDriveClientId({ clientId: '' }, 'web').clientId).toBe(DEFAULT_WEB_OAUTH_CLIENT_ID)
+
+  const connected = normalizeDriveConnection({
+    connectedAt: '2026-05-31T20:00:00.000Z',
+    connectedAccount: {
+      provider: 'google',
+      email: 'scientist@example.com',
+      name: 'Scientist',
+      picture: 'https://example.com/avatar.png',
+      subject: 'google-subject',
+    },
+  })
+  expect(connected.storageMode).toBe('google-drive')
+  expect(connected.connectedAccount).toEqual({
+    provider: 'google',
+    email: 'scientist@example.com',
+    name: 'Scientist',
+    picture: 'https://example.com/avatar.png',
+    subject: 'google-subject',
+    storageScope: 'google-subject',
+  })
 })
 
 test('parses downloaded Google OAuth client JSON without token fields', () => {

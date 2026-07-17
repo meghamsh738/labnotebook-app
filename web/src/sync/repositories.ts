@@ -47,6 +47,11 @@ export type BlobStoreRecord = {
 
 export type JournalRepositoryOptions = {
   dbName?: string
+  /**
+   * Optional stable account identifier used to isolate IndexedDB data without
+   * changing any object-store schema. Omitting it preserves the v1 database name.
+   */
+  accountScope?: string
 }
 
 type StoreRecordMap = {
@@ -60,6 +65,10 @@ type StoreRecordMap = {
   [JOURNAL_STORES.devices]: DeviceProfile
   [JOURNAL_STORES.meta]: JournalMetaRecord
   [JOURNAL_STORES.blobs]: BlobStoreRecord
+}
+
+export type JournalStoreReplacements = {
+  [S in JournalStoreName]?: StoreRecordMap[S][]
 }
 
 export type TypedJournalRepository<S extends JournalStoreName> = EntityRepository<StoreRecordMap[S]>
@@ -89,6 +98,13 @@ export function openJournalDb(dbName = JOURNAL_DB_NAME): Promise<IDBDatabase> {
     request.onsuccess = () => resolve(request.result)
     request.onerror = () => reject(request.error)
   })
+}
+
+export function journalDbNameForScope(dbName = JOURNAL_DB_NAME, accountScope?: string) {
+  if (typeof accountScope === 'undefined') return dbName
+  const normalizedScope = accountScope.trim()
+  if (!normalizedScope) throw new Error('Journal account scope must not be empty.')
+  return `${dbName}--account-${encodeURIComponent(normalizedScope)}`
 }
 
 function isIDBDatabase(value: unknown): value is IDBDatabase {
@@ -175,10 +191,32 @@ function repository<S extends JournalStoreName>(db: IDBDatabase, storeName: S): 
   return new EntityRepository<StoreRecordMap[S]>(db, storeName)
 }
 
+function replaceJournalStores(db: IDBDatabase, replacements: JournalStoreReplacements): Promise<void> {
+  const storeNames = Object.keys(replacements) as JournalStoreName[]
+  if (storeNames.length === 0) return Promise.resolve()
+
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(storeNames, 'readwrite')
+    tx.oncomplete = () => resolve()
+    tx.onabort = () => reject(tx.error ?? new Error('Atomic journal store replacement was aborted.'))
+    try {
+      for (const storeName of storeNames) {
+        const store = tx.objectStore(storeName)
+        store.clear()
+        const values = replacements[storeName] as Array<{ id: string }> | undefined
+        values?.forEach((value) => store.put(value))
+      }
+    } catch (error) {
+      tx.abort()
+      reject(error)
+    }
+  })
+}
+
 export async function createJournalRepositories(dbOrOptions?: IDBDatabase | JournalRepositoryOptions) {
   const journalDb = isIDBDatabase(dbOrOptions)
     ? dbOrOptions
-    : await openJournalDb(dbOrOptions?.dbName)
+    : await openJournalDb(journalDbNameForScope(dbOrOptions?.dbName, dbOrOptions?.accountScope))
   return {
     entries: repository(journalDb, JOURNAL_STORES.entries),
     attachments: repository(journalDb, JOURNAL_STORES.attachments),
@@ -190,6 +228,7 @@ export async function createJournalRepositories(dbOrOptions?: IDBDatabase | Jour
     devices: repository(journalDb, JOURNAL_STORES.devices),
     meta: repository(journalDb, JOURNAL_STORES.meta),
     blobs: repository(journalDb, JOURNAL_STORES.blobs),
+    replaceStores: (replacements: JournalStoreReplacements) => replaceJournalStores(journalDb, replacements),
   }
 }
 

@@ -1,8 +1,10 @@
 import type { DeviceProfile } from '../domain/types'
+import { safeDriveSegment } from './dataCore'
 import {
   DRIVE_MIME_FOLDER,
   DRIVE_ROOT_FOLDER,
   GoogleDriveProvider,
+  type GoogleAccountProfile,
   type DriveFile,
   type SyncProvider as FolderDriveClient,
 } from './connectedSync'
@@ -10,6 +12,7 @@ import {
 export type AuthSession = {
   provider: 'mock' | 'google-drive'
   signedInAt: string
+  account?: GoogleAccountProfile
 }
 
 export type WorkspaceRef = {
@@ -61,6 +64,7 @@ export interface SyncProvider {
   putJson<T>(path: string, value: T, options?: PutOptions): Promise<RemoteFileRef>
 
   getBlob(path: string): Promise<Blob | null>
+  getBlobById?(fileId: string): Promise<Blob | null>
   putBlob(path: string, blob: Blob, metadata: BlobMetadata): Promise<RemoteFileRef>
 
   loadManifest<T = unknown>(): Promise<T | null>
@@ -114,7 +118,7 @@ export class MockSyncProvider implements SyncProvider {
   }
 
   async ensureDeviceRecord(device: DeviceProfile) {
-    await this.putJson(`devices/${device.id}.json`, device)
+    await this.putJson(`devices/${safeDriveSegment(device.id, 'device')}.json`, device)
   }
 
   async getJson<T>(path: string): Promise<RemoteJson<T> | null> {
@@ -136,6 +140,11 @@ export class MockSyncProvider implements SyncProvider {
   async getBlob(path: string): Promise<Blob | null> {
     this.requireSignIn()
     return this.blobFiles.get(path)?.blob ?? null
+  }
+
+  async getBlobById(fileId: string): Promise<Blob | null> {
+    this.requireSignIn()
+    return [...this.blobFiles.values()].find((record) => record.file.id === fileId)?.blob ?? null
   }
 
   async putBlob(path: string, blob: Blob, metadata: BlobMetadata): Promise<RemoteFileRef> {
@@ -215,6 +224,7 @@ export type GoogleDriveSyncProviderOptions = {
   clientSecret?: string
   folderName?: string
   folderId?: string
+  authPrompt?: string
   client?: FolderDriveClient
   uploadRetryCount?: number
   retryDelayMs?: number
@@ -223,6 +233,16 @@ export type GoogleDriveSyncProviderOptions = {
 function pathSegments(path: string) {
   return path.split('/').map((segment) => segment.trim()).filter(Boolean)
 }
+
+const MANAGED_ROOT_FOLDERS = new Set([
+  'devices',
+  'entries',
+  'attachments',
+  'filebox',
+  'transfers',
+  'conflicts',
+  'tombstones',
+])
 
 function parseDriveSize(size?: string) {
   if (!size) return undefined
@@ -247,6 +267,7 @@ export class GoogleDriveSyncProvider implements SyncProvider {
   private readonly uploadRetryCount: number
   private readonly retryDelayMs: number
   private rootFolderId = ''
+  private rootFolderVerified = false
   private readonly folderIds = new Map<string, string>()
 
   constructor(options: GoogleDriveSyncProviderOptions) {
@@ -258,12 +279,13 @@ export class GoogleDriveSyncProvider implements SyncProvider {
       clientId: options.clientId,
       clientSecret: options.clientSecret,
       folderName: this.folderName,
+      authPrompt: options.authPrompt,
     })
   }
 
   async signIn(): Promise<AuthSession> {
-    await this.client.signIn()
-    return { provider: 'google-drive', signedInAt: nowIso() }
+    const account = await this.client.signIn()
+    return { provider: 'google-drive', signedInAt: nowIso(), account }
   }
 
   async signOut() {
@@ -271,14 +293,13 @@ export class GoogleDriveSyncProvider implements SyncProvider {
   }
 
   async ensureWorkspace(): Promise<WorkspaceRef> {
-    if (!this.rootFolderId) this.rootFolderId = await this.client.ensureRootFolder()
-    this.folderIds.set('', this.rootFolderId)
+    await this.ensureRoot()
     await Promise.all(['devices', 'entries', 'attachments', 'filebox', 'transfers', 'conflicts', 'tombstones'].map((folder) => this.ensureFolderPath(folder)))
     return { id: this.rootFolderId, rootPath: this.folderName }
   }
 
   async ensureDeviceRecord(device: DeviceProfile) {
-    await this.putJson(`devices/${device.id}.json`, device)
+    await this.putJson(`devices/${safeDriveSegment(device.id, 'device')}.json`, device)
   }
 
   async getJson<T>(path: string): Promise<RemoteJson<T> | null> {
@@ -308,10 +329,22 @@ export class GoogleDriveSyncProvider implements SyncProvider {
     return this.client.downloadBlob(file.id)
   }
 
+  async getBlobById(fileId: string): Promise<Blob | null> {
+    try {
+      return await this.client.downloadBlob(fileId)
+    } catch (error) {
+      if (isMissingDriveFolderError(error)) return null
+      throw error
+    }
+  }
+
   async putBlob(path: string, blob: Blob, metadata: BlobMetadata): Promise<RemoteFileRef> {
     const { folderPath, fileName } = this.splitFilePath(path)
     const parentFolderId = await this.ensureFolderPath(folderPath)
-    const fileId = await this.withUploadRetry(() => this.client.uploadBlob(parentFolderId, fileName, blob, metadata.mimeType))
+    const fileId = await this.withUploadRetry(() => this.client.uploadBlob(parentFolderId, fileName, blob, metadata.mimeType, {
+      sha256: metadata.sha256,
+      appProperties: metadata.appProperties,
+    }))
     const file = await this.findFile(path)
     return file ? driveFileToRemoteRef(path, file) : {
       id: fileId,
@@ -410,8 +443,93 @@ export class GoogleDriveSyncProvider implements SyncProvider {
   }
 
   private async ensureRoot() {
-    if (!this.rootFolderId) this.rootFolderId = await this.client.ensureRootFolder()
+    if (this.rootFolderId && !this.rootFolderVerified) {
+      try {
+        const metadata = await this.client.getFileMetadata(this.rootFolderId)
+        const validFolder = metadata.id === this.rootFolderId
+          && metadata.mimeType === DRIVE_MIME_FOLDER
+          && metadata.trashed !== true
+        const validIdentity = validFolder && (
+          await this.hasValidRootManifest(this.rootFolderId)
+          || (metadata.name === this.folderName && await this.isUninitializedManagedRoot(this.rootFolderId))
+        )
+        if (!validIdentity) this.resetRootFolder()
+      } catch (error) {
+        if (!isMissingDriveFolderError(error)) throw error
+        this.resetRootFolder()
+      }
+    }
+    if (!this.rootFolderId) this.rootFolderId = await this.resolveOrCreateRootFolder()
+    this.rootFolderVerified = true
     this.folderIds.set('', this.rootFolderId)
+  }
+
+  private async resolveOrCreateRootFolder() {
+    const matches = await this.client.listFolder(
+      'root',
+      `name = '${escapeDriveQuery(this.folderName)}' and mimeType = '${DRIVE_MIME_FOLDER}' and trashed = false`,
+    )
+    const manifestRoots: DriveFile[] = []
+    const emptyRoots: DriveFile[] = []
+
+    for (const candidate of matches) {
+      if (await this.hasValidRootManifest(candidate.id)) manifestRoots.push(candidate)
+      else if (await this.isUninitializedManagedRoot(candidate.id)) emptyRoots.push(candidate)
+    }
+
+    if (manifestRoots.length > 1) {
+      throw new Error('Multiple Easylab Drive workspaces were found. Choose the intended notebook before syncing.')
+    }
+    if (manifestRoots.length === 1) return manifestRoots[0].id
+    if (emptyRoots.length > 1) {
+      throw new Error('Multiple empty Easylab Drive folders were found. Remove the duplicates before syncing.')
+    }
+    if (emptyRoots.length === 1) return emptyRoots[0].id
+
+    if (this.client.createRootFolder) return this.client.createRootFolder(this.folderName)
+    const fallbackId = await this.client.ensureRootFolder()
+    const fallbackIsSafe = await this.hasValidRootManifest(fallbackId)
+      || await this.isUninitializedManagedRoot(fallbackId)
+    if (!fallbackIsSafe) {
+      throw new Error('The matching Drive folder is not an Easylab workspace and cannot be used safely.')
+    }
+    return fallbackId
+  }
+
+  private async hasValidRootManifest(folderId: string) {
+    const matches = await this.client.listFolder(folderId, "name = 'manifest.json' and mimeType != 'application/vnd.google-apps.folder'")
+    const manifestId = matches[0]?.id
+    if (!manifestId) return false
+    try {
+      const manifest = await this.client.downloadJson<unknown>(manifestId)
+      if (!manifest || typeof manifest !== 'object') return false
+      const record = manifest as { version?: unknown; provider?: unknown; rootFolderName?: unknown }
+      return record.version === 1
+        && record.provider === 'google-drive'
+        && typeof record.rootFolderName === 'string'
+        && Boolean(record.rootFolderName.trim())
+    } catch (error) {
+      if (isMissingDriveFolderError(error)) return false
+      throw error
+    }
+  }
+
+  private async isUninitializedManagedRoot(folderId: string) {
+    const children = await this.client.listFolder(folderId)
+    if (children.length === 0) return true
+    if (children.some((child) => child.mimeType !== DRIVE_MIME_FOLDER || !MANAGED_ROOT_FOLDERS.has(child.name))) {
+      return false
+    }
+    for (const child of children) {
+      if ((await this.client.listFolder(child.id)).length > 0) return false
+    }
+    return true
+  }
+
+  private resetRootFolder() {
+    this.rootFolderId = ''
+    this.rootFolderVerified = false
+    this.folderIds.clear()
   }
 
   private async withUploadRetry<T>(operation: () => Promise<T>): Promise<T> {
@@ -437,4 +555,9 @@ function isRetryableUploadError(error: unknown) {
   if (error instanceof TypeError) return true
   if (!(error instanceof Error)) return false
   return /\b(408|429|5\d\d)\b|rate limit|network|timeout|temporar/i.test(error.message)
+}
+
+function isMissingDriveFolderError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error)
+  return /\b(404|notFound)\b|file not found/i.test(message)
 }

@@ -48,14 +48,32 @@ function nowIso() {
 }
 
 export function safeDriveSegment(value: string, fallback = 'untitled') {
-  const cleaned = value
-    .normalize('NFKD')
-    .split('')
-    .map((char) => (char.charCodeAt(0) < 32 || '<>:"/\\|?*'.includes(char) ? '-' : char))
-    .join('')
-    .replace(/\s+/g, ' ')
-    .trim()
-  return (cleaned || fallback).slice(0, 120)
+  const input = value.length === 0 ? fallback : value
+  for (let index = 0; index < input.length; index += 1) {
+    const codeUnit = input.charCodeAt(index)
+    if (codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
+      const nextCodeUnit = input.charCodeAt(index + 1)
+      if (index + 1 >= input.length || nextCodeUnit < 0xdc00 || nextCodeUnit > 0xdfff) {
+        throw new Error('Drive path segments must contain valid Unicode.')
+      }
+      index += 1
+    } else if (codeUnit >= 0xdc00 && codeUnit <= 0xdfff) {
+      throw new Error('Drive path segments must contain valid Unicode.')
+    }
+  }
+  const bytes = new TextEncoder().encode(input)
+  let encoded = ''
+  for (const byte of bytes) {
+    const isSafeAscii =
+      (byte >= 0x41 && byte <= 0x5a) ||
+      (byte >= 0x61 && byte <= 0x7a) ||
+      (byte >= 0x30 && byte <= 0x39) ||
+      byte === 0x2e ||
+      byte === 0x5f ||
+      byte === 0x2d
+    encoded += isSafeAscii ? String.fromCharCode(byte) : `%${byte.toString(16).toUpperCase().padStart(2, '0')}`
+  }
+  return encoded
 }
 
 export function buildEntryDriveFileName(entry: Entry, allEntries?: Record<string, Entry>) {
@@ -128,14 +146,29 @@ export function mergeEntryEnvelopes(
 }
 
 export function applyTombstonesToSnapshot(snapshot: JournalSnapshot, tombstones: TombstoneRecord[]): JournalSnapshot {
+  // Device identity is owned by the active local profile, and deleting a tombstone
+  // has no safe v1 resurrection semantics. Those tombstone kinds remain recorded
+  // but intentionally do not erase local snapshot state.
   const deletedEntries = new Set(tombstones.filter((t) => t.entityKind === 'entry').map((t) => t.entityId))
   const deletedAttachments = new Set(tombstones.filter((t) => t.entityKind === 'attachment').map((t) => t.entityId))
+  const deletedFileBoxItems = new Set(tombstones.filter((t) => t.entityKind === 'fileBoxItem').map((t) => t.entityId))
+  const deletedTransfers = new Set(tombstones.filter((t) => t.entityKind === 'transfer').map((t) => t.entityId))
+  const entries = Object.fromEntries(Object.entries(snapshot.entries)
+    .filter(([id]) => !deletedEntries.has(id))
+    .map(([id, entry]) => [id, {
+      ...entry,
+      linkedFiles: entry.linkedFiles.filter((attachmentId) => !deletedAttachments.has(attachmentId)),
+      pinnedRegions: entry.pinnedRegions.map((region) => ({
+        ...region,
+        linkedAttachments: region.linkedAttachments.filter((attachmentId) => !deletedAttachments.has(attachmentId)),
+      })),
+    }]))
   return {
     ...snapshot,
-    entries: Object.fromEntries(Object.entries(snapshot.entries).filter(([id]) => !deletedEntries.has(id))),
+    entries,
     attachments: snapshot.attachments.filter((attachment) => !deletedAttachments.has(attachment.id) && !deletedEntries.has(attachment.entryId)),
-    fileBoxItems: snapshot.fileBoxItems.filter((item) => !deletedAttachments.has(item.attachmentId || '') && !deletedEntries.has(item.entryId)),
-    transfers: snapshot.transfers.filter((transfer) => !deletedAttachments.has(transfer.attachmentId || '') && !deletedEntries.has(transfer.entryId || '')),
+    fileBoxItems: snapshot.fileBoxItems.filter((item) => !deletedFileBoxItems.has(item.id) && !deletedAttachments.has(item.attachmentId || '') && !deletedEntries.has(item.entryId)),
+    transfers: snapshot.transfers.filter((transfer) => !deletedTransfers.has(transfer.id) && !deletedAttachments.has(transfer.attachmentId || '') && !deletedEntries.has(transfer.entryId || '')),
     tombstones,
   }
 }
@@ -218,11 +251,13 @@ function normalizeLocalSnapshot(snapshot: JournalSnapshot): JournalSnapshot {
 
 export async function hydrateOrMigrateJournalSnapshot(
   localSnapshot: JournalSnapshot,
-  options: { device: DeviceProfile; lastSyncedAt?: string }
+  options: { device: DeviceProfile; lastSyncedAt?: string; accountScope?: string }
 ): Promise<JournalHydrationResult> {
   try {
-    const repositories = await createJournalRepositories()
-    const [entryEnvelopes, attachmentEnvelopes, fileBoxItems, transfers, conflicts, tombstones, devices] = await Promise.all([
+    const repositories = await createJournalRepositories(
+      options.accountScope ? { accountScope: options.accountScope } : undefined
+    )
+    const [entryEnvelopes, attachmentEnvelopes, fileBoxItems, transfers, conflicts, tombstones, devices, metadata] = await Promise.all([
       repositories.entries.all(),
       repositories.attachments.all(),
       repositories.fileBoxItems.all(),
@@ -230,9 +265,17 @@ export async function hydrateOrMigrateJournalSnapshot(
       repositories.conflicts.all(),
       repositories.tombstones.all(),
       repositories.devices.all(),
+      repositories.meta.all(),
     ])
 
-    const hasIndexedData = entryEnvelopes.length > 0 || attachmentEnvelopes.length > 0 || fileBoxItems.length > 0 || transfers.length > 0
+    const hasIndexedData = entryEnvelopes.length > 0
+      || attachmentEnvelopes.length > 0
+      || fileBoxItems.length > 0
+      || transfers.length > 0
+      || conflicts.length > 0
+      || tombstones.length > 0
+      || devices.length > 0
+      || metadata.length > 0
     if (hasIndexedData) {
       const snapshot = applyTombstonesToSnapshot(
         {
@@ -261,28 +304,31 @@ export async function hydrateOrMigrateJournalSnapshot(
 
 export async function persistJournalSnapshot(
   snapshot: JournalSnapshot,
-  options: { device: DeviceProfile; lastSyncedAt?: string }
+  options: { device: DeviceProfile; lastSyncedAt?: string; accountScope?: string }
 ): Promise<JournalPersistResult> {
-  const repositories = await createJournalRepositories()
+  const repositories = await createJournalRepositories(
+    options.accountScope ? { accountScope: options.accountScope } : undefined
+  )
   const normalized = normalizeLocalSnapshot(snapshot)
   const queue = buildPendingSyncQueue(normalized, options.device, options.lastSyncedAt)
-  await Promise.all([
-    repositories.entries.replaceAll(Object.values(normalized.entries).map((entry) => buildEntryEnvelope(entry, options.device))),
-    repositories.attachments.replaceAll(normalized.attachments.map((attachment) => buildAttachmentEnvelope(attachment, options.device))),
-    repositories.fileBoxItems.replaceAll(normalized.fileBoxItems),
-    repositories.transfers.replaceAll(normalized.transfers),
-    repositories.conflicts.replaceAll(normalized.conflicts),
-    repositories.tombstones.replaceAll(normalized.tombstones),
-    repositories.syncQueue.replaceAll(queue),
-    repositories.devices.replaceAll([options.device]),
-    repositories.meta.replaceAll([
-      {
-        id: 'snapshot',
-        updatedAt: nowIso(),
-        lastSyncedAt: options.lastSyncedAt,
-        queueCount: queue.length,
-      },
-    ]),
-  ])
+  await repositories.replaceStores({
+    entries: Object.values(normalized.entries).map((entry) => buildEntryEnvelope(entry, options.device)),
+    attachments: normalized.attachments.map((attachment) => buildAttachmentEnvelope(attachment, options.device)),
+    fileBoxItems: normalized.fileBoxItems,
+    transfers: normalized.transfers,
+    conflicts: normalized.conflicts,
+    tombstones: normalized.tombstones,
+    syncQueue: queue,
+    devices: [options.device],
+  })
+  // The sync engine stores remote content hashes and its Drive change token in
+  // this same object store. Snapshot persistence must update its own record
+  // without clearing those sync checkpoints.
+  await repositories.meta.put({
+    id: 'snapshot',
+    updatedAt: nowIso(),
+    lastSyncedAt: options.lastSyncedAt,
+    queueCount: queue.length,
+  })
   return { queueCount: queue.length }
 }

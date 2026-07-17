@@ -9,6 +9,7 @@
     "verify:pwa": "node scripts/verify-pwa-build.mjs",
     "lint": "eslint .",
     "test:e2e": "playwright test",
+    "capture:ui-audit": "node scripts/capture-ui-audit.mjs",
     "screenshots": "node scripts/run-screenshots.mjs",
     "visual:references": "node scripts/compare-reference-screenshots.mjs",
     "preview": "vite preview"

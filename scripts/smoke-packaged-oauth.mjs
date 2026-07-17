@@ -11,13 +11,23 @@ const outputDir = path.resolve(process.env.LABNOTE_SMOKE_OUTPUT_DIR || path.join
 const authUrlFile = path.join(outputDir, 'oauth-url.txt')
 const oauthEventFile = path.join(outputDir, 'oauth-events.jsonl')
 const resultFile = path.join(outputDir, 'result.json')
-const exePath = path.resolve(process.env.LABNOTE_EXE || path.join(root, 'desktop', 'dist', 'win-unpacked', 'Easylab Lab Notebook.exe'))
+const exePath = path.resolve(process.env.LABNOTE_EXE || defaultPackagedAppPath())
 const localConfigPath = path.resolve(process.env.LABNOTE_OAUTH_CONFIG_FILE || path.join(root, '.labnote-local', 'oauth.desktop.json'))
 const localOAuthConfig = readLocalOAuthConfig(localConfigPath)
 const clientId = process.env.LABNOTE_DESKTOP_CLIENT_ID?.trim() || localOAuthConfig.clientId
 const clientSecret = process.env.LABNOTE_DESKTOP_CLIENT_SECRET?.trim() || localOAuthConfig.clientSecret
 const folderName = process.env.LABNOTE_SMOKE_FOLDER_NAME?.trim() || `Easylab Lab Notebook Packaged Smoke ${new Date().toISOString().replace(/[:.]/g, '-')}`
 const timeoutMs = Number(process.env.LABNOTE_SMOKE_TIMEOUT_MS || 240000)
+
+function defaultPackagedAppPath() {
+  if (process.platform === 'darwin') {
+    return path.join(root, 'desktop', 'dist', 'mac-arm64', 'Easylab Lab Notebook.app', 'Contents', 'MacOS', 'Easylab Lab Notebook')
+  }
+  if (process.platform === 'win32') {
+    return path.join(root, 'desktop', 'dist', 'win-unpacked', 'Easylab Lab Notebook.exe')
+  }
+  return path.join(root, 'desktop', 'dist', 'linux-unpacked', 'easylab-lab-notebook')
+}
 
 function readLocalOAuthConfig(configPath) {
   if (!fs.existsSync(configPath)) return { clientId: '', clientSecret: '' }
@@ -51,6 +61,34 @@ function writeStatus(stage, extra = {}) {
     ...extra,
     writtenAt: new Date().toISOString(),
   }, null, 2))
+}
+
+async function clickIfVisible(locator, timeoutMs = 1000) {
+  try {
+    await locator.waitFor({ state: 'visible', timeout: timeoutMs })
+    await locator.click()
+    return true
+  } catch {
+    return false
+  }
+}
+
+async function startDriveAuth(page) {
+  if (await clickIfVisible(page.getByTestId('auth-gate-connect'), 3000)) {
+    writeStatus('clicked-auth-gate-connect')
+    return
+  }
+
+  if (!(await clickIfVisible(page.getByRole('tab', { name: 'Sync' }).first()))) {
+    await clickIfVisible(page.getByRole('button', { name: /^Sync$/ }).first())
+  }
+  writeStatus('opened-sync-pane')
+
+  const connectButton = page
+    .getByRole('button', { name: /Connect Google Drive|Connect \/ Sync Drive|Sync now/ })
+    .first()
+  await connectButton.click()
+  writeStatus('clicked-connect-sync')
 }
 
 async function main() {
@@ -109,16 +147,13 @@ async function main() {
     await page.reload()
     await page.waitForLoadState('domcontentloaded')
     writeStatus('reloaded-after-configuration', { title: await page.title(), url: page.url() })
-    await page.getByRole('tab', { name: 'Sync' }).click()
-    writeStatus('opened-sync-pane')
     page.on('console', (message) => {
       fs.appendFileSync(path.join(outputDir, 'renderer-console.log'), `${message.type()}: ${message.text()}\n`, 'utf-8')
     })
     page.on('pageerror', (error) => {
       fs.appendFileSync(path.join(outputDir, 'renderer-console.log'), `pageerror: ${error.message}\n`, 'utf-8')
     })
-    await page.getByRole('button', { name: /Connect \/ Sync Drive/ }).click()
-    writeStatus('clicked-connect-sync')
+    await startDriveAuth(page)
 
     const authStartedAt = Date.now()
     while (!fs.existsSync(authUrlFile)) {

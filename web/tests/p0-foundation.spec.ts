@@ -28,6 +28,36 @@ test('journal repositories support blob CRUD in IndexedDB', async ({ page }) => 
   expect(result).toEqual({ savedSize: 15, savedMime: 'text/plain', deleted: true })
 })
 
+test('journal repositories isolate accounts without changing object-store schemas', async ({ page }) => {
+  await page.goto('/')
+
+  const result = await page.evaluate(async () => {
+    const { createJournalRepositories, JOURNAL_DB_VERSION, JOURNAL_STORES } = await import('/src/sync/repositories.ts')
+    const dbName = `p0-account-scope-${crypto.randomUUID()}`
+    const accountA = await createJournalRepositories({ dbName, accountScope: 'google:account-a' })
+    const accountB = await createJournalRepositories({ dbName, accountScope: 'google:account-b' })
+    const unscoped = await createJournalRepositories({ dbName })
+    await accountA.meta.put({ id: 'owner', updatedAt: new Date().toISOString(), value: 'account-a' })
+    await accountB.meta.put({ id: 'owner', updatedAt: new Date().toISOString(), value: 'account-b' })
+
+    return {
+      accountA: (await accountA.meta.get('owner'))?.value,
+      accountB: (await accountB.meta.get('owner'))?.value,
+      unscoped: (await unscoped.meta.get('owner'))?.value,
+      storeNames: Object.values(JOURNAL_STORES).sort(),
+      version: JOURNAL_DB_VERSION,
+    }
+  })
+
+  expect(result).toEqual({
+    accountA: 'account-a',
+    accountB: 'account-b',
+    unscoped: undefined,
+    storeNames: ['attachments', 'blobs', 'conflicts', 'devices', 'entries', 'fileBoxItems', 'meta', 'syncQueue', 'tombstones', 'transfers'],
+    version: 3,
+  })
+})
+
 test('IndexedDbBlobStore persists and verifies attachment blobs', async ({ page }) => {
   await page.goto('/')
 
@@ -130,4 +160,140 @@ test('IndexedDbJournalStore persists snapshots and sync checkpoints', async ({ p
     metaHash: 'hash-entry',
     token: '12',
   })
+})
+
+test('non-entity IndexedDB records prove initialization and preserve intentionally empty entities', async ({ page }) => {
+  await page.goto('/')
+
+  const result = await page.evaluate(async () => {
+    const { createJournalRepositories } = await import('/src/sync/repositories.ts')
+    const { hydrateOrMigrateJournalSnapshot } = await import('/src/sync/dataCore.ts')
+    const device = {
+      id: 'dev-initialization-evidence',
+      name: 'Initialization evidence',
+      platform: 'web' as const,
+      createdAt: '2026-05-24T08:00:00.000Z',
+      lastSeenAt: '2026-05-24T08:00:00.000Z',
+    }
+    const fallbackEntry = {
+      id: 'entry-must-not-return',
+      authorId: 'user-1',
+      title: 'Deleted local fallback',
+      dateBucket: '2026-05-24',
+      createdDatetime: '2026-05-24T08:00:00.000Z',
+      lastEditedDatetime: '2026-05-24T09:00:00.000Z',
+      content: [],
+      tags: [],
+      searchTerms: [],
+      linkedFiles: [],
+      pinnedRegions: [],
+    }
+    const scenarios = ['tombstone', 'conflict', 'device', 'metadata'] as const
+    const outcomes = []
+    for (const scenario of scenarios) {
+      const accountScope = `initialization-${scenario}-${crypto.randomUUID()}`
+      const repositories = await createJournalRepositories({ accountScope })
+      if (scenario === 'tombstone') {
+        await repositories.tombstones.put({
+          id: 'del-entry-must-not-return',
+          entityKind: 'entry',
+          entityId: fallbackEntry.id,
+          deletedAt: '2026-05-24T10:00:00.000Z',
+          deletedByDeviceId: device.id,
+        })
+      } else if (scenario === 'conflict') {
+        await repositories.conflicts.put({
+          id: 'conf-entry-must-not-return',
+          entityKind: 'entry',
+          entityId: fallbackEntry.id,
+          localUpdatedAt: '2026-05-24T09:00:00.000Z',
+          remoteUpdatedAt: '2026-05-24T09:01:00.000Z',
+          detectedAt: '2026-05-24T09:02:00.000Z',
+          resolution: 'pending',
+          summary: 'Initialization evidence',
+        })
+      } else if (scenario === 'device') {
+        await repositories.devices.put(device)
+      } else {
+        await repositories.meta.put({ id: 'snapshot', updatedAt: '2026-05-24T10:00:00.000Z', queueCount: 0 })
+      }
+      const hydrated = await hydrateOrMigrateJournalSnapshot({
+        entries: { [fallbackEntry.id]: fallbackEntry },
+        attachments: [],
+        fileBoxItems: [],
+        transfers: [],
+        conflicts: [],
+        tombstones: [],
+        device,
+      }, { device, accountScope })
+      outcomes.push({
+        scenario,
+        source: hydrated.source,
+        entryIds: Object.keys(hydrated.snapshot.entries),
+        tombstones: hydrated.snapshot.tombstones.length,
+        conflicts: hydrated.snapshot.conflicts.length,
+      })
+    }
+    return outcomes
+  })
+
+  expect(result).toEqual([
+    { scenario: 'tombstone', source: 'indexeddb', entryIds: [], tombstones: 1, conflicts: 0 },
+    { scenario: 'conflict', source: 'indexeddb', entryIds: [], tombstones: 0, conflicts: 1 },
+    { scenario: 'device', source: 'indexeddb', entryIds: [], tombstones: 0, conflicts: 0 },
+    { scenario: 'metadata', source: 'indexeddb', entryIds: [], tombstones: 0, conflicts: 0 },
+  ])
+})
+
+test('multi-store replacement aborts atomically when any record cannot be persisted', async ({ page }) => {
+  await page.goto('/')
+
+  const result = await page.evaluate(async () => {
+    const { createJournalRepositories } = await import('/src/sync/repositories.ts')
+    const repositories = await createJournalRepositories({ dbName: `p0-atomic-${crypto.randomUUID()}` })
+    const device = {
+      id: 'dev-before',
+      name: 'Before',
+      platform: 'web' as const,
+      createdAt: '2026-05-24T08:00:00.000Z',
+      lastSeenAt: '2026-05-24T08:00:00.000Z',
+    }
+    const entry = {
+      id: 'entry-before',
+      kind: 'entry' as const,
+      version: 1 as const,
+      updatedAt: '2026-05-24T09:00:00.000Z',
+      updatedByDeviceId: device.id,
+      payload: {
+        id: 'entry-before',
+        authorId: 'user-1',
+        title: 'Before',
+        dateBucket: '2026-05-24',
+        createdDatetime: '2026-05-24T08:00:00.000Z',
+        lastEditedDatetime: '2026-05-24T09:00:00.000Z',
+        content: [],
+        tags: [],
+        searchTerms: [],
+        linkedFiles: [],
+        pinnedRegions: [],
+      },
+    }
+    await repositories.replaceStores({ entries: [entry], devices: [device] })
+    let rejected = false
+    try {
+      await repositories.replaceStores({
+        entries: [],
+        devices: [{ ...device, id: 'dev-invalid', uncloneable: () => undefined } as never],
+      })
+    } catch {
+      rejected = true
+    }
+    return {
+      rejected,
+      entryIds: (await repositories.entries.all()).map((record) => record.id),
+      deviceIds: (await repositories.devices.all()).map((record) => record.id),
+    }
+  })
+
+  expect(result).toEqual({ rejected: true, entryIds: ['entry-before'], deviceIds: ['dev-before'] })
 })

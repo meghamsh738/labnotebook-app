@@ -257,7 +257,6 @@ async function main() {
 
   const { clientId, clientSecret, source } = readOAuthConfig()
   if (!/\.apps\.googleusercontent\.com$/.test(clientId)) fail('Desktop OAuth client ID is invalid.', { source })
-  if (!clientSecret) fail('Desktop OAuth client secret is required for this real Drive smoke.', { source })
 
   let accessToken = ''
   let authMode = ''

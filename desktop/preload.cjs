@@ -5,4 +5,5 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getAppInfo: () => ipcRenderer.invoke('app:info'),
   ensureDirectories: (paths) => ipcRenderer.invoke('fs:ensure-directories', paths),
   requestGoogleDriveAccessToken: (options) => ipcRenderer.invoke('google-drive:request-token', options),
+  disconnectGoogleDrive: (options) => ipcRenderer.invoke('google-drive:disconnect', options),
 })

@@ -1,16 +1,17 @@
 ﻿import type React from 'react'
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
-import { createEditor, Editor, Element as SlateElement, Node, Path, Range, Text, Transforms } from 'slate'
+import { createEditor, Editor, Element as SlateElement, Node, Path, Point, Range, Text, Transforms } from 'slate'
 import { HistoryEditor, withHistory } from 'slate-history'
 import type { Descendant } from 'slate'
 import { Slate, Editable, withReact, ReactEditor, useSlateStatic } from 'slate-react'
+import { createPortal } from 'react-dom'
 import { PDFDocument, StandardFonts, rgb, type PDFFont } from 'pdf-lib'
 import type { RenderElementProps, RenderLeafProps } from 'slate-react'
-import { toDataURL as toQrDataUrl } from 'qrcode'
 import { cacheFile, deleteCachedFile, getCachedFile } from './idb'
 import { writeFileToCache, restoreCacheHandle, ensureCacheDir, pickCacheDir, clearCacheHandle } from './fileCache'
 import { GuidedTutorial, type TutorialStep } from './GuidedTutorial'
 import './App.css'
+import './App.final.css'
 import logoMark from './assets/logo.svg'
 import { sampleData, seedVersion } from './data/sampleData'
 import type {
@@ -28,7 +29,7 @@ import type {
   SyncConflict,
   SyncManifest,
   TextRun,
-  ThemeName,
+  TombstoneRecord,
   TransferRecord,
   ListStyle,
   WorkbookCellStyle,
@@ -42,24 +43,27 @@ import {
   makeFileBoxItem,
   makeTransferRecord,
   normalizeDriveConnection,
-  parseGoogleOAuthClientConfig,
+  resolveGoogleAccountStorageScope,
   resolveDriveClientId,
   fileSizeLabel,
   saveJson,
   transferStatusLabel,
   type DriveConnectionState,
+  type GoogleAccountProfile,
 } from './sync/connectedSync'
 import {
   hashBlobSha256,
   hydrateOrMigrateJournalSnapshot,
   persistJournalSnapshot,
   type JournalHydrationResult,
+  type JournalSnapshot,
 } from './sync/dataCore'
 import { IndexedDbBlobStore } from './sync/blobStore'
 import { createJournalRepositories } from './sync/repositories'
 import {
   createIndexedDbJournalStore,
   downloadAttachmentBlob,
+  resolveSyncConflict as resolveStoredSyncConflict,
   syncOnce,
   type SyncEngineResult,
 } from './sync/syncEngine'
@@ -82,7 +86,6 @@ const APP_OWNER = 'Meghamsh Teja'
 const APP_GITHUB_URL = 'https://github.com/meghamsh738'
 const APP_SETUP_KEY = 'labnote.setupComplete'
 const APP_PATHS_KEY = 'labnote.appPaths'
-const APP_MOBILE_PAIR_LINK_KEY = 'labnote.mobilePairLink'
 const SHARED_API_PREFIX = '/labnote-api'
 const SHARED_API_INFO_URL = `${SHARED_API_PREFIX}/info`
 const SHARED_API_STATE_URL = `${SHARED_API_PREFIX}/state`
@@ -96,7 +99,7 @@ type AppPaths = {
   syncRoot: string
 }
 
-type AppPane = 'entries' | 'protocols' | 'file-hub' | 'devices' | 'transfers' | 'sync'
+type AppPane = 'entries' | 'protocols' | 'file-hub' | 'devices' | 'transfers' | 'sync' | 'settings'
 
 type DriveSyncSummary = SyncEngineResult & {
   syncedAt: string
@@ -131,6 +134,8 @@ type UiIconName =
   | 'chevronLeft'
   | 'chevronRight'
   | 'chevronUp'
+  | 'desktop'
+  | 'device'
   | 'download'
   | 'drive'
   | 'edit'
@@ -140,6 +145,7 @@ type UiIconName =
   | 'layout'
   | 'list'
   | 'minus'
+  | 'more'
   | 'note'
   | 'paperclip'
   | 'plus'
@@ -147,6 +153,7 @@ type UiIconName =
   | 'save'
   | 'search'
   | 'settings'
+  | 'sliders'
   | 'spark'
   | 'tag'
   | 'table'
@@ -186,6 +193,10 @@ function UiIcon({ name, className, title }: { name: UiIconName; className?: stri
       return <svg {...common}>{titleNode}<path d="m9 18 6-6-6-6" /></svg>
     case 'chevronUp':
       return <svg {...common}>{titleNode}<path d="m18 15-6-6-6 6" /></svg>
+    case 'desktop':
+      return <svg {...common}>{titleNode}<rect x="4" y="5" width="16" height="11.5" rx="2.2" /><path d="M8.5 20h7" /><path d="M12 16.5V20" /></svg>
+    case 'device':
+      return <svg {...common}>{titleNode}<rect x="3.5" y="5" width="13.2" height="9.8" rx="2.1" /><path d="M7.8 18.8h5" /><path d="M10.3 14.8v4" /><rect x="16.2" y="8.2" width="4.3" height="9.8" rx="1.4" /><path d="M17.7 15.8h1.3" /></svg>
     case 'download':
       return <svg {...common}>{titleNode}<path d="M12 4v10" /><path d="m7.5 10 4.5 4.5L16.5 10" /><path d="M5 20h14" /></svg>
     case 'drive':
@@ -204,6 +215,8 @@ function UiIcon({ name, className, title }: { name: UiIconName; className?: stri
       return <svg {...common}>{titleNode}<path d="M8 6h12" /><path d="M8 12h12" /><path d="M8 18h12" /><path d="M4 6h.01" /><path d="M4 12h.01" /><path d="M4 18h.01" /></svg>
     case 'minus':
       return <svg {...common}>{titleNode}<path d="M5 12h14" /></svg>
+    case 'more':
+      return <svg {...common}>{titleNode}<circle cx="5" cy="12" r="1" fill="currentColor" stroke="none" /><circle cx="12" cy="12" r="1" fill="currentColor" stroke="none" /><circle cx="19" cy="12" r="1" fill="currentColor" stroke="none" /></svg>
     case 'note':
       return <svg {...common}>{titleNode}<path d="M6 4h9l3 3v13H6V4Z" /><path d="M15 4v4h4" /><path d="M9 12h6" /><path d="M9 16h4" /></svg>
     case 'paperclip':
@@ -218,6 +231,8 @@ function UiIcon({ name, className, title }: { name: UiIconName; className?: stri
       return <svg {...common}>{titleNode}<circle cx="10.5" cy="10.5" r="6.5" /><path d="m16 16 4 4" /></svg>
     case 'settings':
       return <svg {...common}>{titleNode}<path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z" /><path d="M19.4 15a1.8 1.8 0 0 0 .4 2l.1.1-2.1 3.6-.2-.1a1.8 1.8 0 0 0-2 .3 1.8 1.8 0 0 0-.6 1.9h-4a1.8 1.8 0 0 0-.6-1.9 1.8 1.8 0 0 0-2-.3l-.2.1-2.1-3.6.1-.1a1.8 1.8 0 0 0 .4-2A1.8 1.8 0 0 0 5 13.7H4V10h1a1.8 1.8 0 0 0 1.6-1.2 1.8 1.8 0 0 0-.4-2l-.1-.1 2.1-3.6.2.1a1.8 1.8 0 0 0 2-.3A1.8 1.8 0 0 0 11 1h4a1.8 1.8 0 0 0 .6 1.9 1.8 1.8 0 0 0 2 .3l.2-.1 2.1 3.6-.1.1a1.8 1.8 0 0 0-.4 2A1.8 1.8 0 0 0 21 10h1v3.7h-1a1.8 1.8 0 0 0-1.6 1.3Z" /></svg>
+    case 'sliders':
+      return <svg {...common}>{titleNode}<path d="M4 7h9" /><path d="M17 7h3" /><path d="M4 17h3" /><path d="M11 17h9" /><circle cx="15" cy="7" r="2" /><circle cx="9" cy="17" r="2" /></svg>
     case 'spark':
       return <svg {...common}>{titleNode}<path d="m12 3 1.6 5.4L19 10l-5.4 1.6L12 17l-1.6-5.4L5 10l5.4-1.6L12 3Z" /><path d="m18.5 15 .7 2.3 2.3.7-2.3.7-.7 2.3-.7-2.3-2.3-.7 2.3-.7.7-2.3Z" /></svg>
     case 'tag':
@@ -248,6 +263,8 @@ function logDriveSyncDebug(event: string, details?: unknown) {
 }
 
 const SEED_VERSION_KEY = 'labnote.seedVersion'
+const ACCOUNT_STORAGE_PREFIX = 'labnote.account'
+const LEGACY_STORAGE_OWNER_KEY = 'labnote.legacyCacheOwner'
 
 const shouldResetSeed = () => {
   if (typeof window === 'undefined') return true
@@ -269,13 +286,173 @@ const shouldResetSeed = () => {
   }
 }
 
-const suggestedRoot = 'C:\\Easylab'
-const suggestedPaths: AppPaths = {
-  dataRoot: `${suggestedRoot}\\data`,
-  attachmentsRoot: `${suggestedRoot}\\attachments`,
-  exportRoot: `${suggestedRoot}\\exports`,
-  syncRoot: `${suggestedRoot}\\sync`,
+function googleAccountStorageId(account?: GoogleAccountProfile) {
+  return resolveGoogleAccountStorageScope(account)
 }
+
+function accountScopedStorageKey(baseKey: string, account?: GoogleAccountProfile) {
+  const accountId = googleAccountStorageId(account)
+  return accountId ? `${ACCOUNT_STORAGE_PREFIX}.${accountId}.${baseKey}` : baseKey
+}
+
+function readAccountScopedJson<T>(baseKey: string, fallback: T, account?: GoogleAccountProfile): T {
+  if (typeof window === 'undefined') return fallback
+  const accountId = googleAccountStorageId(account)
+  let allowLegacyFallback = !accountId
+  if (accountId) {
+    try {
+      const legacyOwner = window.localStorage.getItem(LEGACY_STORAGE_OWNER_KEY)
+      if (legacyOwner) {
+        allowLegacyFallback = legacyOwner === accountId
+      } else if (hasLegacyNotebookCache()) {
+        window.localStorage.setItem(LEGACY_STORAGE_OWNER_KEY, accountId)
+        allowLegacyFallback = true
+      }
+    } catch (err) {
+      console.warn('Unable to verify legacy cache ownership', err)
+    }
+  }
+  const keys = accountId
+    ? [accountScopedStorageKey(baseKey, account), ...(allowLegacyFallback ? [baseKey] : [])]
+    : [baseKey]
+  for (const key of keys) {
+    try {
+      const raw = window.localStorage.getItem(key)
+      if (raw) return JSON.parse(raw) as T
+    } catch (err) {
+      console.warn(`Unable to read cached ${baseKey}`, err)
+    }
+  }
+  return fallback
+}
+
+function writeAccountScopedJson<T>(baseKey: string, value: T, account?: GoogleAccountProfile) {
+  if (typeof window === 'undefined') return
+  const accountId = googleAccountStorageId(account)
+  if (!accountId) return
+  window.localStorage.setItem(accountScopedStorageKey(baseKey, account), JSON.stringify(value))
+}
+
+function accountMigrationStorageKey(account?: GoogleAccountProfile) {
+  const accountId = googleAccountStorageId(account)
+  return accountId ? `${ACCOUNT_STORAGE_PREFIX}.${accountId}.migration.localNotebookUploaded` : ''
+}
+
+function hasLegacyNotebookCache() {
+  if (typeof window === 'undefined') return false
+  return ['labnote.entries', 'labnote.attachments', 'labnote.projects', 'labnote.experiments', 'labnote.protocols']
+    .some((key) => Boolean(window.localStorage.getItem(key)))
+}
+
+function isDriveWorkspaceReady(connection: DriveConnectionState) {
+  const hasAccount = Boolean(connection.connectedAccount?.email || connection.connectedAccount?.subject)
+  const hasSignedInCache = Boolean(hasAccount && (connection.connectedAt || connection.lastSyncAt))
+  return connection.storageMode === 'google-drive' &&
+    Boolean(connection.folderId) &&
+    hasAccount &&
+    connection.status !== 'needs-auth' &&
+    connection.status !== 'disconnected' &&
+    (connection.status !== 'error' || hasSignedInCache)
+}
+
+function isLocalDevBuild() {
+  return Boolean((import.meta as ImportMeta & { env?: { DEV?: boolean } }).env?.DEV)
+}
+
+function isDevDrivePreviewMode() {
+  if (typeof window === 'undefined' || !isLocalDevBuild()) return false
+  return new URLSearchParams(window.location.search).has('devDrivePreview')
+}
+
+function createDevDrivePreviewConnection(existing: DriveConnectionState): DriveConnectionState {
+  return {
+    ...existing,
+    storageMode: 'google-drive',
+    folderId: existing.folderId || 'local-drive-workspace',
+    connectedAccount: existing.connectedAccount ?? {
+      provider: 'google',
+      email: '',
+      name: 'Google Drive',
+      subject: 'local-workspace',
+    },
+    connectedAt: existing.connectedAt ?? new Date().toISOString(),
+    status: 'ready',
+    lastError: undefined,
+  }
+}
+
+function authGateErrorMessage(error?: string) {
+  if (!error) return ''
+  if (/popup window closed/i.test(error)) {
+    return 'Sign-in was closed before it finished. Try again when you are ready.'
+  }
+  if (/embedded browser|brave|chrome|codex/i.test(error)) {
+    return 'Google sign-in cannot finish inside this embedded browser. Open the app in Brave or Chrome for this local build.'
+  }
+  if (/oauth|client id|not configured/i.test(error)) {
+    return 'Google sign-in is not configured for this build yet.'
+  }
+  if (/timed out|finish loading/i.test(error)) {
+    return 'Google sign-in took too long. Check the browser popup, then try again.'
+  }
+  if (/authorization was cancelled|unregistered_on_api_console|not registered/i.test(error)) {
+    return 'Google Drive could not connect. For Android builds, check that the app package and SHA-1 fingerprint are registered in Google Cloud.'
+  }
+  return 'Google Drive could not connect. Please try again.'
+}
+
+const joinSuggestedPath = (root: string, leaf: string) => {
+  const separator = root.includes('\\') ? '\\' : '/'
+  return `${root.replace(/[\\/]+$/, '')}${separator}${leaf}`
+}
+
+const getSuggestedPaths = (): AppPaths => {
+  if (typeof window === 'undefined') {
+    const root = 'Easylab Lab Notebook'
+    return {
+      dataRoot: joinSuggestedPath(root, 'data'),
+      attachmentsRoot: joinSuggestedPath(root, 'attachments'),
+      exportRoot: joinSuggestedPath(root, 'exports'),
+      syncRoot: joinSuggestedPath(root, 'sync'),
+    }
+  }
+
+  const platform = window.navigator.platform || ''
+  const userAgent = window.navigator.userAgent || ''
+  const isWindows = /Win/i.test(platform)
+  const isMobileBrowser = !window.electronAPI?.selectDirectory && /Android|iPhone|iPad|iPod|Mobile/i.test(userAgent)
+
+  if (isWindows) {
+    const root = '%USERPROFILE%\\Documents\\Coding Projects\\Easylab Lab Notebook'
+    return {
+      dataRoot: joinSuggestedPath(root, 'data'),
+      attachmentsRoot: joinSuggestedPath(root, 'attachments'),
+      exportRoot: joinSuggestedPath(root, 'exports'),
+      syncRoot: joinSuggestedPath(root, 'sync'),
+    }
+  }
+
+  if (isMobileBrowser) {
+    return {
+      dataRoot: 'Browser local storage/data',
+      attachmentsRoot: 'Browser local storage/attachments',
+      exportRoot: 'Browser downloads/exports',
+      syncRoot: 'Browser local storage/sync',
+    }
+  }
+
+  const root = /Mac/i.test(platform)
+    ? '~/Documents/Coding Projects/Easylab Lab Notebook'
+    : '~/Documents/Coding Projects/Easylab Lab Notebook'
+  return {
+    dataRoot: joinSuggestedPath(root, 'data'),
+    attachmentsRoot: joinSuggestedPath(root, 'attachments'),
+    exportRoot: joinSuggestedPath(root, 'exports'),
+    syncRoot: joinSuggestedPath(root, 'sync'),
+  }
+}
+
+const suggestedPaths: AppPaths = getSuggestedPaths()
 
 const readStoredPaths = (): AppPaths | null => {
   if (typeof window === 'undefined') return null
@@ -302,8 +479,13 @@ const formatDisplayPath = (value?: string | null) => {
   if (/^[a-z][a-z0-9+.-]*:\/\//i.test(raw)) return raw
 
   const isUnc = raw.startsWith('\\\\') || raw.startsWith('//')
-  const normalized = raw.replace(/[\\/]+/g, '\\')
-  return isUnc ? `\\\\${normalized.replace(/^\\+/, '')}` : normalized
+  const isWindowsPath = isUnc || /^[a-zA-Z]:[\\/]/.test(raw) || raw.includes('\\')
+  if (isWindowsPath) {
+    const normalized = raw.replace(/[\\/]+/g, '\\')
+    return isUnc ? `\\\\${normalized.replace(/^\\+/, '')}` : normalized
+  }
+
+  return raw.replace(/\/+/g, '/')
 }
 
 const writeStoredPaths = (paths: AppPaths) => {
@@ -333,14 +515,9 @@ const shouldAutoBootstrapMobileSetup = () => {
 }
 
 type EntryTemplateId = 'guided' | 'blank' | 'day'
+const ENTRY_TAB_ORDER = ['note', 'workbook', 'files', 'details'] as const
+type EntryTabId = (typeof ENTRY_TAB_ORDER)[number]
 type SyncStatus = 'pending' | 'synced' | 'failed'
-type PairLinkStatus = 'idle' | 'checking' | 'online' | 'offline'
-type PairingLinkInfo = {
-  url: string
-  candidates: string[]
-  tailscaleConnected: boolean
-  source: 'none' | 'tailscale' | 'lan'
-}
 type HistoryReactEditor = ReactEditor & HistoryEditor
 
 const monthStartFromIso = (isoDate: string) => {
@@ -751,11 +928,14 @@ const LOCKED_TEMPLATE_SECTION_LABELS = new Set([
   'Results',
 ])
 const LEGACY_DAILY_SECTION_LABELS = new Set(['Setup', 'Procedure', 'Observations', 'Next steps'])
-const DAY_CONTEXT_GUIDE = [
-  '• Microglia activation measured by CD68 and Iba1.',
-  '• Comparing IL-17 WT vs KO mice at 12 months.',
-  '• Evaluating response to TNF stimulation at 10 ng/mL.',
-].join('\n')
+const LEGACY_DAILY_GUIDE_TEXTS = new Set([
+  [
+    '• Microglia activation measured by CD68 and Iba1.',
+    '• Comparing IL-17 WT vs KO mice at 12 months.',
+    '• Evaluating response to TNF stimulation at 10 ng/mL.',
+  ].join('\n'),
+  'What are you testing today? Include the biological question, model, condition, and expected readout.',
+])
 
 const DEFAULT_PROJECT_TAGS = [
   'IL-17 WT KO aging project',
@@ -774,42 +954,6 @@ const DEFAULT_EXPERIMENT_TAGS = [
 ]
 
 const normalizeTag = (value: string) => value.trim().replace(/\s+/g, ' ')
-
-type ThemeOption = {
-  id: ThemeName
-  label: string
-  description: string
-  preview: {
-    bg: string
-    surface: string
-    accent: string
-    border: string
-  }
-}
-
-const THEME_OPTIONS: ThemeOption[] = [
-  {
-    id: 'light',
-    label: 'Parchment',
-    description: 'Warm notebook surface with evergreen controls.',
-    preview: { bg: '#F4EFE5', surface: '#FFFCF5', accent: '#075C49', border: '#20302A' },
-  },
-  {
-    id: 'neo-brutal',
-    label: 'Graphite',
-    description: 'Low-glare dark rail with paper work surfaces.',
-    preview: { bg: '#ECE8DE', surface: '#FCF8EE', accent: '#2F5D62', border: '#263B3C' },
-  },
-  {
-    id: 'sage',
-    label: 'Botanical',
-    description: 'Softer green lab palette for long sessions.',
-    preview: { bg: '#EFF3EA', surface: '#FCFFF8', accent: '#2D6F4F', border: '#254334' },
-  },
-]
-
-const isThemeName = (value: string | null): value is ThemeName =>
-  !!value && THEME_OPTIONS.some((opt) => opt.id === value)
 
 function applyLockedTemplateHeadings(entry: Entry): Entry {
   const lockedIds = new Set<string>()
@@ -893,17 +1037,30 @@ function blockHasMeaningfulContent(block: Block): boolean {
 
 function shouldCondenseLegacyDailyEntry(entry: Entry): boolean {
   if (!entry.isDaily) return false
+  const { heading: contextHeading, paragraph: contextParagraph } = findContextBlocks(entry)
+  const contextText = contextParagraph?.text.trim() ?? ''
+  const contextGuide = contextParagraph?.guide?.trim() ?? ''
+  const contextTextIsGuide = Boolean(
+    contextParagraph &&
+      (LEGACY_DAILY_GUIDE_TEXTS.has(contextText) || LEGACY_DAILY_GUIDE_TEXTS.has(contextGuide))
+  )
+  const contextIds = new Set<string>()
+  if (contextHeading) contextIds.add(contextHeading.id)
+  if (contextParagraph) contextIds.add(contextParagraph.id)
+
   const hasLegacySections =
     entry.content.some(
       (block) => block.type === 'heading' && LEGACY_DAILY_SECTION_LABELS.has(block.text.trim())
     ) ||
     (entry.pinnedRegions ?? []).some((region) => LEGACY_DAILY_SECTION_LABELS.has(region.label))
-  if (!hasLegacySections) return false
-
-  const { heading: contextHeading, paragraph: contextParagraph } = findContextBlocks(entry)
-  const contextIds = new Set<string>()
-  if (contextHeading) contextIds.add(contextHeading.id)
-  if (contextParagraph) contextIds.add(contextParagraph.id)
+  if (!hasLegacySections) {
+    if (!contextTextIsGuide && !contextHeading) return false
+    return !entry.content.some((block) => {
+      if (contextIds.has(block.id)) return false
+      if (block.type === 'heading' && block.text.trim().toLowerCase() === 'context') return false
+      return blockHasMeaningfulContent(block)
+    })
+  }
 
   const hasLinkedLegacyRegionAttachments = (entry.pinnedRegions ?? []).some(
     (region) =>
@@ -926,46 +1083,52 @@ function condenseLegacyDailyEntry(entry: Entry): Entry {
   if (!shouldCondenseLegacyDailyEntry(entry)) return entry
 
   const nowIso = new Date().toISOString()
-  const { heading: contextHeading, paragraph: contextParagraph } = findContextBlocks(entry)
-  const headingId = contextHeading?.id ?? newId('b-')
+  const { paragraph: contextParagraph } = findContextBlocks(entry)
   const paragraphId = contextParagraph?.id ?? newId('b-')
-  const contextRegion = (entry.pinnedRegions ?? []).find((region) => region.label.trim().toLowerCase() === 'context')
-
-  const compactHeading: Extract<Block, { type: 'heading' }> = {
-    id: headingId,
-    type: 'heading',
-    level: 2,
-    text: 'Context',
-    locked: true,
-    align: contextHeading?.align,
-    runs: contextHeading?.runs,
-    updatedAt: contextHeading?.updatedAt ?? nowIso,
-    updatedBy: contextHeading?.updatedBy ?? 'me',
-  }
+  const contextText = contextParagraph?.text ?? ''
+  const contextGuide = contextParagraph?.guide ?? ''
+  const shouldClearGuide =
+    LEGACY_DAILY_GUIDE_TEXTS.has(contextText.trim()) || LEGACY_DAILY_GUIDE_TEXTS.has(contextGuide.trim())
   const compactParagraph: Extract<Block, { type: 'paragraph' }> = {
     id: paragraphId,
     type: 'paragraph',
-    text: contextParagraph?.text ?? '',
-    runs: contextParagraph?.runs,
+    text: shouldClearGuide ? '' : contextText,
     align: contextParagraph?.align,
-    guide: DAY_CONTEXT_GUIDE,
     updatedAt: contextParagraph?.updatedAt ?? nowIso,
     updatedBy: contextParagraph?.updatedBy ?? 'me',
   }
 
-  const nextRegion: PinnedRegion = {
-    id: contextRegion?.id ?? newId('region-'),
-    entryId: entry.id,
-    label: 'Context',
-    blockIds: [headingId, paragraphId],
-    linkedAttachments: contextRegion?.linkedAttachments ?? [],
-    summary: contextRegion?.summary,
-  }
-
   return {
     ...entry,
-    content: [compactHeading, compactParagraph],
-    pinnedRegions: [nextRegion],
+    projectId: undefined,
+    experimentId: undefined,
+    content: [compactParagraph],
+    tags: [],
+    projectTags: [],
+    experimentTags: [],
+    searchTerms: [],
+    pinnedRegions: [],
+  }
+}
+
+function normalizeEntryForLoad(entry: Entry): Entry {
+  return condenseLegacyDailyEntry(ensureEntryDateBucket(applyLockedTemplateHeadings(entry)))
+}
+
+function readAccountJournalFallback(account: GoogleAccountProfile, device: DeviceProfile): JournalSnapshot {
+  const entries = readAccountScopedJson<Record<string, Entry>>('labnote.entries', {}, account)
+  return {
+    entries: Object.fromEntries(
+      Object.entries(entries).map(([id, entry]) => [id, normalizeEntryForLoad(entry)])
+    ),
+    attachments: readAccountScopedJson<Attachment[]>('labnote.attachments', [], account),
+    fileBoxItems: readAccountScopedJson<FileBoxItem[]>(CONNECTED_STORAGE_KEYS.fileBox, [], account),
+    transfers: readAccountScopedJson<TransferRecord[]>(CONNECTED_STORAGE_KEYS.transfers, [], account),
+    conflicts: readAccountScopedJson<SyncConflict[]>(CONNECTED_STORAGE_KEYS.conflicts, [], account),
+    tombstones: readAccountScopedJson<TombstoneRecord[]>('labnote.tombstones', [], account),
+    device: createDeviceProfile(
+      readAccountScopedJson<Partial<DeviceProfile> | null>(CONNECTED_STORAGE_KEYS.device, device, account) ?? device
+    ),
   }
 }
 
@@ -1229,34 +1392,6 @@ function safeFileName(name: string): string {
 }
 
 const isLikelyUrl = (value: string) => /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(value)
-const isHttpUrl = (value: string) => {
-  try {
-    const parsed = new URL(value)
-    return parsed.protocol === 'http:' || parsed.protocol === 'https:'
-  } catch {
-    return false
-  }
-}
-const isLoopbackHttpUrl = (value: string) => {
-  try {
-    const parsed = new URL(value)
-    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false
-    const host = parsed.hostname.toLowerCase()
-    return host === 'localhost' || host === '127.0.0.1' || host === '::1'
-  } catch {
-    return false
-  }
-}
-const TAILSCALE_V4_PATTERN = /^100\.(\d{1,3}\.){2}\d{1,3}$/
-const isTailscaleHost = (host: string) => host.toLowerCase().endsWith('.ts.net') || TAILSCALE_V4_PATTERN.test(host)
-const isTailscaleUrl = (value: string) => {
-  try {
-    const parsed = new URL(value)
-    return (parsed.protocol === 'http:' || parsed.protocol === 'https:') && isTailscaleHost(parsed.hostname)
-  } catch {
-    return false
-  }
-}
 const isWindowsDriveRoot = (value: string) => /^[a-zA-Z]:[\\/]*$/.test(value)
 const shortEntryId = (entryId: string) => entryId.replace(/^entry-/, '').slice(0, 8) || entryId
 const entryBundleFolderName = (entry: Entry) => safeFileName(`${entry.dateBucket}-${shortEntryId(entry.id)}`)
@@ -1343,15 +1478,6 @@ function attachmentIsRemoteAvailable(attachment: Attachment, localUrl?: string) 
   )
 }
 
-function attachmentStorageLabel(attachment: Attachment, localUrl?: string) {
-  if (attachment.syncStatus === 'failed') return 'Sync failed'
-  if (attachmentIsRemoteAvailable(attachment, localUrl)) return 'Remote available'
-  if (attachment.driveFileId && (attachment.cacheKey || attachment.cachedPath || localUrl)) return 'Local + Drive'
-  if (attachment.driveFileId) return 'Drive metadata'
-  if (attachment.cacheKey || attachment.cachedPath || localUrl) return 'Local only'
-  return 'Metadata only'
-}
-
 function readFileAsDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader()
@@ -1425,49 +1551,29 @@ function isAbortError(err: unknown): boolean {
   return 'name' in err && (err as { name?: unknown }).name === 'AbortError'
 }
 
-function isEntryLike(value: unknown): value is Entry {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
-  const record = value as Partial<Entry>
-  return typeof record.id === 'string' && typeof record.title === 'string' && Array.isArray(record.content)
+function isInteractiveGoogleAuthError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err)
+  return /\b(interaction_required|login_required|consent_required|popup|access_denied)\b/i.test(message)
 }
 
-function entryFromConflictCopy(value: unknown): Entry | undefined {
-  if (isEntryLike(value)) return value
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined
-  const record = value as { entry?: unknown }
-  return isEntryLike(record.entry) ? record.entry : undefined
+function isUnsupportedEmbeddedGoogleOAuthHost(): boolean {
+  if (typeof window === 'undefined') return false
+  if (window.electronAPI?.requestGoogleDriveAccessToken) return false
+  const params = new URLSearchParams(window.location.search)
+  if (params.has('allowEmbeddedGoogleOAuth')) return false
+  if (params.has('embeddedOAuthWarning') || params.has('codexIab')) return true
+  const userAgent = window.navigator?.userAgent ?? ''
+  const appVersion = window.navigator?.appVersion ?? ''
+  return /\b(Codex|Electron)\b/i.test(`${userAgent} ${appVersion}`)
 }
 
-function makeConflictCopyEntry(entry: Entry, deviceId: string): Entry {
-  const timestamp = new Date().toISOString()
-  return {
-    ...entry,
-    id: `entry-conflict-${crypto.randomUUID?.() ?? Math.random().toString(36).slice(2)}`,
-    title: `${entry.title} (conflict copy)`,
-    lastEditedDatetime: timestamp,
-    updatedByDeviceId: deviceId,
-    syncStatus: 'queued',
-  }
+function accountDisplayName(account?: GoogleAccountProfile) {
+  if (!account) return 'Not connected'
+  return account.name || account.email || 'Google account'
 }
 
-const inferDefaultMobilePairLink = () => {
-  if (typeof window === 'undefined') return ''
-  const { protocol, hostname, origin } = window.location
-  if (protocol !== 'http:' && protocol !== 'https:') return ''
-  if (hostname === 'localhost' || hostname === '127.0.0.1') return ''
-  return origin
-}
-
-const normalizePairingLinkInfo = (value: unknown): PairingLinkInfo | null => {
-  if (!value || typeof value !== 'object') return null
-  const payload = value as Partial<PairingLinkInfo>
-  const url = typeof payload.url === 'string' ? payload.url.trim() : ''
-  const source = payload.source === 'tailscale' || payload.source === 'lan' || payload.source === 'none' ? payload.source : 'none'
-  const candidates = Array.isArray(payload.candidates)
-    ? payload.candidates.filter((candidate): candidate is string => typeof candidate === 'string')
-    : []
-  const tailscaleConnected = payload.tailscaleConnected === true
-  return { url, source, candidates, tailscaleConnected }
+function accountEmailDisplay(account?: GoogleAccountProfile) {
+  return account?.email || 'Google account connected'
 }
 
 function hashString(input: string): number {
@@ -1849,12 +1955,13 @@ async function getWritableCacheDir(): Promise<FileSystemDirectoryHandle | null> 
 
 async function readAttachmentBlob(
   attachment: Attachment,
-  attachmentUrls: Record<string, string>
+  attachmentUrls: Record<string, string>,
+  accountScope?: string
 ): Promise<Blob | null> {
   if (attachment.cachedPath?.startsWith('idb://')) {
     const key = attachment.cachedPath.replace('idb://', '')
     try {
-      const cached = await getCachedFile(key)
+      const cached = await getCachedFile(key, accountScope)
       if (cached) return cached
     } catch {
       // Fall through to the journal blob store or thumbnail URL.
@@ -1883,7 +1990,7 @@ async function readAttachmentBlob(
 
   if (attachment.cacheKey) {
     try {
-      const repositories = await createJournalRepositories()
+      const repositories = await createJournalRepositories(accountScope ? { accountScope } : undefined)
       const blobStore = new IndexedDbBlobStore(repositories)
       return (await blobStore.get(attachment.cacheKey)) ?? null
     } catch {
@@ -1904,8 +2011,8 @@ async function readAttachmentBlob(
   return null
 }
 
-async function writeAttachmentBlobToJournalCore(key: string, blob: Blob) {
-  const repositories = await createJournalRepositories()
+async function writeAttachmentBlobToJournalCore(key: string, blob: Blob, accountScope?: string) {
+  const repositories = await createJournalRepositories(accountScope ? { accountScope } : undefined)
   const blobStore = new IndexedDbBlobStore(repositories)
   return blobStore.put(key, blob)
 }
@@ -1917,8 +2024,62 @@ async function writeBlobToDir(dir: FileSystemDirectoryHandle, filename: string, 
   await writable.close()
 }
 
+function isSameSlatePoint(a: Point, b: Point) {
+  return Path.equals(a.path, b.path) && a.offset === b.offset
+}
+
+function isFullEditorSelection(editor: ReactEditor, selection: Range) {
+  const [start, end] = Range.edges(selection)
+  return isSameSlatePoint(start, Editor.start(editor, [])) && isSameSlatePoint(end, Editor.end(editor, []))
+}
+
+function replaceEditorWithBlankParagraph(editor: ReactEditor) {
+  Editor.withoutNormalizing(editor, () => {
+    for (let index = editor.children.length - 1; index >= 0; index -= 1) {
+      Transforms.removeNodes(editor, { at: [index] })
+    }
+    Transforms.insertNodes(
+      editor,
+      { type: 'paragraph', blockId: newId('b-'), children: [{ text: '' }] },
+      { at: [0] }
+    )
+    Transforms.select(editor, Editor.start(editor, [0]))
+  })
+  ReactEditor.focus(editor)
+}
+
+function clearEmptyGuides(editor: ReactEditor) {
+  const guidePaths = Array.from(
+    Editor.nodes(editor, {
+      at: [],
+      match: (n) =>
+        SlateElement.isElement(n) &&
+        typeof (n as { guide?: unknown }).guide === 'string' &&
+        Node.string(n) === '',
+    }),
+    ([, path]) => path
+  )
+
+  for (const path of guidePaths) {
+    Transforms.setNodes(editor, { guide: undefined }, { at: path })
+  }
+}
+
+function handleDestructiveSelectionKey(editor: ReactEditor, selection: Range, event: React.KeyboardEvent) {
+  if ((event.key !== 'Backspace' && event.key !== 'Delete') || Range.isCollapsed(selection)) return false
+
+  if (isFullEditorSelection(editor, selection)) {
+    event.preventDefault()
+    replaceEditorWithBlankParagraph(editor)
+    return true
+  }
+
+  window.requestAnimationFrame(() => clearEmptyGuides(editor))
+  return false
+}
+
 function withChecklists(editor: ReactEditor) {
-  const { normalizeNode, deleteBackward, insertBreak } = editor
+  const { normalizeNode, insertBreak } = editor
 
   editor.insertBreak = () => {
     const selection = editor.selection
@@ -1939,63 +2100,10 @@ function withChecklists(editor: ReactEditor) {
     Transforms.setNodes(editor, { guide: undefined }, { at: nextPath })
   }
 
-  editor.deleteBackward = (...args) => {
-    const selection = editor.selection
-    if (selection && Range.isCollapsed(selection)) {
-      const blockEntry = Editor.above(editor, {
-        match: (n) => SlateElement.isElement(n) && typeof (n as { blockId?: unknown }).blockId === 'string',
-      })
-      if (blockEntry) {
-        const [blockNode, blockPath] = blockEntry
-        if (
-          SlateElement.isElement(blockNode) &&
-          blockNode.type === 'paragraph' &&
-          Editor.isStart(editor, selection.anchor, blockPath)
-        ) {
-          if (blockPath[blockPath.length - 1] === 0) return
-          const prevPath = Path.previous(blockPath)
-          if (Node.has(editor, prevPath)) {
-            const prevNode = Node.get(editor, prevPath)
-            if (
-              SlateElement.isElement(prevNode) &&
-              prevNode.type === 'heading-two' &&
-              (prevNode as { locked?: boolean }).locked === true
-            ) {
-              return
-            }
-          }
-        }
-      }
-    }
-    deleteBackward(...args)
-  }
-
   editor.normalizeNode = (entry) => {
     const [node, path] = entry
 
     if (SlateElement.isElement(node)) {
-      if (node.type === 'heading-two' && (node as { locked?: boolean }).locked === true && path.length === 1) {
-        const nextPath = Path.next(path)
-        const hasNext = Node.has(editor, nextPath)
-        if (!hasNext) {
-          Transforms.insertNodes(
-            editor,
-            { type: 'paragraph', blockId: newId('b-'), children: [{ text: '' }] },
-            { at: nextPath }
-          )
-          return
-        }
-        const nextNode = Node.get(editor, nextPath)
-        if (SlateElement.isElement(nextNode) && nextNode.type === 'heading-two') {
-          Transforms.insertNodes(
-            editor,
-            { type: 'paragraph', blockId: newId('b-'), children: [{ text: '' }] },
-            { at: nextPath }
-          )
-          return
-        }
-      }
-
       if (node.type === 'check-item') {
         const patch: Record<string, unknown> = {}
         if (typeof node.itemId !== 'string') patch.itemId = newId('ci-')
@@ -2037,11 +2145,22 @@ function App() {
   const isSuiteShell = typeof window !== 'undefined'
     ? new URLSearchParams(window.location.search).has('easylabModule')
     : false
-  const resetSeed = shouldResetSeed()
+  const devDrivePreview = isDevDrivePreviewMode()
+  const bootDriveConnectionRef = useRef<DriveConnectionState | null>(null)
+  if (!bootDriveConnectionRef.current) {
+    const storedDriveConnection = normalizeDriveConnection(loadJson<Partial<DriveConnectionState> | null>(CONNECTED_STORAGE_KEYS.drive, null))
+    bootDriveConnectionRef.current = devDrivePreview ? createDevDrivePreviewConnection(storedDriveConnection) : storedDriveConnection
+  }
+  const bootDriveConnection = bootDriveConnectionRef.current
+  const bootAccount = bootDriveConnection.connectedAccount
+  // A connected account must hydrate its scoped database before any sample
+  // data can be persisted. Seed refreshes are local/preview-only.
+  const resetSeed = devDrivePreview || (!bootAccount && shouldResetSeed())
   const labStoragePath = sampleData.labs[0]?.storageConfig.path ?? ''
   const storedPaths = readStoredPaths()
   const [appPaths, setAppPaths] = useState<AppPaths>(() => storedPaths ?? suggestedPaths)
   const [setupOpen, setSetupOpen] = useState(() => {
+    if (devDrivePreview) return false
     if (isSetupComplete() || storedPaths) return false
     return !shouldAutoBootstrapMobileSetup()
   })
@@ -2049,9 +2168,9 @@ function App() {
   const [projects, setProjects] = useState<Project[]>(() => {
     if (typeof window === 'undefined' || resetSeed) return sampleData.projects
     try {
-      const saved = window.localStorage.getItem('labnote.projects')
-      if (saved) {
-        const parsed = JSON.parse(saved) as Project[]
+      const parsed = readAccountScopedJson<Project[] | null>('labnote.projects', null, bootAccount)
+      if (parsed) {
+        if (bootAccount) return parsed
         const byId = new Map(parsed.map((p) => [p.id, p]))
         for (const seeded of sampleData.projects) {
           if (!byId.has(seeded.id)) byId.set(seeded.id, seeded)
@@ -2061,14 +2180,14 @@ function App() {
     } catch (err) {
       console.warn('Unable to read cached projects', err)
     }
-    return sampleData.projects
+    return bootAccount ? [] : sampleData.projects
   })
   const [experiments, setExperiments] = useState<Experiment[]>(() => {
     if (typeof window === 'undefined' || resetSeed) return sampleData.experiments
     try {
-      const saved = window.localStorage.getItem('labnote.experiments')
-      if (saved) {
-        const parsed = JSON.parse(saved) as Experiment[]
+      const parsed = readAccountScopedJson<Experiment[] | null>('labnote.experiments', null, bootAccount)
+      if (parsed) {
+        if (bootAccount) return parsed
         const byId = new Map(parsed.map((ex) => [ex.id, ex]))
         for (const seeded of sampleData.experiments) {
           if (!byId.has(seeded.id)) byId.set(seeded.id, seeded)
@@ -2078,37 +2197,35 @@ function App() {
     } catch (err) {
       console.warn('Unable to read cached experiments', err)
     }
-    return sampleData.experiments
+    return bootAccount ? [] : sampleData.experiments
   })
   const [entryDrafts, setEntryDrafts] = useState<Record<string, Entry>>(() => {
     if (typeof window === 'undefined' || resetSeed) {
-      return Object.fromEntries(sampleData.entries.map((e) => [e.id, ensureEntryDateBucket(e)]))
+      return Object.fromEntries(sampleData.entries.map((e) => [e.id, normalizeEntryForLoad(e)]))
     }
     try {
-      const saved = window.localStorage.getItem('labnote.entries')
-      if (saved) {
-        const parsed = JSON.parse(saved) as Record<string, Entry>
+      const parsed = readAccountScopedJson<Record<string, Entry> | null>('labnote.entries', null, bootAccount)
+      if (parsed) {
         return Object.fromEntries(
-          Object.entries(parsed).map(([id, entry]) => [
-            id,
-            condenseLegacyDailyEntry(ensureEntryDateBucket(applyLockedTemplateHeadings(entry))),
-          ])
+          Object.entries(parsed).map(([id, entry]) => [id, normalizeEntryForLoad(entry)])
         )
       }
     } catch (err) {
       console.warn('Unable to read cached entries', err)
     }
-    return Object.fromEntries(sampleData.entries.map((e) => [e.id, ensureEntryDateBucket(e)]))
+    return bootAccount
+      ? {}
+      : Object.fromEntries(sampleData.entries.map((e) => [e.id, normalizeEntryForLoad(e)]))
   })
   const [protocols, setProtocols] = useState<Protocol[]>(() => {
     if (typeof window === 'undefined' || resetSeed) return sampleData.protocols
     try {
-      const saved = window.localStorage.getItem('labnote.protocols')
-      if (saved) return JSON.parse(saved) as Protocol[]
+      const saved = readAccountScopedJson<Protocol[] | null>('labnote.protocols', null, bootAccount)
+      if (saved) return saved
     } catch (err) {
       console.warn('Unable to read cached protocols', err)
     }
-    return sampleData.protocols
+    return bootAccount ? [] : sampleData.protocols
   })
   const entryList = useMemo(() => {
     const entries = Object.values(entryDrafts)
@@ -2127,34 +2244,56 @@ function App() {
     return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
   }, [])
   const initialCalendarSeed = todaySeed
-  const [selectedEntryId, setSelectedEntryId] = useState(
-    sampleData.entries[0]?.id ?? ''
-  )
+  const [selectedEntryId, setSelectedEntryId] = useState(() => {
+    const entries = Object.values(entryDrafts)
+    return (
+      entries.find((entry) => entry.dateBucket === todaySeed)?.id ??
+      entries.sort((a, b) => entrySortTimestamp(b) - entrySortTimestamp(a))[0]?.id ??
+      (!bootAccount ? sampleData.entries[0]?.id : undefined) ??
+      ''
+    )
+  })
   const [selectedProtocolId, setSelectedProtocolId] = useState(
     protocols[0]?.id ?? ''
   )
   const [activePane, setActivePane] = useState<AppPane>('entries')
+  const activePaneRef = useRef(activePane)
+  activePaneRef.current = activePane
   const [deviceProfile, setDeviceProfile] = useState<DeviceProfile>(() => {
-    const stored = loadJson<Partial<DeviceProfile> | null>(CONNECTED_STORAGE_KEYS.device, null)
+    const stored = readAccountScopedJson<Partial<DeviceProfile> | null>(CONNECTED_STORAGE_KEYS.device, null, bootAccount)
     return createDeviceProfile(stored ?? undefined)
   })
   const [fileBoxItems, setFileBoxItems] = useState<FileBoxItem[]>(() =>
-    loadJson<FileBoxItem[]>(CONNECTED_STORAGE_KEYS.fileBox, [])
+    readAccountScopedJson<FileBoxItem[]>(CONNECTED_STORAGE_KEYS.fileBox, [], bootAccount)
   )
   const [transferRecords, setTransferRecords] = useState<TransferRecord[]>(() =>
-    loadJson<TransferRecord[]>(CONNECTED_STORAGE_KEYS.transfers, [])
+    readAccountScopedJson<TransferRecord[]>(CONNECTED_STORAGE_KEYS.transfers, [], bootAccount)
   )
   const [syncConflicts, setSyncConflicts] = useState<SyncConflict[]>(() =>
-    loadJson<SyncConflict[]>(CONNECTED_STORAGE_KEYS.conflicts, [])
+    readAccountScopedJson<SyncConflict[]>(CONNECTED_STORAGE_KEYS.conflicts, [], bootAccount)
   )
-  const [driveConnection, setDriveConnection] = useState<DriveConnectionState>(() =>
-    normalizeDriveConnection(loadJson<Partial<DriveConnectionState> | null>(CONNECTED_STORAGE_KEYS.drive, null))
+  const [tombstones, setTombstones] = useState<TombstoneRecord[]>(() =>
+    readAccountScopedJson<TombstoneRecord[]>('labnote.tombstones', [], bootAccount)
+  )
+  const [driveConnection, setDriveConnection] = useState<DriveConnectionState>(() => bootDriveConnection)
+  const journalAccountScope = googleAccountStorageId(driveConnection.connectedAccount)
+  const journalRepositoryOptions = useMemo(
+    () => journalAccountScope ? { accountScope: journalAccountScope } : undefined,
+    [journalAccountScope]
   )
   const [driveSyncSummary, setDriveSyncSummary] = useState<DriveSyncSummary | null>(null)
+  const [attachmentsStore, setAttachmentsStore] = useState<Attachment[]>(() => {
+    if (typeof window === 'undefined' || resetSeed) return sampleData.attachments
+    try {
+      return readAccountScopedJson<Attachment[]>('labnote.attachments', bootAccount ? [] : sampleData.attachments, bootAccount)
+    } catch (err) {
+      console.warn('Unable to read cached attachments', err)
+    }
+    return bootAccount ? [] : sampleData.attachments
+  })
   const [backupStatus, setBackupStatus] = useState<BackupStatus>(null)
-  const [openEntryIds, setOpenEntryIds] = useState<string[]>(() =>
-    sampleData.entries[0]?.id ? [sampleData.entries[0].id] : []
-  )
+  const [migrationNoticeOpen, setMigrationNoticeOpen] = useState(false)
+  const [openEntryIds, setOpenEntryIds] = useState<string[]>(() => (selectedEntryId ? [selectedEntryId] : []))
   const dailySeededRef = useRef(false)
   const openEntries = useMemo(
     () => openEntryIds.map((id) => entryDrafts[id]).filter(Boolean) as Entry[],
@@ -2164,13 +2303,14 @@ function App() {
   const [autoEditEntryId, setAutoEditEntryId] = useState<string | null>(null)
   const [selectedProjectTags, setSelectedProjectTags] = useState<string[]>([])
   const [selectedExperimentTags, setSelectedExperimentTags] = useState<string[]>([])
+  const [entrySearchQuery, setEntrySearchQuery] = useState('')
   const [selectedProject, setSelectedProject] = useState<string>('all')
   const [selectedExperiment, setSelectedExperiment] = useState<string>('all')
   const [projectTagOptions, setProjectTagOptions] = useState<string[]>(() => {
     if (typeof window === 'undefined' || resetSeed) return DEFAULT_PROJECT_TAGS
     try {
-      const saved = window.localStorage.getItem('labnote.projectTags')
-      if (saved) return JSON.parse(saved) as string[]
+      const saved = readAccountScopedJson<string[] | null>('labnote.projectTags', null, bootAccount)
+      if (saved) return saved
     } catch (err) {
       console.warn('Unable to read project tags', err)
     }
@@ -2179,8 +2319,8 @@ function App() {
   const [experimentTagOptions, setExperimentTagOptions] = useState<string[]>(() => {
     if (typeof window === 'undefined' || resetSeed) return DEFAULT_EXPERIMENT_TAGS
     try {
-      const saved = window.localStorage.getItem('labnote.experimentTags')
-      if (saved) return JSON.parse(saved) as string[]
+      const saved = readAccountScopedJson<string[] | null>('labnote.experimentTags', null, bootAccount)
+      if (saved) return saved
     } catch (err) {
       console.warn('Unable to read experiment tags', err)
     }
@@ -2193,29 +2333,19 @@ function App() {
   const [calendarMonth, setCalendarMonth] = useState<Date>(() => monthStartFromIso(initialCalendarSeed))
   const selectedEntryDateBucket = selectedEntryId ? entryDrafts[selectedEntryId]?.dateBucket : ''
   const [masterSyncPath, setMasterSyncPath] = useState<string>(() => {
-    if (typeof window === 'undefined' || resetSeed) return labStoragePath
-    try {
-      const saved = window.localStorage.getItem('labnote.masterSyncPath')
-      if (saved) return saved
-    } catch (err) {
-      console.warn('Unable to read master sync path', err)
+    if (typeof window === 'undefined') return labStoragePath
+    if (!resetSeed) {
+      try {
+        const saved = readAccountScopedJson<string>('labnote.masterSyncPath', '', bootAccount)
+        if (saved) return saved
+      } catch (err) {
+        console.warn('Unable to read master sync path', err)
+      }
     }
     if (storedPaths?.syncRoot) return storedPaths.syncRoot
+    if (shouldAutoBootstrapMobileSetup()) return suggestedPaths.syncRoot
     return labStoragePath
   })
-  const [mobilePairLink, setMobilePairLink] = useState<string>(() => {
-    if (typeof window === 'undefined') return ''
-    try {
-      const saved = window.localStorage.getItem(APP_MOBILE_PAIR_LINK_KEY)
-      if (saved && isHttpUrl(saved)) return saved
-    } catch (err) {
-      console.warn('Unable to read mobile pairing link', err)
-    }
-    return inferDefaultMobilePairLink()
-  })
-  const [mobilePairStatus, setMobilePairStatus] = useState<PairLinkStatus>('idle')
-  const [mobilePairQrDataUrl, setMobilePairQrDataUrl] = useState('')
-  const [mobilePairAutoMessage, setMobilePairAutoMessage] = useState('')
   const [browserOnline, setBrowserOnline] = useState(
     typeof navigator === 'undefined' || !('onLine' in navigator) ? true : navigator.onLine
   )
@@ -2227,11 +2357,14 @@ function App() {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false)
+  const [mobileCaptureOpen, setMobileCaptureOpen] = useState(false)
   const [autoImportAttempted, setAutoImportAttempted] = useState(false)
   const canPickPaths = typeof window !== 'undefined' && !!window.electronAPI?.selectDirectory
   const [sharedApiAvailable, setSharedApiAvailable] = useState(false)
   const [sharedStateReady, setSharedStateReady] = useState(false)
   const sharedStateFingerprintRef = useRef('')
+  const autoDriveSyncStartupAttemptedRef = useRef(false)
+  const autoDriveSyncInFlightRef = useRef(false)
   const journalCoreHydratedRef = useRef(false)
   const [journalCoreStatus, setJournalCoreStatus] = useState<'loading' | 'ready' | 'fallback' | 'error'>('loading')
   const [journalCoreSource, setJournalCoreSource] = useState<JournalHydrationResult['source']>('local-fallback')
@@ -2257,28 +2390,34 @@ function App() {
   }, [])
 
   useEffect(() => {
-    saveJson(CONNECTED_STORAGE_KEYS.device, deviceProfile)
-  }, [deviceProfile])
+    writeAccountScopedJson(CONNECTED_STORAGE_KEYS.device, deviceProfile, driveConnection.connectedAccount)
+  }, [deviceProfile, driveConnection.connectedAccount])
 
   useEffect(() => {
-    saveJson(CONNECTED_STORAGE_KEYS.fileBox, fileBoxItems)
-  }, [fileBoxItems])
+    writeAccountScopedJson(CONNECTED_STORAGE_KEYS.fileBox, fileBoxItems, driveConnection.connectedAccount)
+  }, [driveConnection.connectedAccount, fileBoxItems])
 
   useEffect(() => {
-    saveJson(CONNECTED_STORAGE_KEYS.transfers, transferRecords)
-  }, [transferRecords])
+    writeAccountScopedJson(CONNECTED_STORAGE_KEYS.transfers, transferRecords, driveConnection.connectedAccount)
+  }, [driveConnection.connectedAccount, transferRecords])
 
   useEffect(() => {
-    saveJson(CONNECTED_STORAGE_KEYS.conflicts, syncConflicts)
-  }, [syncConflicts])
+    writeAccountScopedJson(CONNECTED_STORAGE_KEYS.conflicts, syncConflicts, driveConnection.connectedAccount)
+  }, [driveConnection.connectedAccount, syncConflicts])
+
+  useEffect(() => {
+    writeAccountScopedJson('labnote.tombstones', tombstones, driveConnection.connectedAccount)
+  }, [driveConnection.connectedAccount, tombstones])
 
   useEffect(() => {
     const { status, lastError, ...safeConnection } = driveConnection
-    saveJson(CONNECTED_STORAGE_KEYS.drive, {
+    const persistedConnection = {
       ...safeConnection,
       status: status === 'syncing' ? 'needs-auth' : status,
       lastError,
-    })
+    }
+    saveJson(CONNECTED_STORAGE_KEYS.drive, persistedConnection)
+    writeAccountScopedJson(CONNECTED_STORAGE_KEYS.drive, persistedConnection, driveConnection.connectedAccount)
   }, [driveConnection])
 
   useEffect(() => {
@@ -2296,22 +2435,24 @@ function App() {
             fileBoxItems,
             transfers: transferRecords,
             conflicts: syncConflicts,
-            tombstones: [],
+            tombstones,
             device: deviceProfile,
           },
-          { device: deviceProfile, lastSyncedAt: driveConnection.lastSyncAt }
+          {
+            device: deviceProfile,
+            lastSyncedAt: driveConnection.lastSyncAt,
+            accountScope: journalAccountScope || undefined,
+          }
         )
         const normalizedEntries = Object.fromEntries(
-          Object.entries(result.snapshot.entries).map(([id, entry]) => [
-            id,
-            condenseLegacyDailyEntry(ensureEntryDateBucket(applyLockedTemplateHeadings(entry))),
-          ])
+          Object.entries(result.snapshot.entries).map(([id, entry]) => [id, normalizeEntryForLoad(entry)])
         )
-        if (Object.keys(normalizedEntries).length) setEntryDrafts(normalizedEntries)
+        setEntryDrafts(normalizedEntries)
         setAttachmentsStore(result.snapshot.attachments)
         setFileBoxItems(result.snapshot.fileBoxItems)
         setTransferRecords(result.snapshot.transfers)
         setSyncConflicts(result.snapshot.conflicts)
+        setTombstones(result.snapshot.tombstones)
         if (result.snapshot.device) setDeviceProfile((prev) => ({ ...prev, ...result.snapshot.device, lastSeenAt: new Date().toISOString() }))
         setJournalCoreSource(result.source)
         setJournalCoreQueueCount(result.queueCount)
@@ -2450,68 +2591,6 @@ function App() {
     setSetupOpen(true)
   }, [])
 
-  const copyMobilePairLink = useCallback(async () => {
-    const value = mobilePairLink.trim()
-    if (!value || !isHttpUrl(value)) return false
-    if (typeof navigator === 'undefined' || !navigator.clipboard?.writeText) return false
-    try {
-      await navigator.clipboard.writeText(value)
-      return true
-    } catch (err) {
-      console.warn('Unable to copy mobile pairing link', err)
-      return false
-    }
-  }, [mobilePairLink])
-
-  const autoDetectMobilePairLink = useCallback(async (force = false) => {
-    if (typeof window === 'undefined' || !window.electronAPI?.getPairingLink) return
-    try {
-      const detectedRaw = await window.electronAPI.getPairingLink()
-      const detected = normalizePairingLinkInfo(detectedRaw)
-      if (!detected) {
-        setMobilePairAutoMessage('Auto-detect is unavailable in this build.')
-        return
-      }
-      if (!detected.url || !isHttpUrl(detected.url)) {
-        setMobilePairAutoMessage(
-          detected.tailscaleConnected
-            ? 'Tailscale is running, but no app link was detected yet.'
-            : 'No pairing link was detected. Start Tailscale on desktop to auto-fill the mobile URL.'
-        )
-        return
-      }
-
-      let replaced = false
-      setMobilePairLink((prev) => {
-        const current = prev.trim()
-        const shouldReplace = force || !current || isLoopbackHttpUrl(current)
-        if (!shouldReplace || current === detected.url) return prev
-        replaced = true
-        return detected.url
-      })
-
-      if (replaced) {
-        setMobilePairAutoMessage(
-          detected.source === 'tailscale'
-            ? `Auto-detected Tailscale link: ${detected.url}`
-            : `Auto-detected network link: ${detected.url}`
-        )
-      } else if (force) {
-        setMobilePairAutoMessage('Keeping your existing custom mobile link.')
-      }
-    } catch (err) {
-      console.warn('Unable to auto-detect mobile pairing link', err)
-      setMobilePairAutoMessage('Auto-detect failed. You can still paste a custom link.')
-    }
-  }, [])
-
-  const initialAutoPairingAttempt = useRef(false)
-  useEffect(() => {
-    if (initialAutoPairingAttempt.current) return
-    initialAutoPairingAttempt.current = true
-    void autoDetectMobilePairLink(false)
-  }, [autoDetectMobilePairLink])
-
   const handleCloseEntryTab = useCallback(
     (entryId: string) => {
       setOpenEntryIds((prev) => {
@@ -2526,17 +2605,6 @@ function App() {
     [selectedEntryId]
   )
 
-  const [theme, setTheme] = useState<ThemeName>(() => {
-    if (typeof window === 'undefined') return 'light'
-    try {
-      const saved = window.localStorage.getItem('labnote.theme')
-      if (saved === 'dark') return 'neo-brutal'
-      if (isThemeName(saved)) return saved
-    } catch (err) {
-      console.warn('Unable to read cached theme', err)
-    }
-    return 'light'
-  })
   const [diskSyncEnabled, setDiskSyncEnabled] = useState(() => {
     if (typeof window === 'undefined') return false
     try {
@@ -2578,18 +2646,18 @@ function App() {
   }, [resetSeed])
 
   useEffect(() => {
-    if (typeof document === 'undefined') return
-    document.documentElement.setAttribute('data-theme', theme)
-  }, [theme])
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return
+    if (!isDriveWorkspaceReady(driveConnection)) return
+    const migrationKey = accountMigrationStorageKey(driveConnection.connectedAccount)
+    if (!migrationKey) return
     try {
-      window.localStorage.setItem('labnote.theme', theme)
+      if (window.localStorage.getItem(migrationKey) === '1') return
+      if (!hasLegacyNotebookCache()) return
+      window.localStorage.setItem(migrationKey, '1')
+      setMigrationNoticeOpen(true)
     } catch (err) {
-      console.warn('Unable to cache theme', err)
+      console.warn('Unable to mark account cache migration', err)
     }
-  }, [theme])
+  }, [driveConnection])
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -2604,61 +2672,49 @@ function App() {
     if (typeof window === 'undefined') return
     const id = window.setTimeout(() => {
       try {
-        window.localStorage.setItem('labnote.projects', JSON.stringify(projects))
+        writeAccountScopedJson('labnote.projects', projects, driveConnection.connectedAccount)
       } catch (err) {
         console.warn('Unable to cache projects', err)
       }
     }, 250)
     return () => window.clearTimeout(id)
-  }, [projects])
+  }, [driveConnection.connectedAccount, projects])
 
   useEffect(() => {
     if (typeof window === 'undefined') return
     const id = window.setTimeout(() => {
       try {
-        window.localStorage.setItem('labnote.projectTags', JSON.stringify(projectTagOptions))
+        writeAccountScopedJson('labnote.projectTags', projectTagOptions, driveConnection.connectedAccount)
       } catch (err) {
         console.warn('Unable to cache project tags', err)
       }
     }, 250)
     return () => window.clearTimeout(id)
-  }, [projectTagOptions])
+  }, [driveConnection.connectedAccount, projectTagOptions])
 
   useEffect(() => {
     if (typeof window === 'undefined') return
     const id = window.setTimeout(() => {
       try {
-        window.localStorage.setItem('labnote.experimentTags', JSON.stringify(experimentTagOptions))
+        writeAccountScopedJson('labnote.experimentTags', experimentTagOptions, driveConnection.connectedAccount)
       } catch (err) {
         console.warn('Unable to cache experiment tags', err)
       }
     }, 250)
     return () => window.clearTimeout(id)
-  }, [experimentTagOptions])
+  }, [driveConnection.connectedAccount, experimentTagOptions])
 
   useEffect(() => {
     if (typeof window === 'undefined') return
     const id = window.setTimeout(() => {
       try {
-        window.localStorage.setItem('labnote.masterSyncPath', masterSyncPath)
+        writeAccountScopedJson('labnote.masterSyncPath', masterSyncPath, driveConnection.connectedAccount)
       } catch (err) {
         console.warn('Unable to cache master sync path', err)
       }
     }, 250)
     return () => window.clearTimeout(id)
-  }, [masterSyncPath])
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return
-    const id = window.setTimeout(() => {
-      try {
-        window.localStorage.setItem(APP_MOBILE_PAIR_LINK_KEY, mobilePairLink)
-      } catch (err) {
-        console.warn('Unable to cache mobile pairing link', err)
-      }
-    }, 250)
-    return () => window.clearTimeout(id)
-  }, [mobilePairLink])
+  }, [driveConnection.connectedAccount, masterSyncPath])
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -2673,94 +2729,28 @@ function App() {
   }, [])
 
   useEffect(() => {
-    if (!settingsOpen) return
-    const url = mobilePairLink.trim()
-    if (!url || !isHttpUrl(url)) {
-      setMobilePairQrDataUrl('')
-      return
-    }
-
-    let cancelled = false
-    void toQrDataUrl(url, { margin: 1, width: 220, errorCorrectionLevel: 'M' })
-      .then((result) => {
-        if (!cancelled) setMobilePairQrDataUrl(result)
-      })
-      .catch((err: unknown) => {
-        if (!cancelled) {
-          setMobilePairQrDataUrl('')
-          console.warn('Unable to generate mobile pairing QR', err)
-        }
-      })
-
-    return () => {
-      cancelled = true
-    }
-  }, [mobilePairLink, settingsOpen])
-
-  useEffect(() => {
-    if (!settingsOpen) return
-    const url = mobilePairLink.trim()
-    if (!url || !isHttpUrl(url)) {
-      setMobilePairStatus('idle')
-      return
-    }
-    if (!browserOnline) {
-      setMobilePairStatus('offline')
-      return
-    }
-
-    const controller = new AbortController()
-    const timeout = window.setTimeout(() => controller.abort(), 4500)
-    setMobilePairStatus('checking')
-
-    void (async () => {
-      try {
-        const target = new URL(url)
-        const sameOrigin = typeof window !== 'undefined' && target.origin === window.location.origin
-        await fetch(target.toString(), {
-          method: 'GET',
-          cache: 'no-store',
-          mode: sameOrigin ? 'same-origin' : 'no-cors',
-          signal: controller.signal,
-        })
-        setMobilePairStatus('online')
-      } catch (err) {
-        if (isAbortError(err)) return
-        setMobilePairStatus('offline')
-      } finally {
-        window.clearTimeout(timeout)
-      }
-    })()
-
-    return () => {
-      window.clearTimeout(timeout)
-      controller.abort()
-    }
-  }, [browserOnline, mobilePairLink, settingsOpen])
-
-  useEffect(() => {
     if (typeof window === 'undefined') return
     const id = window.setTimeout(() => {
       try {
-        window.localStorage.setItem('labnote.experiments', JSON.stringify(experiments))
+        writeAccountScopedJson('labnote.experiments', experiments, driveConnection.connectedAccount)
       } catch (err) {
         console.warn('Unable to cache experiments', err)
       }
     }, 250)
     return () => window.clearTimeout(id)
-  }, [experiments])
+  }, [driveConnection.connectedAccount, experiments])
 
   useEffect(() => {
     if (typeof window === 'undefined') return
     const id = window.setTimeout(() => {
       try {
-        window.localStorage.setItem('labnote.protocols', JSON.stringify(protocols))
+        writeAccountScopedJson('labnote.protocols', protocols, driveConnection.connectedAccount)
       } catch (err) {
         console.warn('Unable to cache protocols', err)
       }
     }, 250)
     return () => window.clearTimeout(id)
-  }, [protocols])
+  }, [driveConnection.connectedAccount, protocols])
 
   const refreshFsState = useCallback(async () => {
     try {
@@ -2887,6 +2877,19 @@ function App() {
       if (!ok) return
 
       const remainingIds = Object.keys(entryDrafts).filter((id) => id !== entryId)
+      const deletedAt = new Date().toISOString()
+
+      setTombstones((prev) => [
+        ...prev.filter((record) => !(record.entityKind === 'entry' && record.entityId === entryId)),
+        {
+          id: `entry--${entryId}`,
+          entityKind: 'entry',
+          entityId: entryId,
+          deletedAt,
+          deletedByDeviceId: deviceProfile.id,
+          reason: 'Deleted from Easylab',
+        },
+      ])
 
       setEntryDrafts((prev) => {
         const next = { ...prev }
@@ -2898,7 +2901,7 @@ function App() {
       setOpenEntryIds((prev) => prev.filter((id) => id !== entryId))
       setSelectedEntryId((prev) => (prev === entryId ? (remainingIds[0] ?? '') : prev))
     },
-    [entryDrafts]
+    [deviceProfile.id, entryDrafts]
   )
 
   const selectedExperimentObj =
@@ -2923,7 +2926,7 @@ function App() {
         const entryId = newId('entry-')
         const experimentId =
           selectedExperiment !== 'all' && selectedExperiment !== 'none' ? selectedExperiment : undefined
-        const { content, pinnedRegions } = buildTemplate('day', entryId, nowIso)
+        const { content, pinnedRegions } = buildTemplate('blank', entryId, nowIso)
 
         const newEntry: Entry = {
           id: entryId,
@@ -2946,13 +2949,6 @@ function App() {
 
         entry = newEntry
         setEntryDrafts((prev) => ({ ...prev, [entryId]: newEntry }))
-      } else {
-        const compacted = condenseLegacyDailyEntry(entry)
-        if (compacted !== entry) {
-          entry = compacted
-          const compactedId = compacted.id
-          setEntryDrafts((prev) => ({ ...prev, [compactedId]: compacted }))
-        }
       }
 
       setSelectedEntryId(entry.id)
@@ -2963,6 +2959,7 @@ function App() {
       setSelectedProjectTags([])
       setSelectedExperimentTags([])
       if (opts?.autoEdit) setAutoEditEntryId(entry.id)
+      return entry.id
     },
     [defaultProjectIdForEntry, entryList, handleSelectDate, selectedExperiment]
   )
@@ -2976,14 +2973,24 @@ function App() {
   )
 
   const handleOpenToday = useCallback(() => {
-    openDailyEntry(new Date(), { autoEdit: true })
+    openDailyEntry(new Date())
   }, [openDailyEntry])
 
   useEffect(() => {
-    if (dailySeededRef.current) return
-    openDailyEntry(new Date(), { autoEdit: true, focusDate: false })
-    dailySeededRef.current = true
-  }, [openDailyEntry])
+    const today = new Date()
+    const todayBucket = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(
+      today.getDate()
+    ).padStart(2, '0')}`
+    const hasToday = entryList.some((entry) => entry.dateBucket === todayBucket)
+    if (dailySeededRef.current && hasToday) return
+    if (activePane !== 'entries') return
+    const timer = window.setTimeout(() => {
+      if (activePaneRef.current !== 'entries') return
+      openDailyEntry(today, { focusDate: false })
+      dailySeededRef.current = true
+    }, 0)
+    return () => window.clearTimeout(timer)
+  }, [activePane, entryList, openDailyEntry])
 
   const handleCreateProtocol = useCallback(
     (opts: { title?: string; templateId: EntryTemplateId }) => {
@@ -3076,17 +3083,6 @@ function App() {
     }, 900)
     return () => window.clearTimeout(id)
   }, [changeQueue, syncNow, syncing])
-  const [attachmentsStore, setAttachmentsStore] = useState<Attachment[]>(() => {
-    if (typeof window === 'undefined' || resetSeed) return sampleData.attachments
-    try {
-      const saved = window.localStorage.getItem('labnote.attachments')
-      if (saved) return JSON.parse(saved) as Attachment[]
-    } catch (err) {
-      console.warn('Unable to read cached attachments', err)
-    }
-    return sampleData.attachments
-  })
-
   const parseSharedStatePayload = useCallback((raw: unknown) => {
     const state = isRecord(raw) && isRecord(raw.state) ? raw.state : raw
     if (!isRecord(state)) return null
@@ -3104,10 +3100,7 @@ function App() {
   const applySharedStatePayload = useCallback(
     (payload: { projects: Project[]; experiments: Experiment[]; entries: Record<string, Entry>; attachments: Attachment[] }) => {
       const normalizedEntries = Object.fromEntries(
-        Object.entries(payload.entries).map(([id, entry]) => [
-          id,
-          condenseLegacyDailyEntry(ensureEntryDateBucket(applyLockedTemplateHeadings(entry))),
-        ])
+        Object.entries(payload.entries).map(([id, entry]) => [id, normalizeEntryForLoad(entry)])
       )
 
       const nextState = {
@@ -3226,28 +3219,24 @@ function App() {
         const dateBucket = entry.dateBucket || createdDatetime.slice(0, 10)
         const title = entry.title || dateOnly.format(new Date(createdDatetime))
 
-        const normalized = condenseLegacyDailyEntry(
-          ensureEntryDateBucket(
-            applyLockedTemplateHeadings({
-              ...entry,
-              id,
-              createdDatetime,
-              lastEditedDatetime,
-              dateBucket,
-              title,
-              authorId: entry.authorId || sampleData.users[1]?.id || sampleData.users[0]?.id || 'me',
-              content: Array.isArray(entry.content) && entry.content.length > 0
-                ? entry.content
-                : [{ id: newId('b-'), type: 'paragraph', text: '' }],
-              tags: Array.isArray(entry.tags) ? entry.tags : [],
-              projectTags: Array.isArray(entry.projectTags) ? entry.projectTags : [],
-              experimentTags: Array.isArray(entry.experimentTags) ? entry.experimentTags : [],
-              searchTerms: Array.isArray(entry.searchTerms) ? entry.searchTerms : [],
-              linkedFiles: Array.isArray(entry.linkedFiles) ? entry.linkedFiles : [],
-              pinnedRegions: Array.isArray(entry.pinnedRegions) ? entry.pinnedRegions : [],
-            })
-          )
-        )
+        const normalized = normalizeEntryForLoad({
+          ...entry,
+          id,
+          createdDatetime,
+          lastEditedDatetime,
+          dateBucket,
+          title,
+          authorId: entry.authorId || sampleData.users[1]?.id || sampleData.users[0]?.id || 'me',
+          content: Array.isArray(entry.content) && entry.content.length > 0
+            ? entry.content
+            : [{ id: newId('b-'), type: 'paragraph', text: '' }],
+          tags: Array.isArray(entry.tags) ? entry.tags : [],
+          projectTags: Array.isArray(entry.projectTags) ? entry.projectTags : [],
+          experimentTags: Array.isArray(entry.experimentTags) ? entry.experimentTags : [],
+          searchTerms: Array.isArray(entry.searchTerms) ? entry.searchTerms : [],
+          linkedFiles: Array.isArray(entry.linkedFiles) ? entry.linkedFiles : [],
+          pinnedRegions: Array.isArray(entry.pinnedRegions) ? entry.pinnedRegions : [],
+        })
         return normalized
       }
 
@@ -3321,10 +3310,10 @@ function App() {
       setFilterHasFile(false)
 
       try {
-        window.localStorage.setItem('labnote.entries', JSON.stringify(mergedEntries))
-        window.localStorage.setItem('labnote.attachments', JSON.stringify(mergedAttachments))
-        window.localStorage.setItem('labnote.projects', JSON.stringify(mergedProjects))
-        window.localStorage.setItem('labnote.experiments', JSON.stringify(mergedExperiments))
+        writeAccountScopedJson('labnote.entries', mergedEntries, driveConnection.connectedAccount)
+        writeAccountScopedJson('labnote.attachments', mergedAttachments, driveConnection.connectedAccount)
+        writeAccountScopedJson('labnote.projects', mergedProjects, driveConnection.connectedAccount)
+        writeAccountScopedJson('labnote.experiments', mergedExperiments, driveConnection.connectedAccount)
         if (opts?.enableDiskSync ?? false) {
           window.localStorage.setItem('labnote.diskSync', '1')
         }
@@ -3348,6 +3337,7 @@ function App() {
     },
     [
       attachmentsStore,
+      driveConnection.connectedAccount,
       entryDrafts,
       experiments,
       projects,
@@ -3456,7 +3446,7 @@ function App() {
 
   const importLegacyState = useCallback(async (): Promise<{ ok: boolean; message: string }> => {
     if (typeof (window as unknown as DirectoryPickerWindow).showDirectoryPicker !== 'function') {
-      return { ok: false, message: 'Folder picker not supported in this browser. Use "Import from file" instead.' }
+      return { ok: false, message: 'Folder picker is not supported in this browser. Use "Import backup file" instead.' }
     }
     const dir = await pickCacheDir()
     if (!dir) return { ok: false, message: 'No folder selected.' }
@@ -3536,28 +3526,33 @@ function App() {
     if (typeof window === 'undefined') return
     const id = window.setTimeout(() => {
       try {
-        window.localStorage.setItem('labnote.entries', JSON.stringify(entryDrafts))
+        writeAccountScopedJson('labnote.entries', entryDrafts, driveConnection.connectedAccount)
       } catch (err) {
         console.warn('Unable to cache entries', err)
       }
     }, 250)
     return () => window.clearTimeout(id)
-  }, [entryDrafts])
+  }, [driveConnection.connectedAccount, entryDrafts])
 
   useEffect(() => {
     if (typeof window === 'undefined') return
     const id = window.setTimeout(() => {
       try {
-        window.localStorage.setItem('labnote.attachments', JSON.stringify(attachmentsStore))
+        writeAccountScopedJson('labnote.attachments', attachmentsStore, driveConnection.connectedAccount)
       } catch (err) {
         console.warn('Unable to cache attachments', err)
       }
     }, 250)
     return () => window.clearTimeout(id)
-  }, [attachmentsStore])
+  }, [attachmentsStore, driveConnection.connectedAccount])
 
   useEffect(() => {
-    if (typeof window === 'undefined' || resetSeed || journalCoreStatus === 'loading') return
+    if (
+      typeof window === 'undefined' ||
+      resetSeed ||
+      journalCoreStatus === 'loading' ||
+      !journalAccountScope
+    ) return
     const id = window.setTimeout(() => {
       void persistJournalSnapshot(
         {
@@ -3566,10 +3561,14 @@ function App() {
           fileBoxItems,
           transfers: transferRecords,
           conflicts: syncConflicts,
-          tombstones: [],
+          tombstones,
           device: deviceProfile,
         },
-        { device: deviceProfile, lastSyncedAt: driveConnection.lastSyncAt }
+        {
+          device: deviceProfile,
+          lastSyncedAt: driveConnection.lastSyncAt,
+          accountScope: journalAccountScope || undefined,
+        }
       )
         .then((result) => {
           setJournalCoreQueueCount(result.queueCount)
@@ -3588,9 +3587,11 @@ function App() {
     driveConnection.lastSyncAt,
     entryDrafts,
     fileBoxItems,
+    journalAccountScope,
     journalCoreStatus,
     resetSeed,
     syncConflicts,
+    tombstones,
     transferRecords,
   ])
 
@@ -3703,7 +3704,7 @@ function App() {
             cacheKey = fsPath.replace('fs://', '')
             setFsEnabled(true)
           } else {
-            const key = await cacheFile(file)
+            const key = await cacheFile(file, journalAccountScope || undefined)
             cachePath = `idb://${key}`
             cacheKey = key
           }
@@ -3715,7 +3716,7 @@ function App() {
 
         try {
           const journalBlobKey = cacheKey || `attachment-${id}`
-          await writeAttachmentBlobToJournalCore(journalBlobKey, file)
+          await writeAttachmentBlobToJournalCore(journalBlobKey, file, journalAccountScope || undefined)
           cacheKey = journalBlobKey
         } catch (err) {
           console.warn('Journal blob cache failed; Drive sync will try legacy attachment cache', err)
@@ -3764,7 +3765,7 @@ function App() {
 
       return saved
     },
-    [entryDrafts, masterSyncPath, sharedApiAvailable]
+    [entryDrafts, journalAccountScope, masterSyncPath, sharedApiAvailable]
   )
 
   const queueFileBoxFiles = useCallback(
@@ -3866,17 +3867,22 @@ function App() {
     )
   }, [])
 
-  const prepareJournalCoreSnapshot = useCallback(async () => {
-    const repositories = await createJournalRepositories()
+  const prepareJournalCoreSnapshotForAccount = useCallback(async (
+    account: GoogleAccountProfile,
+    sourceSnapshot: JournalSnapshot
+  ) => {
+    const accountScope = googleAccountStorageId(account)
+    if (!accountScope) throw new Error('A verified Google account is required before opening a notebook.')
+    const repositories = await createJournalRepositories({ accountScope })
     const blobStore = new IndexedDbBlobStore(repositories)
-    const preparedAttachments = await Promise.all(attachmentsStore.map(async (attachment) => {
+    const preparedAttachments = await Promise.all(sourceSnapshot.attachments.map(async (attachment) => {
       if (attachment.cacheKey && await blobStore.has(attachment.cacheKey)) return attachment
       const cacheKey =
         attachment.cacheKey ||
         (attachment.cachedPath?.startsWith('idb://') ? attachment.cachedPath.replace('idb://', '') : '') ||
         (attachment.cachedPath?.startsWith('fs://') ? attachment.cachedPath.replace('fs://', '') : '') ||
         `attachment-${attachment.id}`
-      const blob = await readAttachmentBlob(attachment, attachmentUrls)
+      const blob = await readAttachmentBlob(attachment, attachmentUrls, accountScope)
       if (!blob) return attachment
       try {
         await blobStore.put(cacheKey, blob)
@@ -3890,30 +3896,70 @@ function App() {
       repositories,
       blobStore,
       snapshot: {
-        entries: entryDrafts,
+        ...sourceSnapshot,
         attachments: preparedAttachments,
-        fileBoxItems,
-        transfers: transferRecords,
-        conflicts: syncConflicts,
-        tombstones: [],
-        device: deviceProfile,
       },
     }
+  }, [attachmentUrls])
+
+  const prepareJournalCoreSnapshot = useCallback(async () => {
+    const account = driveConnection.connectedAccount
+    if (!account) throw new Error('Connect Google Drive before opening this notebook.')
+    return prepareJournalCoreSnapshotForAccount(account, {
+      entries: entryDrafts,
+      attachments: attachmentsStore,
+      fileBoxItems,
+      transfers: transferRecords,
+      conflicts: syncConflicts,
+      tombstones,
+      device: deviceProfile,
+    })
   }, [
-    attachmentUrls,
     attachmentsStore,
     deviceProfile,
+    driveConnection.connectedAccount,
     entryDrafts,
     fileBoxItems,
+    prepareJournalCoreSnapshotForAccount,
     syncConflicts,
+    tombstones,
     transferRecords,
   ])
 
-  const runGoogleDriveSync = useCallback(async () => {
+  const runGoogleDriveSync = useCallback(async (options: { silent?: boolean } = {}) => {
+    if (devDrivePreview) {
+      setDriveConnection((prev) => ({
+        ...createDevDrivePreviewConnection(prev),
+        lastSyncAt: new Date().toISOString(),
+      }))
+      setDriveSyncSummary((prev) => ({
+        pulledEntries: prev?.pulledEntries ?? 0,
+        pushedEntries: prev?.pushedEntries ?? 0,
+        pulledAttachments: prev?.pulledAttachments ?? 0,
+        pushedAttachments: prev?.pushedAttachments ?? 0,
+        uploadedBlobs: prev?.uploadedBlobs ?? 0,
+        downloadedBlobs: prev?.downloadedBlobs ?? 0,
+        pushedTombstones: prev?.pushedTombstones ?? 0,
+        conflicts: prev?.conflicts ?? 0,
+        syncedAt: new Date().toISOString(),
+      }))
+      return
+    }
     const driveOAuthClient = resolveDriveClientId(driveConnection)
     if (!driveOAuthClient.clientId) {
-      const label = driveOAuthClient.preferredKind === 'desktop' ? 'desktop' : 'web/PWA'
-      setDriveConnection((prev) => ({ ...prev, status: 'needs-auth', lastError: `Add a Google OAuth ${label} client ID before connecting.` }))
+      setDriveConnection((prev) => ({ ...prev, status: 'needs-auth', lastError: 'Google Drive sign-in is not configured for this build.' }))
+      return
+    }
+    if (driveOAuthClient.preferredKind === 'web' && isUnsupportedEmbeddedGoogleOAuthHost()) {
+      if (options.silent) return
+      const appUrl = new URL(window.location.href)
+      appUrl.searchParams.delete('embeddedOAuthWarning')
+      appUrl.searchParams.delete('codexIab')
+      setDriveConnection((prev) => ({
+        ...prev,
+        status: 'needs-auth',
+        lastError: `Google sign-in cannot finish inside this embedded browser. Open ${appUrl.toString()} in Brave or Chrome, then connect Google Drive there.`,
+      }))
       return
     }
 
@@ -3923,15 +3969,69 @@ function App() {
       const desktopClientSecret = driveOAuthClient.preferredKind === 'desktop'
         ? driveConnection.desktopClientSecret?.trim()
         : undefined
-      const provider = new GoogleDriveSyncProvider({
+      const hasExistingDriveSession = Boolean(driveConnection.folderId || driveConnection.connectedAt || driveConnection.lastSyncAt)
+      const preferredAuthPrompt = driveOAuthClient.preferredKind === 'web' && hasExistingDriveSession ? '' : 'consent'
+      const makeProvider = (authPrompt = preferredAuthPrompt) => new GoogleDriveSyncProvider({
         clientId: driveOAuthClient.clientId,
         clientSecret: desktopClientSecret,
         folderName: driveConnection.folderName || DRIVE_ROOT_FOLDER,
         folderId: driveConnection.folderId,
+        authPrompt,
       })
-      await provider.signIn()
+      let provider = makeProvider()
+      let sessionAccount: GoogleAccountProfile | undefined
+      try {
+        const session = await provider.signIn()
+        sessionAccount = session.account
+      } catch (err) {
+        if (options.silent && isInteractiveGoogleAuthError(err)) {
+          setDriveConnection((prev) => ({
+            ...prev,
+            status: prev.folderId || prev.connectedAt ? 'ready' : 'needs-auth',
+            lastError: undefined,
+          }))
+          return
+        }
+        if (preferredAuthPrompt === '' && !options.silent && isInteractiveGoogleAuthError(err)) {
+          provider = makeProvider('consent')
+          const session = await provider.signIn()
+          sessionAccount = session.account
+        } else {
+          throw err
+        }
+      }
       logDriveSyncDebug('signed-in')
-      const { repositories, blobStore, snapshot } = await prepareJournalCoreSnapshot()
+      const connectedScope = googleAccountStorageId(driveConnection.connectedAccount)
+      const sessionScope = googleAccountStorageId(sessionAccount)
+      if (!sessionAccount || !sessionScope) {
+        throw new Error('Google sign-in did not return a verifiable account. Please sign in again.')
+      }
+      const connectedEmail = driveConnection.connectedAccount?.email.trim().toLowerCase()
+      const sessionEmail = sessionAccount.email.trim().toLowerCase()
+      const sameGoogleAccount = Boolean(
+        (driveConnection.connectedAccount?.subject && sessionAccount.subject
+          && driveConnection.connectedAccount.subject === sessionAccount.subject)
+        || (connectedEmail && connectedEmail === sessionEmail)
+      )
+      if (connectedScope && sessionScope && connectedScope !== sessionScope && !sameGoogleAccount) {
+        throw new Error('This notebook belongs to a different Google account. Sign out before connecting another account.')
+      }
+      const storageAccount: GoogleAccountProfile = {
+        ...sessionAccount,
+        storageScope: connectedScope || sessionScope,
+      }
+      let preparedCore: Awaited<ReturnType<typeof prepareJournalCoreSnapshot>>
+      if (connectedScope) {
+        preparedCore = await prepareJournalCoreSnapshot()
+      } else {
+        const fallback = readAccountJournalFallback(storageAccount, createDeviceProfile())
+        const hydrated = await hydrateOrMigrateJournalSnapshot(fallback, {
+          device: fallback.device ?? deviceProfile,
+          accountScope: sessionScope,
+        })
+        preparedCore = await prepareJournalCoreSnapshotForAccount(storageAccount, hydrated.snapshot)
+      }
+      const { repositories, blobStore, snapshot } = preparedCore
       logDriveSyncDebug('snapshot-prepared', {
         entries: Object.keys(snapshot.entries).length,
         attachments: snapshot.attachments.length,
@@ -3951,20 +4051,24 @@ function App() {
       const syncedFileBoxItems = syncedSnapshot.fileBoxItems.map((item) => {
         const attachment = item.attachmentId ? attachmentById.get(item.attachmentId) : undefined
         if (!attachment?.driveFileId) return item
+        const nextStatus = item.status === 'queued' || item.status === 'uploading' ? 'available' as const : item.status
+        if (item.driveFileId === attachment.driveFileId && item.status === nextStatus) return item
         return {
           ...item,
           driveFileId: attachment.driveFileId,
-          status: item.status === 'queued' || item.status === 'uploading' ? 'available' as const : item.status,
+          status: nextStatus,
           updatedAt: lastSyncAt,
         }
       })
       const syncedTransfers = syncedSnapshot.transfers.map((transfer) => {
         const attachment = transfer.attachmentId ? attachmentById.get(transfer.attachmentId) : undefined
         if (!attachment?.driveFileId) return transfer
+        const nextStatus = transfer.status === 'queued' || transfer.status === 'uploading' ? 'available' as const : transfer.status
+        if (transfer.driveFileId === attachment.driveFileId && transfer.status === nextStatus) return transfer
         return {
           ...transfer,
           driveFileId: attachment.driveFileId,
-          status: transfer.status === 'queued' || transfer.status === 'uploading' ? 'available' as const : transfer.status,
+          status: nextStatus,
           updatedAt: lastSyncAt,
         }
       })
@@ -3974,13 +4078,23 @@ function App() {
       setFileBoxItems(syncedFileBoxItems)
       setTransferRecords(syncedTransfers)
       setSyncConflicts(syncedSnapshot.conflicts)
+      setTombstones(syncedSnapshot.tombstones)
+      if (!connectedScope) {
+        setProjects(readAccountScopedJson<Project[]>('labnote.projects', [], storageAccount))
+        setExperiments(readAccountScopedJson<Experiment[]>('labnote.experiments', [], storageAccount))
+        setProtocols(readAccountScopedJson<Protocol[]>('labnote.protocols', [], storageAccount))
+        setProjectTagOptions(readAccountScopedJson<string[]>('labnote.projectTags', DEFAULT_PROJECT_TAGS, storageAccount))
+        setExperimentTagOptions(readAccountScopedJson<string[]>('labnote.experimentTags', DEFAULT_EXPERIMENT_TAGS, storageAccount))
+      }
       setDriveSyncSummary({ ...syncResult, syncedAt: lastSyncAt })
       setJournalCoreQueueCount(0)
       setJournalCoreStatus('ready')
       setJournalCoreError('')
       setDriveConnection((prev) => ({
         ...prev,
+        storageMode: 'google-drive',
         folderId: workspace.id,
+        connectedAccount: storageAccount,
         status: 'ready',
         connectedAt: prev.connectedAt ?? lastSyncAt,
         lastSyncAt,
@@ -3997,8 +4111,125 @@ function App() {
     }
   }, [
     deviceProfile,
+    devDrivePreview,
     driveConnection,
     prepareJournalCoreSnapshot,
+    prepareJournalCoreSnapshotForAccount,
+  ])
+
+  const disconnectGoogleDrive = useCallback(async () => {
+    const disconnectingAccount = driveConnection.connectedAccount
+    const disconnectingScope = googleAccountStorageId(disconnectingAccount)
+    if (disconnectingScope) {
+      try {
+        await persistJournalSnapshot(
+          {
+            entries: entryDrafts,
+            attachments: attachmentsStore,
+            fileBoxItems,
+            transfers: transferRecords,
+            conflicts: syncConflicts,
+            tombstones,
+            device: deviceProfile,
+          },
+          {
+            accountScope: disconnectingScope,
+            device: deviceProfile,
+            lastSyncedAt: driveConnection.lastSyncAt,
+          }
+        )
+      } catch (err) {
+        console.warn('Unable to finish saving the current notebook before sign out', err)
+      }
+    }
+    try {
+      if (window.electronAPI?.disconnectGoogleDrive) {
+        const driveOAuthClient = resolveDriveClientId(driveConnection)
+        await window.electronAPI.disconnectGoogleDrive({ clientId: driveOAuthClient.clientId })
+      }
+    } catch (err) {
+      console.warn('Unable to revoke desktop Google Drive credentials', err)
+    }
+    Object.values(attachmentUrls).forEach((url) => {
+      if (url.startsWith('blob:')) URL.revokeObjectURL(url)
+    })
+    setEntryDrafts({})
+    setAttachmentsStore([])
+    setFileBoxItems([])
+    setTransferRecords([])
+    setSyncConflicts([])
+    setTombstones([])
+    setProjects([])
+    setExperiments([])
+    setProtocols([])
+    setProjectTagOptions(DEFAULT_PROJECT_TAGS)
+    setExperimentTagOptions(DEFAULT_EXPERIMENT_TAGS)
+    setSelectedEntryId('')
+    setSelectedProtocolId('')
+    setOpenEntryIds([])
+    setAttachmentUrls({})
+    setChangeQueue([])
+    setJournalCoreStatus('loading')
+    setJournalCoreQueueCount(0)
+    setJournalCoreError('')
+    journalCoreHydratedRef.current = false
+    setDriveSyncSummary(null)
+    setDriveConnection((prev) => ({
+      ...prev,
+      storageMode: 'local-only',
+      folderId: undefined,
+      connectedAccount: undefined,
+      connectedAt: undefined,
+      lastSyncAt: undefined,
+      status: 'disconnected',
+      lastError: undefined,
+    }))
+  }, [
+    attachmentUrls,
+    attachmentsStore,
+    deviceProfile,
+    driveConnection,
+    entryDrafts,
+    fileBoxItems,
+    syncConflicts,
+    tombstones,
+    transferRecords,
+  ])
+
+  useEffect(() => {
+    if (devDrivePreview) return
+    const hasReadyDriveWorkspace = Boolean(driveConnection.folderId && driveConnection.connectedAccount)
+    if (!hasReadyDriveWorkspace) return
+    if (!browserOnline || journalCoreStatus === 'loading' || driveConnection.status === 'syncing') return
+    if (!resolveDriveClientId(driveConnection).clientId) return
+
+    const runAutoSync = () => {
+      if (autoDriveSyncInFlightRef.current) return
+      autoDriveSyncInFlightRef.current = true
+      void runGoogleDriveSync({ silent: true }).finally(() => {
+        autoDriveSyncInFlightRef.current = false
+      })
+    }
+
+    const startupTimer = autoDriveSyncStartupAttemptedRef.current
+      ? undefined
+      : window.setTimeout(() => {
+          autoDriveSyncStartupAttemptedRef.current = true
+          runAutoSync()
+        }, 1200)
+    if (!autoDriveSyncStartupAttemptedRef.current) autoDriveSyncStartupAttemptedRef.current = true
+    const interval = window.setInterval(runAutoSync, 5 * 60 * 1000)
+
+    return () => {
+      if (startupTimer) window.clearTimeout(startupTimer)
+      window.clearInterval(interval)
+    }
+  }, [
+    browserOnline,
+    driveConnection,
+    devDrivePreview,
+    journalCoreStatus,
+    runGoogleDriveSync,
   ])
 
   const downloadAttachmentFromDrive = useCallback(
@@ -4008,11 +4239,10 @@ function App() {
 
       const driveOAuthClient = resolveDriveClientId(driveConnection)
       if (!driveOAuthClient.clientId) {
-        const label = driveOAuthClient.preferredKind === 'desktop' ? 'desktop' : 'web/PWA'
         setDriveConnection((prev) => ({
           ...prev,
           status: 'needs-auth',
-          lastError: `Add a Google OAuth ${label} client ID before downloading Drive files.`,
+          lastError: 'Google Drive sign-in is not configured for this build.',
         }))
         return null
       }
@@ -4025,15 +4255,28 @@ function App() {
       )
 
       try {
-        const provider = new GoogleDriveSyncProvider({
+        const hasExistingDriveSession = Boolean(driveConnection.folderId || driveConnection.connectedAt || driveConnection.lastSyncAt)
+        const preferredAuthPrompt = driveOAuthClient.preferredKind === 'web' && hasExistingDriveSession ? '' : 'consent'
+        const makeProvider = (authPrompt = preferredAuthPrompt) => new GoogleDriveSyncProvider({
           clientId: driveOAuthClient.clientId,
           clientSecret: driveOAuthClient.preferredKind === 'desktop' ? driveConnection.desktopClientSecret?.trim() : undefined,
           folderName: driveConnection.folderName || DRIVE_ROOT_FOLDER,
           folderId: driveConnection.folderId,
+          authPrompt,
         })
-        await provider.signIn()
+        let provider = makeProvider()
+        try {
+          await provider.signIn()
+        } catch (err) {
+          if (preferredAuthPrompt === '' && isInteractiveGoogleAuthError(err)) {
+            provider = makeProvider('consent')
+            await provider.signIn()
+          } else {
+            throw err
+          }
+        }
         const workspace = await provider.ensureWorkspace()
-        const repositories = await createJournalRepositories()
+        const repositories = await createJournalRepositories(journalRepositoryOptions)
         const blobStore = new IndexedDbBlobStore(repositories)
         const result = await downloadAttachmentBlob({
           attachment,
@@ -4083,18 +4326,18 @@ function App() {
         return null
       }
     },
-    [attachmentsStore, driveConnection, entryDrafts]
+    [attachmentsStore, driveConnection, entryDrafts, journalRepositoryOptions]
   )
 
   const openAttachment = useCallback(
     async (attachmentId: string) => {
       const existing = attachmentsStore.find((candidate) => candidate.id === attachmentId)
-      const attachment = existing && (await readAttachmentBlob(existing, attachmentUrls))
+      const attachment = existing && (await readAttachmentBlob(existing, attachmentUrls, journalAccountScope || undefined))
         ? existing
         : await downloadAttachmentFromDrive(attachmentId)
       if (!attachment) return
 
-      const blob = await readAttachmentBlob(attachment, attachmentUrls)
+      const blob = await readAttachmentBlob(attachment, attachmentUrls, journalAccountScope || undefined)
       if (!blob) return
       const url = URL.createObjectURL(blob)
       if (attachment.type === 'image' || (attachment.contentType || '').startsWith('image')) {
@@ -4105,7 +4348,7 @@ function App() {
       downloadBlob(attachment.filename, blob)
       window.setTimeout(() => URL.revokeObjectURL(url), 500)
     },
-    [attachmentUrls, attachmentsStore, downloadAttachmentFromDrive]
+    [attachmentUrls, attachmentsStore, downloadAttachmentFromDrive, journalAccountScope]
   )
 
   const removeLocalAttachmentCopy = useCallback(
@@ -4114,12 +4357,12 @@ function App() {
       if (!attachment) return
       try {
         if (attachment.cacheKey) {
-          const repositories = await createJournalRepositories()
+          const repositories = await createJournalRepositories(journalRepositoryOptions)
           const blobStore = new IndexedDbBlobStore(repositories)
           await blobStore.delete(attachment.cacheKey)
         }
         if (attachment.cachedPath?.startsWith('idb://')) {
-          await deleteCachedFile(attachment.cachedPath.replace('idb://', ''))
+          await deleteCachedFile(attachment.cachedPath.replace('idb://', ''), journalAccountScope || undefined)
         }
         if (attachment.cachedPath?.startsWith('fs://')) {
           const handle = await restoreCacheHandle()
@@ -4153,7 +4396,7 @@ function App() {
         return next
       })
     },
-    [attachmentsStore]
+    [attachmentsStore, journalAccountScope, journalRepositoryOptions]
   )
 
   const exportLocalBackup = useCallback(async () => {
@@ -4181,16 +4424,13 @@ function App() {
     setBackupStatus(null)
     try {
       const backup = parseJournalBackup(JSON.parse(await file.text()))
-      const repositories = await createJournalRepositories()
+      const repositories = await createJournalRepositories(journalRepositoryOptions)
       const blobStore = new IndexedDbBlobStore(repositories)
       const store = await createIndexedDbJournalStore(deviceProfile, repositories)
       const result = await restoreJournalBackup({ backup, store, blobStore, device: deviceProfile })
       const restored = await store.getSnapshot()
       const normalizedEntries = Object.fromEntries(
-        Object.entries(restored.entries).map(([id, entry]) => [
-          id,
-          condenseLegacyDailyEntry(ensureEntryDateBucket(applyLockedTemplateHeadings(entry))),
-        ])
+        Object.entries(restored.entries).map(([id, entry]) => [id, normalizeEntryForLoad(entry)])
       )
 
       setEntryDrafts(normalizedEntries)
@@ -4198,6 +4438,7 @@ function App() {
       setFileBoxItems(restored.fileBoxItems)
       setTransferRecords(restored.transfers)
       setSyncConflicts(restored.conflicts)
+      setTombstones(restored.tombstones)
       setJournalCoreStatus('ready')
       setJournalCoreSource('indexeddb')
       setJournalCoreQueueCount(0)
@@ -4218,58 +4459,47 @@ function App() {
     } catch (err) {
       setBackupStatus({ ok: false, message: err instanceof Error ? err.message : String(err) })
     }
-  }, [deviceProfile, todaySeed])
+  }, [deviceProfile, journalRepositoryOptions, todaySeed])
 
-  const resolveSyncConflict = useCallback((conflictId: string, action: ConflictResolutionAction) => {
-    const conflict = syncConflicts.find((item) => item.id === conflictId)
-    if (!conflict) return
-    const timestamp = new Date().toISOString()
-
-    if (conflict.entityKind === 'entry' && action === 'remote-won') {
-      const remoteEntry = entryFromConflictCopy(conflict.remoteCopy)
-      if (remoteEntry) {
-        const resolvedEntry: Entry = {
-          ...remoteEntry,
-          lastEditedDatetime: timestamp,
-          updatedByDeviceId: deviceProfile.id,
-          syncStatus: 'queued',
-        }
-        setEntryDrafts((prev) => ({ ...prev, [resolvedEntry.id]: resolvedEntry }))
-        setSelectedEntryId(resolvedEntry.id)
-        setOpenEntryIds((prev) => prev.includes(resolvedEntry.id) ? prev : [resolvedEntry.id, ...prev].slice(0, 5))
-      }
-    }
-
-    if (conflict.entityKind === 'entry' && action === 'kept-copy') {
-      const candidate = entryFromConflictCopy(conflict.remoteCopy) ?? entryFromConflictCopy(conflict.localCopy)
-      if (candidate) {
-        const copy = makeConflictCopyEntry(candidate, deviceProfile.id)
-        setEntryDrafts((prev) => ({ ...prev, [copy.id]: copy }))
-        setSelectedEntryId(copy.id)
-        setOpenEntryIds((prev) => [copy.id, ...prev.filter((id) => id !== copy.id)].slice(0, 5))
-      }
-    }
-
-    setSyncConflicts((prev) =>
-      prev.map((item) =>
-        item.id === conflictId
-          ? {
-              ...item,
-              resolution: action,
-              summary:
-                action === 'local-won'
-                  ? 'Resolved locally: current local copy will be pushed on the next sync.'
-                  : action === 'remote-won'
-                    ? 'Resolved from Drive: remote copy replaced the visible local entry.'
-                    : 'Resolved by keeping a separate conflict copy.',
-              localUpdatedAt: action === 'local-won' ? timestamp : item.localUpdatedAt,
-              remoteUpdatedAt: action === 'remote-won' ? timestamp : item.remoteUpdatedAt,
-            }
-          : item
+  const resolveSyncConflict = useCallback(async (conflictId: string, action: ConflictResolutionAction) => {
+    try {
+      const { repositories, snapshot } = await prepareJournalCoreSnapshot()
+      const store = await createIndexedDbJournalStore(deviceProfile, repositories)
+      await store.saveSnapshot(snapshot)
+      const result = await resolveStoredSyncConflict({
+        store,
+        device: deviceProfile,
+        conflictId,
+        resolution: action,
+      })
+      const normalizedEntries = Object.fromEntries(
+        Object.entries(result.snapshot.entries).map(([id, entry]) => [id, normalizeEntryForLoad(entry)])
       )
-    )
-    setJournalCoreQueueCount((prev) => prev + 1)
-  }, [deviceProfile.id, syncConflicts])
+
+      setEntryDrafts(normalizedEntries)
+      setAttachmentsStore(result.snapshot.attachments)
+      setFileBoxItems(result.snapshot.fileBoxItems)
+      setTransferRecords(result.snapshot.transfers)
+      setSyncConflicts(result.snapshot.conflicts)
+      setTombstones(result.snapshot.tombstones)
+      setJournalCoreQueueCount((prev) => prev + 1)
+      setJournalCoreStatus('ready')
+      setJournalCoreError('')
+
+      const preferredEntryId = result.copiedEntityId && normalizedEntries[result.copiedEntityId]
+        ? result.copiedEntityId
+        : result.conflict.entityKind === 'entry' && normalizedEntries[result.conflict.entityId]
+          ? result.conflict.entityId
+          : undefined
+      if (preferredEntryId) {
+        setSelectedEntryId(preferredEntryId)
+        setOpenEntryIds((prev) => [preferredEntryId, ...prev.filter((id) => id !== preferredEntryId)].slice(0, 5))
+      }
+    } catch (err) {
+      setJournalCoreStatus('error')
+      setJournalCoreError(err instanceof Error ? err.message : String(err))
+    }
+  }, [deviceProfile, prepareJournalCoreSnapshot])
 
   const addFileDestination = useCallback((entryId: string, val: { path: string; label?: string }): Attachment => {
     const rawPath = val.path.trim()
@@ -4358,13 +4588,13 @@ function App() {
 
       for (const att of entryAttachments) {
         if (att.type === 'raw') continue
-        const blob = await readAttachmentBlob(att, attachmentUrls)
+        const blob = await readAttachmentBlob(att, attachmentUrls, journalAccountScope || undefined)
         if (!blob) continue
         const name = attachmentExportNameById[att.id]
         await writeBlobToDir(attachmentsDir, name, blob)
       }
     },
-    [attachmentsStore, attachmentUrls, entryDrafts, projects, experiments, sharedApiAvailable]
+    [attachmentsStore, attachmentUrls, entryDrafts, projects, experiments, journalAccountScope, sharedApiAvailable]
   )
 
   // Hydrate cached attachment thumbnails/URLs from IndexedDB and fs handles
@@ -4384,7 +4614,7 @@ function App() {
         if (att.cachedPath?.startsWith('idb://')) {
           const key = att.cachedPath.replace('idb://', '')
           try {
-            const blob = await getCachedFile(key)
+            const blob = await getCachedFile(key, journalAccountScope || undefined)
             if (blob) {
               urlMap[att.id] = URL.createObjectURL(blob)
             }
@@ -4412,7 +4642,7 @@ function App() {
         if (!urlMap[att.id] && att.cacheKey) {
           try {
             if (!journalBlobStore) {
-              journalBlobStore = new IndexedDbBlobStore(await createJournalRepositories())
+              journalBlobStore = new IndexedDbBlobStore(await createJournalRepositories(journalRepositoryOptions))
             }
             const blob = await journalBlobStore.get(att.cacheKey)
             if (blob) urlMap[att.id] = URL.createObjectURL(blob)
@@ -4647,7 +4877,7 @@ function App() {
         if (att.cachedPath?.startsWith('idb://')) {
           const key = att.cachedPath.replace('idb://', '')
           try {
-            return (await getCachedFile(key)) ?? null
+            return (await getCachedFile(key, journalAccountScope || undefined)) ?? null
           } catch {
             return null
           }
@@ -4740,18 +4970,35 @@ function App() {
 	        window.alert('Export failed. Check console for details.')
 	      }
     },
-    [attachmentsStore, attachmentUrls, entryList, experiments, projects]
+    [attachmentsStore, attachmentUrls, entryList, experiments, journalAccountScope, projects]
 	  )
 
   const filteredEntries = useMemo(() => {
     let rangeStart = timestampFromDateString(dateRange.start)
     let rangeEnd = timestampFromDateString(dateRange.end)
+    const query = entrySearchQuery.trim().toLocaleLowerCase()
     if (rangeStart !== null && rangeEnd !== null && rangeStart > rangeEnd) {
       const temp = rangeStart
       rangeStart = rangeEnd
       rangeEnd = temp
     }
     return entryList.filter((entry) => {
+      if (query) {
+        const searchable = [
+          entry.title,
+          entry.dateBucket,
+          dateOnly.format(new Date(entry.createdDatetime)),
+          dateOnly.format(new Date(entry.lastEditedDatetime)),
+          ...(entry.tags ?? []),
+          ...(entry.projectTags ?? []),
+          ...(entry.experimentTags ?? []),
+          ...(entry.searchTerms ?? []),
+        ]
+          .filter(Boolean)
+          .join(' ')
+          .toLocaleLowerCase()
+        if (!searchable.includes(query)) return false
+      }
       if (selectedProject !== 'all' && entry.projectId !== selectedProject) return false
       if (selectedExperiment === 'none') {
         if (entry.experimentId) return false
@@ -4793,6 +5040,7 @@ function App() {
     filterHasImage,
     filterHasFile,
     selectedDate,
+    entrySearchQuery,
     entryList,
     attachmentsForEntry,
   ])
@@ -4853,7 +5101,6 @@ function App() {
           {
             attachments: entryAttachments.length,
             images: entryAttachments.filter((att) => att.type === 'image').length,
-            intake: (entryItem.telegramCaptures?.length ?? 0) + (entryItem.whatsappCaptures?.length ?? 0),
             pending: queueItems.filter((change) => change.status === 'pending').length,
             failed: queueItems.filter((change) => change.status === 'failed').length,
             verified: entryAttachments.filter((att) => Boolean(att.sha256)).length,
@@ -4911,17 +5158,15 @@ function App() {
     return () => root.removeEventListener('wheel', handleSuiteShellWheel, true)
   }, [handleSuiteShellWheel, isSuiteShell])
 
-  const selectedMobileAttachmentCount = selectedEntryId
-    ? attachmentsStore.filter((item) => item.entryId === selectedEntryId).length +
-      fileBoxItems.filter((item) => item.entryId === selectedEntryId && item.status !== 'rejected' && item.status !== 'removed').length
-    : 0
-  const selectedMobileHasFailedWork = changeQueue.some((item) => item.entryId === selectedEntryId && item.status === 'failed')
-  const selectedMobileHasPendingWork = changeQueue.some((item) => item.entryId === selectedEntryId && item.status === 'pending')
-  const mobileCaptureStatusSummary = {
-    local: syncing ? 'Syncing' : selectedMobileHasFailedWork ? 'Issue' : selectedMobileHasPendingWork ? 'Queued' : 'Up to date',
-    drive: driveConnection.folderId ? 'Linked' : driveConnection.status === 'ready' ? 'Ready' : 'Not synced',
-    attachments: selectedEntryId ? `${selectedMobileAttachmentCount} item${selectedMobileAttachmentCount === 1 ? '' : 's'}` : 'None',
-    hint: 'Offline-first. Drive syncs notes and metadata; larger files stay on demand.',
+  if (!isDriveWorkspaceReady(driveConnection)) {
+    return (
+      <AuthGate
+        driveConnection={driveConnection}
+        onConnect={runGoogleDriveSync}
+        onDisconnect={disconnectGoogleDrive}
+        syncing={driveConnection.status === 'syncing'}
+      />
+    )
   }
 
   return (
@@ -4935,14 +5180,16 @@ function App() {
           allEntries={entryList}
           entrySignals={sidebarEntrySignals}
           selectedEntryId={selectedEntryId}
+          entrySearchQuery={entrySearchQuery}
+          onEntrySearchQueryChange={setEntrySearchQuery}
           protocols={filteredProtocols}
           selectedProtocolId={selectedProtocolId}
           mode={activePane}
           onModeChange={setActivePane}
           deviceName={deviceProfile.name}
           fileBoxCount={fileBoxItems.filter((item) => item.status !== 'attached' && item.status !== 'rejected').length}
-          transferCount={transferRecords.filter((transfer) => transfer.status === 'queued' || transfer.status === 'uploading').length}
           driveStatus={driveConnection.status}
+          driveAccount={driveConnection.connectedAccount}
           selectedProjectTags={selectedProjectTags}
           selectedExperimentTags={selectedExperimentTags}
           projectTagOptions={projectTagOptions}
@@ -4988,6 +5235,7 @@ function App() {
           <ProtocolPane
             key={protocol?.id ?? 'protocol-empty'}
             protocol={protocol}
+            onOpenMobileNav={() => setMobileSidebarOpen(true)}
             onUpdateProtocol={(protocolId, content) =>
               setProtocols((prev) =>
                 prev.map((p) =>
@@ -5040,13 +5288,21 @@ function App() {
               setActivePane('entries')
             }}
           />
+        ) : activePane === 'settings' ? (
+          <MobileSettingsPane
+            appInfo={appInfo}
+            driveConnection={driveConnection}
+            onDisconnectDrive={disconnectGoogleDrive}
+            onOpenAdvancedSettings={() => setSettingsOpen(true)}
+            onRunDriveSync={runGoogleDriveSync}
+            syncing={driveConnection.status === 'syncing'}
+          />
         ) : activePane === 'sync' ? (
           <SyncPane
-            appPaths={appPaths}
-            masterSyncPath={masterSyncPath}
             driveConnection={driveConnection}
             onDriveConnectionChange={setDriveConnection}
             onRunDriveSync={runGoogleDriveSync}
+            onDisconnectDrive={disconnectGoogleDrive}
             syncing={driveConnection.status === 'syncing'}
             manifest={createManifest({
               device: deviceProfile,
@@ -5072,6 +5328,7 @@ function App() {
             entry={entry}
             project={project}
             experiment={experiment}
+            driveConnected={isDriveWorkspaceReady(driveConnection)}
             openEntries={openEntries}
             allEntries={entryList}
             selectedEntryId={selectedEntryId}
@@ -5082,8 +5339,6 @@ function App() {
             onAddProjectTagOption={addProjectTagOption}
             onAddExperimentTagOption={addExperimentTagOption}
             masterSyncPath={masterSyncPath}
-            onUpdateMasterSyncPath={setMasterSyncPath}
-            labStoragePath={labStoragePath}
             attachments={attachments}
             attachmentUrls={attachmentUrls}
             onUpdateEntry={(entryId, content) =>
@@ -5146,43 +5401,50 @@ function App() {
             autoEditEntryId={autoEditEntryId}
             onConsumeAutoEdit={() => setAutoEditEntryId(null)}
             onExportExperiment={exportExperiment}
+            onOpenMobileNav={() => setMobileSidebarOpen(true)}
           />
         )}
       </div>
       <MobilePwaNav
         activePane={activePane}
-        daysOpen={mobileSidebarOpen}
-        settingsOpen={settingsOpen}
         onToday={() => {
           handleOpenToday()
           setMobileSidebarOpen(false)
+          setMobileCaptureOpen(false)
         }}
-        onDays={() => setMobileSidebarOpen(true)}
+        onEntries={() => {
+          setActivePane('entries')
+          setMobileSidebarOpen(true)
+          setMobileCaptureOpen(false)
+        }}
+        onCapture={() => {
+          setMobileSidebarOpen(false)
+          setMobileCaptureOpen(true)
+        }}
         onFiles={() => {
           setActivePane('file-hub')
           setMobileSidebarOpen(false)
+          setMobileCaptureOpen(false)
         }}
         onSync={() => {
           setActivePane('sync')
           setMobileSidebarOpen(false)
+          setMobileCaptureOpen(false)
         }}
-        onSettings={() => setSettingsOpen(true)}
       />
-      {(activePane === 'entries' || activePane === 'file-hub') && !mobileSidebarOpen && (
-        <MobileCaptureAction
-          disabled={!selectedEntryId}
-          onQuickNote={() => {
-            if (selectedEntryId) setAutoEditEntryId(selectedEntryId)
-            setActivePane('entries')
-          }}
-          onCaptureFiles={(files) => {
-            if (!selectedEntryId) return Promise.resolve()
-            if (activePane !== 'file-hub') setActivePane('entries')
-            return queueFileBoxFiles(selectedEntryId, files)
-          }}
-          statusSummary={mobileCaptureStatusSummary}
-        />
-      )}
+      <MobileCaptureAction
+        open={mobileCaptureOpen && !mobileSidebarOpen}
+        disabled={!selectedEntryId}
+        onClose={() => setMobileCaptureOpen(false)}
+        onQuickNote={() => {
+          openDailyEntry(new Date(), { autoEdit: true })
+          setMobileCaptureOpen(false)
+        }}
+        onCaptureFiles={(files) => {
+          const todayEntryId = openDailyEntry(new Date(), { focusDate: false })
+          return queueFileBoxFiles(todayEntryId, files).finally(() => setMobileCaptureOpen(false))
+        }}
+      />
       {newProtocolOpen && (
         <NewProtocolModal
           onClose={() => setNewProtocolOpen(false)}
@@ -5192,23 +5454,11 @@ function App() {
       {settingsOpen && (
         <SettingsModal
           onClose={() => setSettingsOpen(false)}
-          theme={theme}
-          onThemeChange={setTheme}
           appName={APP_NAME}
           appOwner={APP_OWNER}
           appInfo={appInfo}
           appPaths={appPaths}
           onEditSetup={handleEditSetup}
-          masterSyncPath={masterSyncPath}
-          onMasterSyncPathChange={setMasterSyncPath}
-          mobilePairLink={mobilePairLink}
-          onMobilePairLinkChange={setMobilePairLink}
-          onAutoDetectMobilePairLink={() => autoDetectMobilePairLink(true)}
-          mobilePairAutoMessage={mobilePairAutoMessage}
-          mobilePairStatus={mobilePairStatus}
-          mobilePairQrDataUrl={mobilePairQrDataUrl}
-          onCopyMobilePairLink={copyMobilePairLink}
-          labStoragePath={labStoragePath}
           fsEnabled={fsEnabled}
           fsNeedsPermission={fsNeedsPermission}
           fsSupported={typeof (window as unknown as DirectoryPickerWindow).showDirectoryPicker === 'function'}
@@ -5228,6 +5478,35 @@ function App() {
           appName={APP_NAME}
         />
       )}
+      {migrationNoticeOpen && (
+        <div className="modal-overlay" role="dialog" aria-modal="true" aria-label="Google Drive notebook linked">
+          <div className="modal settings-modal account-migration-dialog" onMouseDown={(event) => event.stopPropagation()}>
+            <div className="modal-head">
+              <div>
+                <div className="eyebrow">Account</div>
+                <div className="title-sm">Google Drive is connected</div>
+                <p className="muted">
+                  Existing local notes were staged for this Google account and will sync into the connected Drive folder.
+                </p>
+              </div>
+              <button className="ghost subtle" type="button" onClick={() => setMigrationNoticeOpen(false)}>
+                Close
+              </button>
+            </div>
+            <div className="settings-row">
+              <div>
+                <div className="title-sm">{accountDisplayName(driveConnection.connectedAccount)}</div>
+                <p className="muted">
+                  This device now keeps a separate offline copy for this Google account. Other accounts open their own notebooks.
+                </p>
+              </div>
+              <button className="accent" type="button" onClick={() => setMigrationNoticeOpen(false)}>
+                Continue
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -5235,7 +5514,6 @@ function App() {
 type SidebarEntrySignal = {
   attachments: number
   images: number
-  intake: number
   pending: number
   failed: number
   verified: number
@@ -5250,14 +5528,16 @@ interface SidebarProps {
   allEntries: Entry[]
   entrySignals: Record<string, SidebarEntrySignal>
   selectedEntryId: string
+  entrySearchQuery: string
+  onEntrySearchQueryChange: (value: string) => void
   protocols: Protocol[]
   selectedProtocolId: string
   mode: AppPane
   onModeChange: (val: AppPane) => void
   deviceName: string
   fileBoxCount: number
-  transferCount: number
   driveStatus: DriveConnectionState['status']
+  driveAccount?: GoogleAccountProfile
   selectedProjectTags: string[]
   selectedExperimentTags: string[]
   projectTagOptions: string[]
@@ -5297,14 +5577,16 @@ function Sidebar({
   allEntries,
   entrySignals,
   selectedEntryId,
+  entrySearchQuery,
+  onEntrySearchQueryChange,
   protocols,
   selectedProtocolId,
   mode,
   onModeChange,
   deviceName,
   fileBoxCount,
-  transferCount,
   driveStatus,
+  driveAccount,
   selectedProjectTags,
   selectedExperimentTags,
   projectTagOptions,
@@ -5336,11 +5618,16 @@ function Sidebar({
   onCloseMobile,
 }: SidebarProps) {
   const activeLab = labs[0]
+  const entrySearchRef = useRef<HTMLInputElement | null>(null)
   const projectLookup = useMemo(() => new Map(projects.map((p) => [p.id, p])), [projects])
   const experimentLookup = useMemo(() => new Map(experiments.map((e) => [e.id, e])), [experiments])
   const isEntriesMode = mode === 'entries'
   const isProtocolsMode = mode === 'protocols'
   const sidebarModeClass = isEntriesMode ? 'sidebar-mode-entries' : isProtocolsMode ? 'sidebar-mode-protocols' : 'sidebar-mode-connected'
+  const [calendarExpanded, setCalendarExpanded] = useState(() => {
+    if (typeof window === 'undefined') return true
+    return !window.matchMedia('(min-width: 1024px) and (max-height: 680px)').matches
+  })
   const calendarLabel = useMemo(() => {
     return new Intl.DateTimeFormat('en-US', { month: 'long', year: 'numeric' }).format(calendarMonth)
   }, [calendarMonth])
@@ -5348,6 +5635,41 @@ function Sidebar({
   const entryDateSet = useMemo(() => new Set(allEntries.map((entry) => entry.dateBucket)), [allEntries])
   const selectedDateHasEntry = selectedDate ? entryDateSet.has(selectedDate) : false
   const selectedDateLabel = selectedDate ? dateOnly.format(dateFromBucket(selectedDate)) : ''
+  const driveReady = driveStatus === 'ready'
+  const driveLabel = driveReady ? 'Connected' : driveStatus === 'syncing' ? 'Syncing' : 'Needs sign-in'
+  const entrySearchLabel = entrySearchQuery.trim()
+    ? `Matching "${entrySearchQuery.trim()}"`
+    : `Showing ${entries.length} item${entries.length === 1 ? '' : 's'}`
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault()
+        onModeChange('entries')
+        window.setTimeout(() => entrySearchRef.current?.focus(), 0)
+        return
+      }
+
+      if (event.key === 'Escape' && document.activeElement === entrySearchRef.current) {
+        if (entrySearchQuery) {
+          onEntrySearchQueryChange('')
+        } else {
+          entrySearchRef.current?.blur()
+        }
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [entrySearchQuery, onEntrySearchQueryChange, onModeChange])
+
+  useEffect(() => {
+    const query = window.matchMedia('(min-width: 1024px) and (max-height: 680px)')
+    const handleChange = (event: MediaQueryListEvent) => setCalendarExpanded(!event.matches)
+
+    query.addEventListener('change', handleChange)
+    return () => query.removeEventListener('change', handleChange)
+  }, [])
 
   const getEntryPill = useCallback(
     (entry: Entry) => {
@@ -5422,17 +5744,39 @@ function Sidebar({
           <img src={logoMark} alt={`${APP_NAME} logo`} className="brand-mark" />
           <div className="brand-meta">
             <div className="brand-title">{APP_NAME}</div>
-            <div className="muted tiny">{activeLab?.name ?? 'Active lab'}</div>
+            <div className="muted tiny">Research journal</div>
           </div>
         </div>
         <div className="sidebar-header-actions">
-          <div className="status-chip success">Sync ready</div>
+          <button
+            className="pill soft icon-button sidebar-collapse-button"
+            onClick={onToggleCollapsed}
+            type="button"
+            data-testid="sidebar-toggle"
+            aria-label={collapsed ? 'Show sidebar' : 'Hide sidebar'}
+            aria-expanded={!collapsed}
+            title={collapsed ? 'Show sidebar' : 'Hide sidebar'}
+          >
+            <span className="icon"><UiIcon name={collapsed ? 'chevronRight' : 'chevronLeft'} /></span>
+            <span className="icon-label">{collapsed ? 'Show sidebar' : 'Hide sidebar'}</span>
+          </button>
+          <div className={`status-chip ${driveReady ? 'success' : driveStatus === 'syncing' ? 'warning' : 'danger'}`}>{driveLabel}</div>
           <button className="pill soft icon-button mobile-close-sidebar" onClick={onCloseMobile} type="button">
             <span className="icon"><UiIcon name="x" /></span>
             <span className="icon-label">Close</span>
           </button>
-          <button className="pill soft icon-button" onClick={onOpenSettings} type="button" data-testid="settings-button">
-            <span className="icon"><UiIcon name="settings" /></span>
+          <button
+            className="pill soft icon-button"
+            onClick={() => {
+              onOpenSettings()
+              onCloseMobile()
+            }}
+            type="button"
+            data-testid="settings-button"
+            aria-label="Settings"
+            title="Settings"
+          >
+            <span className="icon"><UiIcon name="sliders" /></span>
             <span className="icon-label">Settings</span>
           </button>
         </div>
@@ -5440,10 +5784,12 @@ function Sidebar({
 
       {!collapsed && (
         <div className="sidebar-content">
-          <div className="lab-card">
-            <div className="eyebrow">Lab details</div>
-            <h2 className="title-sm lab-title">{activeLab?.name ?? 'Lab'}</h2>
-            <div className="muted tiny">Storage: {activeLab?.storageConfig.path ?? 'Not set'}</div>
+          <div className="lab-card notebook-summary-card">
+            <div className="eyebrow">Notebook</div>
+            <h2 className="title-sm lab-title">{activeLab?.name ?? 'Research journal'}</h2>
+            <div className="muted tiny">
+              {driveAccount?.email ? `Signed in as ${driveAccount.email}` : 'Google Drive notebook'}
+            </div>
             <div className="lab-card-meta">
               <div className="pill ghost-pill">{entries.length} entries</div>
               <div className="pill ghost-pill">{protocols.length} protocols</div>
@@ -5455,16 +5801,24 @@ function Sidebar({
               className={`pill soft ${isEntriesMode ? 'active-pill' : ''}`}
               type="button"
               role="tab"
+              aria-label="Today"
+              title="Today"
               aria-selected={isEntriesMode}
-              onClick={() => onModeChange('entries')}
+              onClick={() => {
+                onModeChange('entries')
+                onTodayEntry()
+                onCloseMobile()
+              }}
             >
               <UiIcon name="note" />
-              <span>Entries</span>
+              <span>Today</span>
             </button>
             <button
               className={`pill soft ${isProtocolsMode ? 'active-pill' : ''}`}
               type="button"
               role="tab"
+              aria-label="Protocols"
+              title="Protocols"
               aria-selected={isProtocolsMode}
               onClick={() => onModeChange('protocols')}
             >
@@ -5475,53 +5829,37 @@ function Sidebar({
               className={`pill soft ${mode === 'file-hub' ? 'active-pill' : ''}`}
               type="button"
               role="tab"
+              aria-label="Files"
+              title="Files"
               aria-selected={mode === 'file-hub'}
               onClick={() => onModeChange('file-hub')}
             >
               <UiIcon name="paperclip" />
-              <span>File Hub</span>
+              <span>Files</span>
             </button>
             <button
-              className={`pill soft ${mode === 'devices' ? 'active-pill' : ''}`}
+              className={`pill soft ${mode === 'sync' ? 'active-pill' : ''}`}
               type="button"
               role="tab"
-              aria-selected={mode === 'devices'}
-              onClick={() => onModeChange('devices')}
-            >
-              <UiIcon name="settings" />
-              <span>Devices</span>
-            </button>
-            <button
-              className={`pill soft desktop-secondary-tab ${mode === 'transfers' ? 'active-pill' : ''}`}
-              type="button"
-              role="tab"
-              aria-selected={mode === 'transfers'}
-              onClick={() => onModeChange('transfers')}
-            >
-              <UiIcon name="refresh" />
-              <span>Transfers</span>
-            </button>
-            <button
-              className={`pill soft desktop-secondary-tab ${mode === 'sync' ? 'active-pill' : ''}`}
-              type="button"
-              role="tab"
+              aria-label="Sync"
+              title="Sync"
               aria-selected={mode === 'sync'}
               onClick={() => onModeChange('sync')}
             >
-              <UiIcon name="drive" />
+              <UiIcon name="refresh" />
               <span>Sync</span>
             </button>
           </div>
 
           {isEntriesMode ? (
-            <div className="quick-actions">
+            <div className="quick-actions entries-quick-actions">
               <button className="accent" onClick={() => { onTodayEntry(); onCloseMobile() }} data-testid="today-entry">
-                <span className="icon"><UiIcon name="plus" /></span>
-                Today's Entry
+                <span className="icon"><UiIcon name="note" /></span>
+                Open today
               </button>
             </div>
           ) : isProtocolsMode ? (
-            <div className="quick-actions">
+            <div className="quick-actions protocol-quick-actions">
               <button className="accent" onClick={onNewProtocol} data-testid="new-protocol">
                 <span className="icon"><UiIcon name="book" /></span>
                 New Protocol
@@ -5529,26 +5867,22 @@ function Sidebar({
             </div>
           ) : (
             <>
-              <div className="connected-sidebar-summary">
+          <div className="connected-sidebar-summary">
                 <div>
-                  <span className="muted tiny">Device</span>
+                  <span className="muted tiny">This device</span>
                   <strong>{deviceName}</strong>
                 </div>
                 <div>
-                  <span className="muted tiny">File Box</span>
+                  <span className="muted tiny">Inbox</span>
                   <strong>{fileBoxCount} open</strong>
                 </div>
                 <div>
-                  <span className="muted tiny">Transfers</span>
-                  <strong>{transferCount} active</strong>
-                </div>
-                <div>
                   <span className="muted tiny">Drive</span>
-                  <strong>{driveStatus === 'ready' ? 'Ready' : driveStatus === 'syncing' ? 'Syncing' : 'Setup'}</strong>
+                  <strong>{driveLabel}</strong>
                 </div>
               </div>
-              <section className="sidebar-section connected-nav-list" aria-label="Connected workspace">
-                <div className="section-title">Connected workspace</div>
+              <section className="sidebar-section connected-nav-list" aria-label="Notebook tools">
+                <div className="section-title">Notebook</div>
                 <button
                   className={`entry-item ${mode === 'file-hub' ? 'active' : ''}`}
                   type="button"
@@ -5556,34 +5890,10 @@ function Sidebar({
                 >
                   <span className="connected-nav-icon"><UiIcon name="folder" /></span>
                   <div>
-                    <div className="title-sm">Entry File Box</div>
-                    <p className="muted tiny">Accept, attach, and track incoming files.</p>
+                    <div className="title-sm">Files</div>
+                    <p className="muted tiny">Evidence attached to notebook entries.</p>
                   </div>
                   <span className="entry-signal summary">{fileBoxCount}</span>
-                </button>
-                <button
-                  className={`entry-item ${mode === 'devices' ? 'active' : ''}`}
-                  type="button"
-                  onClick={() => { onModeChange('devices'); onCloseMobile() }}
-                >
-                  <span className="connected-nav-icon"><UiIcon name="settings" /></span>
-                  <div>
-                    <div className="title-sm">Devices</div>
-                    <p className="muted tiny">Desktop, mobile PWA, and Drive identity.</p>
-                  </div>
-                  <span className="entry-signal summary">1</span>
-                </button>
-                <button
-                  className={`entry-item ${mode === 'transfers' ? 'active' : ''}`}
-                  type="button"
-                  onClick={() => { onModeChange('transfers'); onCloseMobile() }}
-                >
-                  <span className="connected-nav-icon"><UiIcon name="refresh" /></span>
-                  <div>
-                    <div className="title-sm">Transfers</div>
-                    <p className="muted tiny">Recent file movements and status.</p>
-                  </div>
-                  <span className="entry-signal summary">{transferCount}</span>
                 </button>
                 <button
                   className={`entry-item ${mode === 'sync' ? 'active' : ''}`}
@@ -5592,20 +5902,50 @@ function Sidebar({
                 >
                   <span className="connected-nav-icon"><UiIcon name="drive" /></span>
                   <div>
-                    <div className="title-sm">Google Drive Sync</div>
-                    <p className="muted tiny">OAuth, folder layout, and storage paths.</p>
+                    <div className="title-sm">Sync</div>
+                    <p className="muted tiny">Google Drive.</p>
                   </div>
-                  <span className="entry-signal success">{driveStatus === 'ready' ? 'Ready' : 'Setup'}</span>
+                  <span className="entry-signal success">{driveReady ? 'Connected' : 'Review'}</span>
                 </button>
               </section>
             </>
           )}
 
           {isEntriesMode && (
-            <button className="sidebar-search-reference" type="button" onClick={() => onModeChange('entries')}>
-              <span>Search entries</span>
-              <kbd>Ctrl K</kbd>
-            </button>
+            <div className="sidebar-search-block">
+              <div
+                className="sidebar-search-reference"
+                role="search"
+                onClick={() => entrySearchRef.current?.focus()}
+              >
+                <input
+                  ref={entrySearchRef}
+                  type="search"
+                  value={entrySearchQuery}
+                  onChange={(event) => onEntrySearchQueryChange(event.target.value)}
+                  placeholder="Search entries"
+                  aria-label="Search entries"
+                  data-testid="entry-search-input"
+                />
+                {entrySearchQuery ? (
+                  <button
+                    className="sidebar-search-clear"
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      onEntrySearchQueryChange('')
+                      entrySearchRef.current?.focus()
+                    }}
+                    aria-label="Clear entry search"
+                  >
+                    Clear
+                  </button>
+                ) : null}
+              </div>
+              <div className="sidebar-search-status" aria-live="polite">
+                {entrySearchLabel}
+              </div>
+            </div>
           )}
 
           {isEntriesMode ? (
@@ -5659,8 +5999,21 @@ function Sidebar({
                 </div>
               </section>
 
-              <section className="sidebar-section sidebar-calendar-section">
-                <div className="section-title">Calendar</div>
+              <section className={`sidebar-section sidebar-calendar-section ${calendarExpanded ? 'calendar-expanded' : 'calendar-collapsed'}`}>
+                <div className="section-row sidebar-calendar-title-row">
+                  <div className="section-title">Calendar</div>
+                  <button
+                    className="sidebar-calendar-toggle"
+                    type="button"
+                    onClick={() => setCalendarExpanded((expanded) => !expanded)}
+                    aria-expanded={calendarExpanded}
+                    aria-controls="sidebar-calendar-body"
+                    data-testid="sidebar-calendar-toggle"
+                  >
+                    <span>{calendarExpanded ? 'Collapse' : calendarLabel}</span>
+                    <UiIcon name={calendarExpanded ? 'chevronUp' : 'chevronDown'} />
+                  </button>
+                </div>
                 <div className="mobile-days-calendar-strip" aria-label="Mobile calendar">
                   <div className="mobile-days-calendar-head">
                     <button
@@ -5711,7 +6064,7 @@ function Sidebar({
                     })}
                   </div>
                 </div>
-                <div className="calendar" data-testid="calendar">
+                <div className="calendar" id="sidebar-calendar-body" data-testid="calendar">
                   <div className="calendar-header">
                     <div className="calendar-month">{calendarLabel}</div>
                     <div className="calendar-nav">
@@ -5828,7 +6181,7 @@ function Sidebar({
               <section className="sidebar-section sidebar-entries-section">
                 <div className="section-title">Recent entries</div>
                 <div className="muted tiny" style={{ marginBottom: 6 }}>
-                  Showing {entries.length} item{entries.length === 1 ? '' : 's'}
+                  {entrySearchLabel}
                 </div>
                 <div className="entry-list" data-testid="entry-list">
                   {entries.length === 0 && (
@@ -5842,11 +6195,9 @@ function Sidebar({
                       : signals?.pending
                         ? 'Sync pending'
                         : 'Synced'
-                    const signalSummary = signals?.intake
-                      ? `${signals.intake} intake`
-                      : signals?.attachments
-                        ? `${signals.attachments} file${signals.attachments === 1 ? '' : 's'}`
-                        : ''
+                    const signalSummary = signals?.attachments
+                      ? `${signals.attachments} file${signals.attachments === 1 ? '' : 's'}`
+                      : ''
                     return (
                       <button
                         key={e.id}
@@ -5860,7 +6211,7 @@ function Sidebar({
                           <p className="muted tiny">{dateOnly.format(new Date(e.createdDatetime))}</p>
                         </div>
                         <div className="entry-signal-row">
-                          <span className={pill.className}>{pill.label}</span>
+                          <span className="entry-context-label">{pill.label}</span>
                           {signalSummary ? <span className="entry-signal summary">{signalSummary}</span> : null}
                           <span className={`entry-signal ${signals?.failed ? 'danger' : signals?.pending ? 'warning' : 'success'}`}>
                             {syncLabel}
@@ -5873,7 +6224,7 @@ function Sidebar({
               </section>
             </>
           ) : isProtocolsMode ? (
-            <section className="sidebar-section">
+            <section className="sidebar-section sidebar-protocols-section">
               <div className="section-title">Protocols</div>
               <div className="muted tiny" style={{ marginBottom: 6 }}>
                 Showing {protocols.length} item{protocols.length === 1 ? '' : 's'}
@@ -5906,53 +6257,38 @@ function Sidebar({
           ) : null}
         </div>
       )}
-
-      <div className="sidebar-footer">
-        <button
-          className="pill soft sidebar-toggle"
-          type="button"
-          onClick={onToggleCollapsed}
-          data-testid="sidebar-toggle"
-          aria-expanded={!collapsed}
-        >
-          {collapsed ? 'Show panel' : 'Hide panel'}
-        </button>
-        <div className="sidebar-footer-meta">
-          <span className="muted tiny">Made by {APP_OWNER}</span>
-        </div>
-      </div>
     </aside>
   )
 }
 
 function MobilePwaNav({
   activePane,
-  daysOpen,
-  settingsOpen,
   onToday,
-  onDays,
+  onEntries,
+  onCapture,
   onFiles,
   onSync,
-  onSettings,
 }: {
   activePane: AppPane
-  daysOpen: boolean
-  settingsOpen: boolean
   onToday: () => void
-  onDays: () => void
+  onEntries: () => void
+  onCapture: () => void
   onFiles: () => void
   onSync: () => void
-  onSettings: () => void
 }) {
   return (
     <nav className="mobile-pwa-nav" aria-label="Mobile notebook navigation">
-      <button className={!daysOpen && activePane === 'entries' ? 'active' : ''} type="button" onClick={onToday} data-testid="mobile-nav-today">
+      <button className={activePane === 'entries' ? 'active' : ''} type="button" onClick={onToday} data-testid="mobile-nav-today">
         <UiIcon name="note" />
         <span>Today</span>
       </button>
-      <button className={daysOpen ? 'active' : ''} type="button" onClick={onDays} data-testid="mobile-nav-days">
+      <button type="button" onClick={onEntries} data-testid="mobile-nav-entries">
         <UiIcon name="list" />
-        <span>Days</span>
+        <span>Entries</span>
+      </button>
+      <button className="mobile-nav-capture" type="button" onClick={onCapture} data-testid="mobile-nav-capture">
+        <UiIcon name="plus" />
+        <span>Capture</span>
       </button>
       <button className={activePane === 'file-hub' ? 'active' : ''} type="button" onClick={onFiles} data-testid="mobile-nav-files">
         <UiIcon name="folder" />
@@ -5962,32 +6298,59 @@ function MobilePwaNav({
         <UiIcon name="refresh" />
         <span>Sync</span>
       </button>
-      <button className={settingsOpen ? 'active' : ''} type="button" onClick={onSettings} data-testid="mobile-nav-settings">
-        <UiIcon name="settings" />
-        <span>Settings</span>
-      </button>
     </nav>
   )
 }
 
 function MobileCaptureAction({
+  open,
   disabled,
+  onClose,
   onQuickNote,
   onCaptureFiles,
-  statusSummary,
 }: {
+  open: boolean
   disabled: boolean
+  onClose: () => void
   onQuickNote: () => void
   onCaptureFiles: (files: File[]) => Promise<void>
-  statusSummary: {
-    local: string
-    drive: string
-    attachments: string
-    hint: string
-  }
 }) {
   const inputRef = useRef<HTMLInputElement | null>(null)
+  const cameraRef = useRef<HTMLInputElement | null>(null)
+  const sheetRef = useRef<HTMLElement | null>(null)
   const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    if (!open) return undefined
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    sheetRef.current?.querySelector<HTMLButtonElement>('button')?.focus()
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        onClose()
+        return
+      }
+      if (event.key !== 'Tab' || !sheetRef.current) return
+      const controls = Array.from(
+        sheetRef.current.querySelectorAll<HTMLElement>('button:not(:disabled), [href], input:not(:disabled), [tabindex]:not([tabindex="-1"])')
+      ).filter((control) => control.getClientRects().length > 0)
+      if (!controls.length) return
+      const first = controls[0]
+      const last = controls[controls.length - 1]
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault()
+        last.focus()
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault()
+        first.focus()
+      }
+    }
+    document.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.removeEventListener('keydown', onKeyDown)
+      previousFocus?.focus()
+    }
+  }, [onClose, open])
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -6008,51 +6371,170 @@ function MobileCaptureAction({
     }
   }, [disabled, onCaptureFiles])
 
+  const submitFiles = (files: File[]) => {
+    if (!files.length) return
+    setBusy(true)
+    void onCaptureFiles(files).finally(() => setBusy(false))
+  }
+
   return (
-    <div className="mobile-capture-dock" aria-label="Mobile capture actions">
-      <div className="mobile-sync-strip" aria-label="Entry sync and attachment status">
-        <div>
-          <UiIcon name="note" />
-          <span>Local</span>
-          <strong>{statusSummary.local}</strong>
+    <>
+      {open && (
+        <div className="mobile-capture-sheet-backdrop" role="presentation" onMouseDown={onClose}>
+          <section
+            ref={sheetRef}
+            className="mobile-capture-sheet"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="mobile-capture-title"
+            onMouseDown={(event) => event.stopPropagation()}
+            data-testid="mobile-capture-sheet"
+          >
+            <div className="mobile-capture-sheet-head">
+              <div>
+                <span className="eyebrow">Capture</span>
+                <h2 id="mobile-capture-title">Add to today</h2>
+              </div>
+              <button className="ghost icon-btn" type="button" onClick={onClose} aria-label="Close capture menu">
+                <UiIcon name="x" />
+              </button>
+            </div>
+            <div className="mobile-capture-options">
+              <button type="button" onClick={onQuickNote} disabled={disabled || busy}>
+                <UiIcon name="edit" />
+                <span><strong>Write note</strong><small>Start typing in today's entry</small></span>
+              </button>
+              <button type="button" onClick={() => cameraRef.current?.click()} disabled={disabled || busy}>
+                <UiIcon name="image" />
+                <span><strong>Take photo</strong><small>Capture evidence with the camera</small></span>
+              </button>
+              <button type="button" onClick={() => inputRef.current?.click()} disabled={disabled || busy}>
+                <UiIcon name="paperclip" />
+                <span><strong>{busy ? 'Adding files...' : 'Choose files'}</strong><small>Images, PDFs, sheets, and documents</small></span>
+              </button>
+            </div>
+          </section>
         </div>
-        <div>
-          <UiIcon name="drive" />
-          <span>Drive</span>
-          <strong>{statusSummary.drive}</strong>
-        </div>
-        <div>
-          <UiIcon name="paperclip" />
-          <span>Files</span>
-          <strong>{statusSummary.attachments}</strong>
-        </div>
-        <p>{statusSummary.hint}</p>
-      </div>
-      <button className="mobile-capture-secondary" type="button" onClick={onQuickNote} disabled={disabled || busy}>
-        <UiIcon name="edit" />
-        <span>Note</span>
-      </button>
-      <button className="mobile-capture-primary" type="button" onClick={() => inputRef.current?.click()} disabled={disabled || busy}>
-        <UiIcon name="camera" />
-        <span>{busy ? 'Adding...' : 'Capture image/file'}</span>
-      </button>
+      )}
       <input
         ref={inputRef}
         data-testid="mobile-capture-input"
         type="file"
         accept="image/*,.pdf,.csv,.tsv,.xlsx,.xls,.doc,.docx,text/*"
-        capture="environment"
         multiple
         hidden
         onChange={(event) => {
           const files = Array.from(event.currentTarget.files ?? [])
           event.currentTarget.value = ''
-          if (!files.length) return
-          setBusy(true)
-          void onCaptureFiles(files).finally(() => setBusy(false))
+          submitFiles(files)
         }}
       />
-    </div>
+      <input
+        ref={cameraRef}
+        data-testid="mobile-capture-camera-input"
+        type="file"
+        accept="image/*"
+        capture="environment"
+        hidden
+        onChange={(event) => {
+          const files = Array.from(event.currentTarget.files ?? [])
+          event.currentTarget.value = ''
+          submitFiles(files)
+        }}
+      />
+    </>
+  )
+}
+
+function MobileSettingsPane({
+  appInfo,
+  driveConnection,
+  onDisconnectDrive,
+  onOpenAdvancedSettings,
+  onRunDriveSync,
+  syncing,
+}: {
+  appInfo: { name: string; version: string; platform: string } | null
+  driveConnection: DriveConnectionState
+  onDisconnectDrive: () => void
+  onOpenAdvancedSettings: () => void
+  onRunDriveSync: () => void | Promise<void>
+  syncing: boolean
+}) {
+  const account = driveConnection.connectedAccount
+  const accountName = accountDisplayName(account)
+  const accountEmail = accountEmailDisplay(account)
+  const lastSyncLabel = driveConnection.lastSyncAt
+    ? new Date(driveConnection.lastSyncAt).toLocaleString()
+    : 'All changes saved'
+  const versionLabel = appInfo?.version ? `v${appInfo.version}` : 'Installed app'
+  const platformLabel = appInfo?.platform ?? 'This device'
+
+  return (
+    <main className="panel editor mobile-settings-pane" data-testid="mobile-settings-pane">
+      <div className="connected-page-head compact">
+        <div>
+          <div className="eyebrow">Settings</div>
+          <h1>Notebook settings</h1>
+          <p>Account, Drive, and offline writing.</p>
+        </div>
+        <button className="accent" type="button" onClick={() => void onRunDriveSync()} disabled={syncing}>
+          <UiIcon name="refresh" />
+          {syncing ? 'Syncing' : 'Sync now'}
+        </button>
+      </div>
+
+      <section className="mobile-settings-list" aria-label="Notebook settings">
+        <div className="mobile-settings-card account">
+          <div className="drive-avatar">{account?.picture ? <img src={account.picture} alt="" /> : accountName.slice(0, 1).toUpperCase()}</div>
+          <div>
+            <span>Signed in</span>
+            <strong>{accountName}</strong>
+            <small>{accountEmail}</small>
+          </div>
+          <button className="ghost danger-text" type="button" onClick={onDisconnectDrive}>Sign out</button>
+        </div>
+
+        <div className="mobile-settings-card">
+          <UiIcon name="drive" />
+          <div>
+            <span>Drive notebook</span>
+            <strong>{driveConnection.folderName || DRIVE_ROOT_FOLDER}</strong>
+            <small>{driveConnection.status === 'ready' ? 'Connected' : driveConnection.status}</small>
+          </div>
+        </div>
+
+        <div className="mobile-settings-card">
+          <UiIcon name="save" />
+          <div>
+            <span>Offline access</span>
+            <strong>Available on this device</strong>
+            <small>Keep writing without internet.</small>
+          </div>
+        </div>
+
+        <div className="mobile-settings-card">
+          <UiIcon name="refresh" />
+          <div>
+            <span>Last sync</span>
+            <strong>{lastSyncLabel}</strong>
+            <small>Saved to Google Drive.</small>
+          </div>
+        </div>
+
+        <details className="mobile-settings-card mobile-settings-disclosure">
+          <summary>
+              <UiIcon name="sliders" />
+              <div>
+                <span>Advanced</span>
+                <strong>Backup and troubleshooting</strong>
+                <small>{versionLabel} · {platformLabel}</small>
+              </div>
+          </summary>
+          <button className="ghost" type="button" onClick={onOpenAdvancedSettings}>Open Advanced</button>
+        </details>
+      </section>
+    </main>
   )
 }
 
@@ -6060,6 +6542,7 @@ interface EditorPaneProps {
   entry?: Entry
   project?: Project
   experiment?: Experiment
+  driveConnected: boolean
   openEntries: Entry[]
   allEntries: Entry[]
   selectedEntryId: string
@@ -6070,8 +6553,6 @@ interface EditorPaneProps {
   onAddProjectTagOption: (value: string) => void
   onAddExperimentTagOption: (value: string) => void
   masterSyncPath: string
-  onUpdateMasterSyncPath: (value: string) => void
-  labStoragePath: string
   attachments: Attachment[]
   attachmentUrls: Record<string, string>
   fileBoxItems: FileBoxItem[]
@@ -6096,18 +6577,21 @@ interface EditorPaneProps {
   autoEditEntryId: string | null
   onConsumeAutoEdit: () => void
   onExportExperiment: (experimentId: string, format: 'markdown' | 'pdf') => Promise<void>
+  onOpenMobileNav: () => void
 }
 
 interface ProtocolPaneProps {
   protocol?: Protocol
   onUpdateProtocol: (protocolId: string, content: Block[]) => void
   onUpdateProtocolMeta: (protocolId: string, updates: Partial<Protocol>) => void
+  onOpenMobileNav: () => void
 }
 
 function EditorPane({
   entry,
   project,
   experiment,
+  driveConnected,
   openEntries,
   allEntries,
   selectedEntryId,
@@ -6118,8 +6602,6 @@ function EditorPane({
   onAddProjectTagOption,
   onAddExperimentTagOption,
   masterSyncPath,
-  onUpdateMasterSyncPath,
-  labStoragePath,
   attachments,
   attachmentUrls,
   fileBoxItems,
@@ -6144,12 +6626,15 @@ function EditorPane({
   autoEditEntryId,
   onConsumeAutoEdit,
   onExportExperiment,
+  onOpenMobileNav,
 }: EditorPaneProps) {
   const [exporting, setExporting] = useState(false)
   const [isEditing, setIsEditing] = useState(false)
-  const [activeTab, setActiveTab] = useState<'note' | 'workbook' | 'filebox' | 'files' | 'details'>('note')
+  const [entryMenuOpen, setEntryMenuOpen] = useState(false)
+  const [activeTab, setActiveTab] = useState<EntryTabId>('note')
   const [headerCollapsed, setHeaderCollapsed] = useState(false)
   const [contextCollapsed, setContextCollapsed] = useState(false)
+  const [confirmDeleteEntry, setConfirmDeleteEntry] = useState(false)
   const [editor] = useState<HistoryReactEditor>(() =>
     withHistory(withChecklists(withReact(createEditor() as ReactEditor))) as HistoryReactEditor
   )
@@ -6162,14 +6647,26 @@ function EditorPane({
   const [workbookData, setWorkbookData] = useState<string[][]>(() => getWorkbookDataForEntry(entry))
   const [workbookStyles, setWorkbookStyles] = useState<WorkbookCellStyles>(() => getWorkbookStylesForEntry(entry))
   const focusEditor = useCallback(() => {
+    const editable = typeof document !== 'undefined'
+      ? document.querySelector<HTMLElement>('[data-testid="slate-editor"]')
+      : null
+    if (!editable?.isConnected) return
+
     try {
       const start = Editor.start(editor, [])
       Transforms.select(editor, start)
-      ReactEditor.focus(editor)
+      editable.focus({ preventScroll: true })
     } catch {
       // Slate can briefly expose an empty root while switching entries; focus will retry on the next edit action.
     }
   }, [editor])
+
+  const scheduleEditorFocus = useCallback(() => {
+    if (typeof window === 'undefined') return
+    window.requestAnimationFrame(() => {
+      window.setTimeout(() => focusEditor(), 0)
+    })
+  }, [focusEditor])
 
   useEffect(() => {
     if (!entry) return
@@ -6181,6 +6678,7 @@ function EditorPane({
       setWorkbookData(getWorkbookDataForEntry(entry))
       setWorkbookStyles(getWorkbookStylesForEntry(entry))
       setActiveTab('note')
+      setConfirmDeleteEntry(false)
       return
     }
     if (!isEditing) {
@@ -6193,22 +6691,28 @@ function EditorPane({
   useEffect(() => {
     if (!entry) return
     if (autoEditEntryId && entry.id === autoEditEntryId) {
+      setActiveTab('note')
       setIsEditing(true)
-      window.requestAnimationFrame(() => focusEditor())
+      scheduleEditorFocus()
       onConsumeAutoEdit()
     }
-  }, [autoEditEntryId, entry, focusEditor, onConsumeAutoEdit])
+  }, [autoEditEntryId, entry, onConsumeAutoEdit, scheduleEditorFocus])
 
   useEffect(() => {
-    if (!isEditing) return
-    window.requestAnimationFrame(() => focusEditor())
-  }, [focusEditor, isEditing])
+    if (!isEditing || activeTab !== 'note') return
+    scheduleEditorFocus()
+  }, [activeTab, isEditing, scheduleEditorFocus])
 
   useEffect(() => {
-    if (activeTab === 'workbook' || activeTab === 'filebox') {
+    if (activeTab === 'workbook') {
       setContextCollapsed(true)
     }
   }, [activeTab])
+
+  useEffect(() => {
+    document.body.classList.toggle('entry-editing', isEditing)
+    return () => document.body.classList.remove('entry-editing')
+  }, [isEditing])
 
   const attachmentMap = useMemo(
     () => Object.fromEntries(attachments.map((a) => [a.id, a])),
@@ -6220,17 +6724,60 @@ function EditorPane({
   const hasWork = pendingCount > 0 || failedCount > 0
   const imageCount = attachments.filter((a) => a.type === 'image').length
   const fileCount = attachments.length - imageCount
-  const intakeCount = (entry?.telegramCaptures?.length ?? 0) + (entry?.whatsappCaptures?.length ?? 0)
   const latestAttachments = attachments.slice(0, 3)
-  const verifiedAttachmentCount = attachments.filter((a) => Boolean(a.sha256)).length
   const hasWorkbook = workbookHasContent(workbookData)
+  const syncedLabel = driveConnected ? 'Saved to Drive' : 'Saved on this device'
+  const syncedHint = driveConnected ? 'Available on signed-in devices' : 'Stored locally until Drive reconnects'
+  const storedEntryTitle = entry?.title?.trim() ?? ''
+  const formattedEntryDate = entry ? dateOnly.format(new Date(entry.createdDatetime)) : ''
+  const titleIsGeneratedDate = storedEntryTitle === formattedEntryDate || /^\w{3} \d{1,2}, \d{4}$/.test(storedEntryTitle)
+  const pageTitle = (!storedEntryTitle || titleIsGeneratedDate || storedEntryTitle === "Today's Entry")
+    ? experiment?.title ?? project?.title ?? (entry?.isDaily ? 'Daily entry' : 'Notebook entry')
+    : storedEntryTitle
   const saveStateLabel = syncing
-    ? 'Syncing to Drive'
+    ? 'Saving...'
     : failedCount
       ? `${failedCount} sync issue${failedCount === 1 ? '' : 's'}`
       : pendingCount
-        ? 'Queued for Drive'
-        : 'Saved locally'
+        ? 'Saving...'
+        : syncedLabel
+  const headerTagSummary = Array.from(
+    new Set([
+      ...(entry?.projectTags ?? []),
+      ...(entry?.experimentTags ?? []),
+    ])
+  )
+  const visibleHeaderTags = headerTagSummary.slice(0, 2)
+  const hiddenHeaderTagCount = Math.max(0, headerTagSummary.length - visibleHeaderTags.length)
+  const hasNoteContent = useMemo(
+    () => getNoteBlocksForEntry(entry).some((block) => {
+      if (block.type !== 'paragraph' && block.type !== 'heading') return true
+      return blockToSearchText(block).replace(/\s+/g, ' ').trim().length > 0
+    }),
+    [entry]
+  )
+  const blankCameraInputRef = useRef<HTMLInputElement | null>(null)
+  const blankFileInputRef = useRef<HTMLInputElement | null>(null)
+  const entryFilesInputRef = useRef<HTMLInputElement | null>(null)
+
+  const addBlankNoteFiles = useCallback((files: File[]) => {
+    if (!entry || !files.length) return
+    void onAddAttachments(entry.id, files)
+  }, [entry, onAddAttachments])
+
+  const handleEntryTabKeyDown = useCallback((event: React.KeyboardEvent<HTMLButtonElement>, currentTab: EntryTabId) => {
+    const currentIndex = ENTRY_TAB_ORDER.indexOf(currentTab)
+    let nextIndex = currentIndex
+    if (event.key === 'ArrowRight') nextIndex = (currentIndex + 1) % ENTRY_TAB_ORDER.length
+    else if (event.key === 'ArrowLeft') nextIndex = (currentIndex - 1 + ENTRY_TAB_ORDER.length) % ENTRY_TAB_ORDER.length
+    else if (event.key === 'Home') nextIndex = 0
+    else if (event.key === 'End') nextIndex = ENTRY_TAB_ORDER.length - 1
+    else return
+    event.preventDefault()
+    const nextTab = ENTRY_TAB_ORDER[nextIndex]
+    setActiveTab(nextTab)
+    window.requestAnimationFrame(() => document.getElementById(`entry-tab-${nextTab}`)?.focus())
+  }, [])
 
   const handleUpdateBlock = useCallback(
     (updated: Block) => {
@@ -6267,14 +6814,6 @@ function EditorPane({
 
     return sections
   }, [entry])
-
-  const toggleHeader = useCallback(() => {
-    setHeaderCollapsed((prev) => {
-      const next = !prev
-      if (next) setTabsViewOpen(false)
-      return next
-    })
-  }, [])
 
   const tutorialSteps: TutorialStep[] = useMemo(
     () => [
@@ -6316,7 +6855,7 @@ function EditorPane({
       {
         selector: '[data-testid="editor-tab-details"]',
         title: 'Details tab',
-        description: 'Manage note metadata, tags, and sync controls for this entry.',
+        description: 'Manage tags and entry settings.',
       },
       {
         selector: '[data-testid="entry-tags-inline"]',
@@ -6546,82 +7085,108 @@ function EditorPane({
             </div>
           )}
           <div className="breadcrumb-row">
+            <button
+              className="ghost icon-btn mobile-open-sidebar"
+              type="button"
+              onClick={onOpenMobileNav}
+              aria-label="Open navigation"
+              data-testid="mobile-open-sidebar"
+            >
+              <span className="icon"><UiIcon name="list" /></span>
+              Menu
+            </button>
             <div className="breadcrumbs">
-              <span>{project?.title ?? 'Project'}</span>
+              <span>Notebook</span>
               <span>/</span>
-              <span>{experiment?.title ?? 'General note'}</span>
+              <span>{entry.isDaily ? 'Today' : project?.title ?? 'Entry'}</span>
               <span className="pill soft" data-testid="entry-date-bucket">{entry.dateBucket}</span>
               <span className={`status-chip ${syncing || hasWork ? 'warning' : 'success'}`} data-testid="sync-status-chip">
-                {syncing ? 'Syncing' : failedCount ? `${failedCount} failed` : pendingCount ? `${pendingCount} queued` : 'Saved locally'}
+                {syncing ? 'Syncing' : failedCount ? `${failedCount} failed` : pendingCount ? `${pendingCount} queued` : syncedLabel}
               </span>
             </div>
 
             <div className="editor-actions">
-              <GuidedTutorial
-                steps={tutorialSteps}
-                startLabel="Tutorial"
-                onStart={() => {
-                  setHeaderCollapsed(false)
-                  setActiveTab('note')
-                }}
-              />
-              <button className="ghost icon-btn" type="button" onClick={toggleHeader} data-testid="header-toggle">
-                <span className="icon"><UiIcon name={headerCollapsed ? 'chevronDown' : 'chevronUp'} /></span>
-                {headerCollapsed ? 'Show header' : 'Hide header'}
-              </button>
-              {(pendingCount > 0 || failedCount > 0) && (
+              <div className={`entry-more-menu ${entryMenuOpen ? 'open' : ''}`}>
                 <button
                   className="ghost icon-btn"
                   type="button"
-                  data-testid="sync-action"
-                  onClick={() => onSyncNow(failedCount > 0)}
-                  disabled={syncing}
+                  aria-label="More entry actions"
+                  aria-haspopup="menu"
+                  aria-expanded={entryMenuOpen}
+                  data-testid="entry-more-trigger"
+                  onClick={() => setEntryMenuOpen((open) => !open)}
                 >
-                  <span className="icon"><UiIcon name="refresh" /></span>
-                  {failedCount > 0 ? 'Retry failed' : 'Sync now'}
+                  <span className="icon"><UiIcon name="more" /></span>
+                  More
                 </button>
-              )}
-              {experiment ? (
-                <>
-                  <button
-                    className="ghost icon-btn"
-                    disabled={exporting}
-                    data-testid="export-pdf"
-                    onClick={async () => {
-                      setExporting(true)
-                      try {
-                        await onExportExperiment(experiment.id, 'pdf')
-                      } finally {
-                        setExporting(false)
-                      }
-                    }}
-                  >
-                    <span className="icon"><UiIcon name="download" /></span>
-                    Export PDF
+                {entryMenuOpen && <div className="entry-more-popover" role="menu">
+                  <button type="button" role="menuitem" onClick={() => { setActiveTab('details'); setEntryMenuOpen(false) }}>
+                    <UiIcon name="tag" />
+                    Details
                   </button>
-                  <button
-                    className="ghost icon-btn"
-                    disabled={exporting}
-                    data-testid="export-md"
-                    onClick={async () => {
-                      setExporting(true)
-                      try {
-                        await onExportExperiment(experiment.id, 'markdown')
-                      } finally {
-                        setExporting(false)
-                      }
+                  {(pendingCount > 0 || failedCount > 0) && (
+                    <button
+                      type="button"
+                      role="menuitem"
+                      data-testid="sync-action"
+                      onClick={() => { onSyncNow(failedCount > 0); setEntryMenuOpen(false) }}
+                      disabled={syncing}
+                    >
+                      <UiIcon name="refresh" />
+                      {failedCount > 0 ? 'Retry sync' : 'Sync now'}
+                    </button>
+                  )}
+                  {experiment && (
+                    <>
+                      <button
+                        type="button"
+                        role="menuitem"
+                        disabled={exporting}
+                        data-testid="export-pdf"
+                        onClick={async () => {
+                          setEntryMenuOpen(false)
+                          setExporting(true)
+                          try {
+                            await onExportExperiment(experiment.id, 'pdf')
+                          } finally {
+                            setExporting(false)
+                          }
+                        }}
+                      >
+                        <UiIcon name="download" />
+                        Export PDF
+                      </button>
+                      <button
+                        type="button"
+                        role="menuitem"
+                        disabled={exporting}
+                        data-testid="export-md"
+                        onClick={async () => {
+                          setEntryMenuOpen(false)
+                          setExporting(true)
+                          try {
+                            await onExportExperiment(experiment.id, 'markdown')
+                          } finally {
+                            setExporting(false)
+                          }
+                        }}
+                      >
+                        <UiIcon name="download" />
+                        Export Markdown
+                      </button>
+                    </>
+                  )}
+                  <GuidedTutorial
+                    steps={tutorialSteps}
+                    startLabel="Open tutorial"
+                    onStart={() => {
+                      setEntryMenuOpen(false)
+                      setHeaderCollapsed(false)
+                      setActiveTab('note')
                     }}
-                  >
-                    <span className="icon"><UiIcon name="download" /></span>
-                    Export MD
-                  </button>
-                </>
-              ) : (
-                <button className="ghost icon-btn" disabled title="Attach this note to an experiment to export a bundle.">
-                  <span className="icon"><UiIcon name="download" /></span>
-                  Export PDF
-                </button>
-              )}
+                  />
+                </div>}
+              </div>
               {!isEditing ? (
                 <button className="accent icon-btn" onClick={() => setIsEditing(true)} data-testid="edit-note-btn">
                   <span className="icon"><UiIcon name="edit" /></span>
@@ -6641,7 +7206,7 @@ function EditorPane({
                     <span className="icon"><UiIcon name="x" /></span>
                     Cancel
                   </button>
-                  <button className="accent icon-btn" onClick={handleSave} data-testid="entry-save">
+                  <button className="accent icon-btn done-edit-btn" onClick={handleSave} data-testid="entry-save">
                     <span className="icon"><UiIcon name="save" /></span>
                     Save
                   </button>
@@ -6649,121 +7214,99 @@ function EditorPane({
               )}
             </div>
           </div>
-          <div className="title-row">
-            <h1>{entry.title}</h1>
-            {experiment?.protocolRef && <span className="pill">{experiment.protocolRef}</span>}
-            <span className={`status-chip provenance-chip ${failedCount ? 'danger' : pendingCount || syncing ? 'warning' : 'success'}`}>
-              {saveStateLabel}
-            </span>
+          <div className="journal-page-title" data-testid="journal-page-title">
+            <div>
+              <p>{entry.isDaily ? dateOnly.format(new Date(entry.createdDatetime)) : project?.title ?? 'Notebook'}</p>
+              <h1>{pageTitle}</h1>
+            </div>
+            <div className="journal-page-status">
+              <span className={`status-chip ${syncing || hasWork ? 'warning' : 'success'}`}>
+                <UiIcon name={syncing ? 'refresh' : 'check'} />
+                {saveStateLabel}
+              </span>
+              <small>{syncing ? 'Updating Drive now' : syncedHint}</small>
+            </div>
           </div>
-          <div className="tag-editor" data-testid="entry-tags-inline">
-            <TagPicker
-              variant="inline"
-              label="Project tags"
-              icon="P"
-              options={projectTagOptions}
-              selected={entry.projectTags ?? []}
-              onToggle={(tag) => {
-                const next = new Set(entry.projectTags ?? [])
-                if (next.has(tag)) next.delete(tag)
-                else next.add(tag)
-                onUpdateEntryMeta(entry.id, { projectTags: Array.from(next) })
-              }}
-              onAdd={onAddProjectTagOption}
-              testId="entry-project-tags-inline"
-            />
-            <TagPicker
-              variant="inline"
-              label="Experiment tags"
-              icon="E"
-              options={experimentTagOptions}
-              selected={entry.experimentTags ?? []}
-              onToggle={(tag) => {
-                const next = new Set(entry.experimentTags ?? [])
-                if (next.has(tag)) next.delete(tag)
-                else next.add(tag)
-                onUpdateEntryMeta(entry.id, { experimentTags: Array.from(next) })
-              }}
-              onAdd={onAddExperimentTagOption}
-              testId="entry-experiment-tags-inline"
-            />
-          </div>
+          <button
+            className={`entry-metadata-summary ${headerTagSummary.length === 0 ? 'is-empty' : ''}`}
+            type="button"
+            onClick={() => setActiveTab('details')}
+            data-testid="entry-tags-inline"
+            aria-label="Open entry details and tags"
+          >
+            {project?.title ? <span className="entry-project-link">{project.title}</span> : null}
+            {visibleHeaderTags.map((tag) => (
+              <span key={`header-tag-${tag}`} className="entry-method-tag">{tag}</span>
+            ))}
+            {hiddenHeaderTagCount > 0 ? <span className="entry-tag-overflow">+{hiddenHeaderTagCount} more</span> : null}
+            {headerTagSummary.length > 0 ? <span className="entry-mobile-tag-overflow">+{headerTagSummary.length} more</span> : null}
+            {headerTagSummary.length === 0 && !project?.title ? <span>Add project and tags</span> : null}
+          </button>
           <div className="meta-row">
             <span className="muted tiny">Edited {dateOnly.format(new Date(entry.lastEditedDatetime))}</span>
           </div>
           <div className="editor-tabs" role="tablist">
             <button
+              id="entry-tab-note"
               type="button"
               className={`tab-button ${activeTab === 'note' ? 'active' : ''}`}
               onClick={() => setActiveTab('note')}
               role="tab"
               aria-selected={activeTab === 'note'}
+              aria-controls="entry-panel-note"
+              tabIndex={activeTab === 'note' ? 0 : -1}
+              onKeyDown={(event) => handleEntryTabKeyDown(event, 'note')}
               data-testid="editor-tab-note"
             >
               <span className="icon"><UiIcon name="note" /></span>
               Note
             </button>
             <button
+              id="entry-tab-workbook"
               type="button"
               className={`tab-button ${activeTab === 'workbook' ? 'active' : ''}`}
               onClick={() => setActiveTab('workbook')}
               role="tab"
               aria-selected={activeTab === 'workbook'}
+              aria-controls="entry-panel-workbook"
+              tabIndex={activeTab === 'workbook' ? 0 : -1}
+              onKeyDown={(event) => handleEntryTabKeyDown(event, 'workbook')}
               data-testid="editor-tab-workbook"
             >
               <span className="icon"><UiIcon name="table" /></span>
               Workbook
             </button>
             <button
-              type="button"
-              className={`tab-button ${activeTab === 'filebox' ? 'active' : ''}`}
-              onClick={() => setActiveTab('filebox')}
-              role="tab"
-              aria-selected={activeTab === 'filebox'}
-              data-testid="editor-tab-filebox"
-            >
-              <span className="icon"><UiIcon name="paperclip" /></span>
-              File Box
-              {fileBoxItems.some((item) => item.status === 'available' || item.status === 'queued') && (
-                <span className="tab-count">{fileBoxItems.filter((item) => item.status === 'available' || item.status === 'queued').length}</span>
-              )}
-            </button>
-            <button
+              id="entry-tab-files"
               type="button"
               className={`tab-button ${activeTab === 'files' ? 'active' : ''}`}
               onClick={() => setActiveTab('files')}
               role="tab"
               aria-selected={activeTab === 'files'}
+              aria-controls="entry-panel-files"
+              tabIndex={activeTab === 'files' ? 0 : -1}
+              onKeyDown={(event) => handleEntryTabKeyDown(event, 'files')}
               data-testid="editor-tab-files"
             >
               <span className="icon"><UiIcon name="folder" /></span>
               Files
             </button>
             <button
+              id="entry-tab-details"
               type="button"
               className={`tab-button ${activeTab === 'details' ? 'active' : ''}`}
               onClick={() => setActiveTab('details')}
               role="tab"
               aria-selected={activeTab === 'details'}
+              aria-controls="entry-panel-details"
+              tabIndex={activeTab === 'details' ? 0 : -1}
+              onKeyDown={(event) => handleEntryTabKeyDown(event, 'details')}
               data-testid="editor-tab-details"
             >
               <span className="icon"><UiIcon name="tag" /></span>
               Details
             </button>
           </div>
-          {isEditing && activeTab === 'note' && (
-            <div className="editor-toolbar-dock">
-              <EditorInsertBar
-                editor={editor}
-                revision={editorRevision}
-                entryId={entry.id}
-                onAddAttachments={onAddAttachments}
-                onAddFileDestination={onAddFileDestination}
-                onShowTags={() => setActiveTab('details')}
-                syncRoot={normalizeSyncRoot(masterSyncPath)}
-              />
-            </div>
-          )}
         </div>
       </div>
 
@@ -6815,27 +7358,84 @@ function EditorPane({
           )}
 
       {activeTab === 'note' && !isEditing && (
-        <div className="blocks" data-testid="entry-view" key={`entry-view-${entry.id}`}>
-          {viewSections.map((section) => (
-            <section key={`${entry.id}-${section.key}`} className="content-section">
-              {section.blocks.map((block) => (
-                <div key={`${entry.id}-${block.id}`} className="block-shell">
-                  <BlockRenderer
-                    block={block}
-                    attachments={attachmentMap}
-                    attachmentUrls={attachmentUrls}
-                    onUpdateBlock={handleUpdateBlock}
-                  />
-                </div>
-              ))}
+        <div id="entry-panel-note" className="blocks" data-testid="entry-view" key={`entry-view-${entry.id}`} role="tabpanel" aria-labelledby="entry-tab-note">
+          {!hasNoteContent ? (
+            <section className="entry-empty-state" data-testid="blank-note-empty-state">
+              <div className="entry-empty-icon"><UiIcon name="note" /></div>
+              <div>
+                <h2>No note for {dateOnly.format(new Date(entry.createdDatetime))}</h2>
+                <p>Start a note or add evidence from the lab.</p>
+              </div>
+              <div className="entry-empty-actions">
+                <button className="accent" type="button" onClick={() => { setIsEditing(true); scheduleEditorFocus() }}>
+                  <UiIcon name="edit" />
+                  Write note
+                </button>
+                <button className="ghost" type="button" onClick={() => blankCameraInputRef.current?.click()}>
+                  <UiIcon name="image" />
+                  Take photo
+                </button>
+                <button className="ghost" type="button" onClick={() => blankFileInputRef.current?.click()}>
+                  <UiIcon name="paperclip" />
+                  Add files
+                </button>
+              </div>
+              <input
+                ref={blankCameraInputRef}
+                type="file"
+                accept="image/*"
+                capture="environment"
+                hidden
+                data-testid="blank-note-camera-input"
+                onChange={(event) => {
+                  addBlankNoteFiles(Array.from(event.currentTarget.files ?? []))
+                  event.currentTarget.value = ''
+                }}
+              />
+              <input
+                ref={blankFileInputRef}
+                type="file"
+                accept="image/*,.pdf,.csv,.tsv,.xlsx,.xls,.doc,.docx,text/*"
+                multiple
+                hidden
+                data-testid="blank-note-files-input"
+                onChange={(event) => {
+                  addBlankNoteFiles(Array.from(event.currentTarget.files ?? []))
+                  event.currentTarget.value = ''
+                }}
+              />
             </section>
-          ))}
+          ) : viewSections.map((section) => (
+              <section key={`${entry.id}-${section.key}`} className="content-section">
+                {section.blocks.map((block) => (
+                  <div key={`${entry.id}-${block.id}`} className="block-shell">
+                    <BlockRenderer
+                      block={block}
+                      attachments={attachmentMap}
+                      attachmentUrls={attachmentUrls}
+                      onUpdateBlock={handleUpdateBlock}
+                    />
+                  </div>
+                ))}
+              </section>
+            ))}
         </div>
       )}
 
       {activeTab === 'note' && isEditing && (
         <>
-          <div className="editor-surface">
+          <div id="entry-panel-note" className="editor-surface" role="tabpanel" aria-labelledby="entry-tab-note">
+            <div className="editor-toolbar-dock">
+              <EditorInsertBar
+                editor={editor}
+                revision={editorRevision}
+                entryId={entry.id}
+                onAddAttachments={onAddAttachments}
+                onAddFileDestination={onAddFileDestination}
+                onShowTags={() => setActiveTab('details')}
+                syncRoot={normalizeSyncRoot(masterSyncPath)}
+              />
+            </div>
             <EditorAttachmentContext.Provider value={{ attachmentsById: attachmentMap, attachmentUrls }}>
               <TableEditContext.Provider value={{ isEditing }}>
                 <Slate
@@ -6895,37 +7495,11 @@ function EditorPane({
                         }
                       }
 
-                      if (event.key !== 'Enter' && event.key !== 'Backspace') return
+                      if (event.key !== 'Enter' && event.key !== 'Backspace' && event.key !== 'Delete') return
 
                       const selection = editor.selection
                       if (!selection) return
-
-                      if (event.key === 'Backspace' && Range.isCollapsed(selection)) {
-                        const blockEntry = Editor.above(editor, {
-                          match: (n) => SlateElement.isElement(n) && typeof (n as { blockId?: unknown }).blockId === 'string',
-                        })
-                        if (blockEntry) {
-                          const [blockNode, blockPath] = blockEntry
-                          if (
-                            SlateElement.isElement(blockNode) &&
-                            blockNode.type === 'paragraph' &&
-                            Editor.isStart(editor, selection.anchor, blockPath)
-                          ) {
-                            if (blockPath[blockPath.length - 1] === 0) return
-                            const prevPath = Path.previous(blockPath)
-                            if (!Node.has(editor, prevPath)) return
-                            const prevNode = Node.get(editor, prevPath)
-                            if (
-                              SlateElement.isElement(prevNode) &&
-                              prevNode.type === 'heading-two' &&
-                              (prevNode as { locked?: boolean }).locked === true
-                            ) {
-                              event.preventDefault()
-                              return
-                            }
-                          }
-                        }
-                      }
+                      if (handleDestructiveSelectionKey(editor, selection, event)) return
 
                       const checkItemEntry = Editor.above(editor, {
                         match: (n) => SlateElement.isElement(n) && n.type === 'check-item',
@@ -6993,27 +7567,16 @@ function EditorPane({
               </TableEditContext.Provider>
             </EditorAttachmentContext.Provider>
             <div className="editor-note-status">
-              <span>Saved locally while you write</span>
-              <span>Drag, paste, or attach files to this day</span>
+              <span>{driveConnected ? 'Saved to Drive' : 'Saved on this device'}</span>
+              <span>Drag, paste, or attach evidence to this entry</span>
             </div>
           </div>
         </>
       )}
 
       {activeTab === 'workbook' && (
-        <div className="tab-panel workbook-tab-panel">
+        <div id="entry-panel-workbook" className="tab-panel workbook-tab-panel" role="tabpanel" aria-labelledby="entry-tab-workbook">
           <div className="panel-card workbook-card">
-            <div className="panel-card-head">
-              <div>
-                <div className="section-title">Workbook</div>
-                <div className="muted tiny">
-                  Paste tabular data from Excel, Prism, instruments, or CSV/TSV exports. Empty workbooks are ignored on save.
-                </div>
-              </div>
-              <span className={`status-chip ${workbookHasContent(workbookData) ? 'success' : 'warning'}`}>
-                {workbookHasContent(workbookData) ? 'Will save with entry' : 'Not saved while empty'}
-              </span>
-            </div>
             <div className="workbook-stage">
               <div className="workbook-main-pane">
                 <WorkbookSheet
@@ -7027,116 +7590,46 @@ function EditorPane({
                 {!isEditing && !workbookHasContent(workbookData) && (
                   <div className="file-drop-empty workbook-empty-state">
                     <strong>No workbook data for this day</strong>
-                    <span>Click any cell or paste a table to start editing. If the grid is cleared later, the workbook block is removed from the entry.</span>
+                    <span>Paste a table or click a cell to start a sheet for this entry.</span>
                   </div>
                 )}
               </div>
-              <aside className="workbook-context-rail" aria-label="Workbook context">
-                <section>
-                  <div className="section-title">Entry context</div>
-                  <dl>
-                    <div><dt>Project</dt><dd>{entry.projectTags?.[0] ?? entry.tags[0] ?? 'Not tagged'}</dd></div>
-                    <div><dt>Experiment</dt><dd>{entry.experimentTags?.[0] ?? 'General'}</dd></div>
-                    <div><dt>Notebook</dt><dd>{entry.isDaily ? 'Daily entry' : 'Notebook record'}</dd></div>
-                    <div><dt>Updated</dt><dd>{dateOnly.format(new Date(entry.lastEditedDatetime))}</dd></div>
-                  </dl>
-                </section>
-                <section>
-                  <div className="section-title">Workbook state</div>
-                  <dl>
-                    <div><dt>Rows</dt><dd>{workbookData.length}</dd></div>
-                    <div><dt>Columns</dt><dd>{workbookData[0]?.length ?? 0}</dd></div>
-                    <div><dt>Saved</dt><dd>{workbookHasContent(workbookData) ? 'With entry' : 'Ignored while empty'}</dd></div>
-                  </dl>
-                </section>
-                <section>
-                  <div className="section-title">Linked files</div>
-                  {attachments.length ? (
-                    <div className="workbook-linked-files">
-                      {attachments.slice(0, 3).map((file) => (
-                        <span key={`workbook-file-${file.id}`}>
-                          <UiIcon name={file.type === 'image' ? 'image' : 'file'} />
-                          {file.filename}
-                        </span>
-                      ))}
-                    </div>
-                  ) : (
-                    <p className="muted tiny">Files attached to this daily entry will appear here.</p>
-                  )}
-                </section>
-                <section>
-                  <div className="section-title">Sync status</div>
-                  <div className="workbook-sync-card">
-                    <UiIcon name="drive" />
-                    <div>
-                      <strong>{entry.syncStatus === 'synced' ? 'Synced with Drive' : 'Saved locally'}</strong>
-                      <span>{entry.syncStatus === 'synced' ? 'Available across devices' : 'Will sync when connected'}</span>
-                    </div>
-                  </div>
-                </section>
-              </aside>
             </div>
           </div>
         </div>
       )}
 
-      {activeTab === 'filebox' && (
-        <EntryFileBoxPanel
-          entry={entry}
-          attachments={attachments}
-          fileBoxItems={fileBoxItems}
-          transfers={transferRecords}
-          onQueueFiles={onQueueFileBoxFiles}
-          onAttachItem={onAttachFileBoxItem}
-          onRejectItem={onRejectFileBoxItem}
-          onRetrySync={onRunDriveSync}
-          onDownloadAttachment={onDownloadAttachment}
-          onOpenAttachment={onOpenAttachment}
-          onRemoveLocalAttachmentCopy={onRemoveLocalAttachmentCopy}
-        />
-      )}
-
       {activeTab === 'files' && (
-        <div className="tab-panel">
-          <div className="panel-card">
-            <div className="section-title">Master sync folder</div>
-            <label className="field">
-              <span className="muted tiny">Root for file destinations + attachment references (local or cloud)</span>
-              <div className="field-row">
-                <input
-                  data-testid="master-sync-input-files"
-                  value={masterSyncPath}
-                  onChange={(e) => onUpdateMasterSyncPath(e.target.value)}
-                  placeholder="e.g. D:\\lab-notes\\sync or https://drive.company.com/lab"
-                />
-                {labStoragePath && (
-                  <button className="ghost" type="button" onClick={() => onUpdateMasterSyncPath(labStoragePath)}>
-                    Use lab storage
-                  </button>
-                )}
-              </div>
-            </label>
-            <div className="muted tiny">New file destinations resolve under this root.</div>
-          </div>
-
-          <div className="panel-card">
+        <div id="entry-panel-files" className="tab-panel files-tab-panel" role="tabpanel" aria-labelledby="entry-tab-files">
+          <div className="panel-card files-card">
             <div className="panel-card-head">
               <div>
-                <div className="section-title">Files</div>
+                <div className="section-title">Evidence</div>
                 <div className="muted tiny">
                   {attachments.length
-                    ? `${verifiedAttachmentCount}/${attachments.length} files have checksums recorded.`
-                    : 'Drop files, raw exports, PDFs, or microscope images into the note to link evidence.'}
+                    ? `${attachments.length} file${attachments.length === 1 ? '' : 's'} attached to this entry.`
+                    : 'Add images, PDFs, spreadsheets, or documents to this entry.'}
                 </div>
               </div>
-              <span className={`status-chip ${attachments.length && verifiedAttachmentCount === attachments.length ? 'success' : 'warning'}`}>
-                {attachments.length ? (verifiedAttachmentCount === attachments.length ? 'Verified manifest' : 'Verification pending') : 'No files yet'}
-              </span>
+              <button className="accent icon-btn files-add-action" type="button" onClick={() => entryFilesInputRef.current?.click()}>
+                <UiIcon name="plus" />
+                Add evidence
+              </button>
+              <input
+                ref={entryFilesInputRef}
+                type="file"
+                multiple
+                hidden
+                onChange={(event) => {
+                  void onQueueFileBoxFiles(entry.id, Array.from(event.target.files ?? []))
+                  event.currentTarget.value = ''
+                }}
+              />
             </div>
             {attachments.length === 0 && (
               <div className="file-drop-empty">
-                <strong>Attach evidence to this entry</strong>
-                <span>Drag files into the editor or use + File / + Image in the toolbar. Source, path, size, and checksum status will appear here.</span>
+                <strong>Add files to this entry</strong>
+                <span>Use the file button, camera, paste, or share sheet. Images, PDFs, spreadsheets, and documents stay attached to this entry.</span>
               </div>
             )}
             {attachments.length > 0 && (
@@ -7144,21 +7637,26 @@ function EditorPane({
                 {attachments.map((file) => {
                   const localUrl = attachmentUrls[file.id]
                   const isRemoteOnly = attachmentIsRemoteAvailable(file, localUrl)
+                  const availabilityLabel = isRemoteOnly
+                    ? 'Drive only'
+                    : file.cacheKey || file.cachedPath || localUrl
+                      ? 'Available offline'
+                      : file.driveFileId
+                        ? 'Drive only'
+                        : 'Waiting to sync'
                   return (
                   <div key={file.id} className={`attachment-row ${isRemoteOnly ? 'remote-only' : ''}`}>
                     <div className="attachment-icon"><UiIcon name="paperclip" /></div>
                     <div className="attachment-body">
                       <div className="title-sm">{file.filename}</div>
-                      <div className="muted tiny">{file.storagePath}</div>
                       <div className="attachment-row-meta">
-                        <span>Source: {file.source ? file.source : 'manual'}</span>
-                        <span>{file.contentType ? `Type: ${file.contentType}` : `Kind: ${file.type}`}</span>
-                        <span>{file.sha256 ? `Checksum: ${file.sha256.slice(0, 12)}...` : 'Checksum: pending'}</span>
-                        <span>Status: {attachmentStorageLabel(file, localUrl)}</span>
+                        <span>{file.type.toUpperCase()} · {file.filesize}</span>
+                        <span>{file.source ? `Added from ${file.source}` : 'Added manually'}</span>
                       </div>
                     </div>
-                    <span className="pill soft">{file.type.toUpperCase()}</span>
-                    <span className="pill soft">{file.filesize}</span>
+                    <span className={`file-status-text ${isRemoteOnly ? 'remote' : 'local'}`}>
+                      {availabilityLabel}
+                    </span>
                     <div className="attachment-actions">
                       {isRemoteOnly ? (
                         <button className="pill soft" type="button" onClick={() => onDownloadAttachment(file.id)}>
@@ -7170,13 +7668,11 @@ function EditorPane({
                         </button>
                       )}
                       {(file.cacheKey || file.cachedPath || localUrl) && file.driveFileId && (
-                        <button className="ghost subtle" type="button" onClick={() => onRemoveLocalAttachmentCopy(file.id)}>
-                          Remove local
-                        </button>
+                        <details className="row-more-menu">
+                          <summary aria-label={`More actions for ${file.filename}`}><UiIcon name="more" /></summary>
+                          <div><button type="button" onClick={() => onRemoveLocalAttachmentCopy(file.id)}>Remove offline copy</button></div>
+                        </details>
                       )}
-                      <span className={`pill soft ${file.sha256 ? 'verified-pill' : 'warning-pill'}`}>
-                        {isRemoteOnly ? 'On demand' : file.sha256 ? 'Verified' : 'Needs hash'}
-                      </span>
                     </div>
                   </div>
                   )
@@ -7184,12 +7680,24 @@ function EditorPane({
               </div>
             )}
           </div>
+          <EntryFileBoxPanel
+            entry={entry}
+            attachments={attachments}
+            fileBoxItems={fileBoxItems}
+            transfers={transferRecords}
+            onAttachItem={onAttachFileBoxItem}
+            onRejectItem={onRejectFileBoxItem}
+            onRetrySync={onRunDriveSync}
+            onDownloadAttachment={onDownloadAttachment}
+            onOpenAttachment={onOpenAttachment}
+            onRemoveLocalAttachmentCopy={onRemoveLocalAttachmentCopy}
+          />
         </div>
       )}
 
       {activeTab === 'details' && (
-        <div className="tab-panel">
-          <div className="panel-card">
+        <div id="entry-panel-details" className="tab-panel details-tab-panel" role="tabpanel" aria-labelledby="entry-tab-details">
+          <div className="panel-card details-tags-card">
             <div className="section-title">Entry tags</div>
             <TagPicker
               label="Project tags"
@@ -7221,48 +7729,73 @@ function EditorPane({
             />
           </div>
 
-          <div className="panel-card">
-            <div className="section-title">Assignment</div>
-            <div className="muted tiny">Project: {project?.title ?? '-'}</div>
-            <div className="muted tiny">Experiment: {experiment?.title ?? '-'}</div>
-          </div>
-
-          <div className="panel-card">
-            <div className="section-title">Sync queue</div>
-            <div className="muted tiny" style={{ marginBottom: 6 }}>
-              {syncing
-                ? 'Syncing changes...'
-                : failedCount
-                  ? `${failedCount} failed`
-                  : pendingCount
-                    ? `${pendingCount} pending`
-                    : 'All synced.'}
+          {(project || experiment) && (
+            <div className="panel-card details-secondary-card">
+              <div className="section-title">Assignment</div>
+              {project && <div className="muted tiny">Project: {project.title}</div>}
+              {experiment && <div className="muted tiny">Experiment: {experiment.title}</div>}
             </div>
-            {(pendingCount > 0 || failedCount > 0) && (
-              <button
-                className="ghost icon-btn"
-                type="button"
-                onClick={() => onSyncNow(failedCount > 0)}
-                disabled={syncing}
-              >
-                <span className="icon"><UiIcon name="refresh" /></span>
-                {failedCount > 0 ? 'Retry failed' : 'Sync now'}
-              </button>
-            )}
-          </div>
+          )}
 
-          <div className="panel-card danger-card">
-            <div className="section-title">Delete entry</div>
-            <div className="muted tiny">Removes this entry and its attachments from the notebook.</div>
-            <button
-              className="ghost danger"
-              type="button"
-              data-testid="delete-entry"
-              onClick={() => onDeleteEntry(entry.id)}
-            >
-              Delete entry
-            </button>
-          </div>
+          {(syncing || pendingCount > 0 || failedCount > 0) && (
+            <div className="panel-card details-secondary-card">
+              <div className="section-title">Save status</div>
+              <div className="muted tiny" style={{ marginBottom: 6 }}>
+                {syncing
+                  ? 'Saving changes...'
+                  : failedCount
+                    ? `${failedCount} item${failedCount === 1 ? '' : 's'} need attention`
+                    : `${pendingCount} item${pendingCount === 1 ? '' : 's'} waiting to save`}
+              </div>
+              {(pendingCount > 0 || failedCount > 0) && (
+                <button
+                  className="ghost icon-btn"
+                  type="button"
+                  onClick={() => onSyncNow(failedCount > 0)}
+                  disabled={syncing}
+                >
+                  <span className="icon"><UiIcon name="refresh" /></span>
+                  {failedCount > 0 ? 'Retry save' : 'Save now'}
+                </button>
+              )}
+            </div>
+          )}
+
+          <details className="panel-card details-secondary-card danger-card">
+            <summary className="settings-disclosure-summary">
+              <span className="danger-summary-copy">
+                <strong>Delete entry</strong>
+                <span className="muted tiny">Remove this entry from the notebook.</span>
+              </span>
+            </summary>
+            <div className="settings-disclosure-body">
+              <div className="muted tiny">This removes the entry and its attached files from this notebook.</div>
+              {confirmDeleteEntry ? (
+                <div className="danger-confirm-actions">
+                  <button className="ghost" type="button" onClick={() => setConfirmDeleteEntry(false)}>
+                    Cancel
+                  </button>
+                  <button
+                    className="ghost danger"
+                    type="button"
+                    data-testid="delete-entry"
+                    onClick={() => onDeleteEntry(entry.id)}
+                  >
+                    Delete permanently
+                  </button>
+                </div>
+              ) : (
+                <button
+                  className="ghost danger"
+                  type="button"
+                  data-testid="delete-entry"
+                  onClick={() => setConfirmDeleteEntry(true)}
+                >
+                  Delete entry
+                </button>
+              )}
+            </div>
+          </details>
         </div>
       )}
         </div>
@@ -7288,7 +7821,7 @@ function EditorPane({
                     <div className="title-sm">{entry.dateBucket}</div>
                   </div>
                   <span className={`status-chip ${syncing || hasWork ? 'warning' : 'success'}`}>
-                    {syncing ? 'Syncing' : failedCount ? `${failedCount} failed` : pendingCount ? `${pendingCount} queued` : 'Saved locally'}
+                    {syncing ? 'Syncing' : failedCount ? `${failedCount} failed` : pendingCount ? `${pendingCount} queued` : syncedLabel}
                   </span>
                 </div>
                 <div className="context-metrics">
@@ -7301,8 +7834,8 @@ function EditorPane({
                     <small>Images</small>
                   </button>
                   <button type="button" className="context-metric" onClick={() => setActiveTab('details')}>
-                    <span>{intakeCount}</span>
-                    <small>Intake</small>
+                    <span>{entry?.projectTags?.length ?? 0}</span>
+                    <small>Tags</small>
                   </button>
                   <button type="button" className="context-metric" onClick={() => setActiveTab('workbook')}>
                     <span>{hasWorkbook ? 1 : 0}</span>
@@ -7314,7 +7847,7 @@ function EditorPane({
               <section className="context-card context-workspace-card">
                 <div className="context-card-head">
                   <div>
-                    <div className="section-title">Workspace</div>
+                    <div className="section-title">Notebook</div>
                     <div className="muted tiny">{project?.title ?? 'No project selected'}</div>
                   </div>
                   <button className="ghost subtle" type="button" onClick={() => setActiveTab('details')}>
@@ -7348,8 +7881,8 @@ function EditorPane({
                   {latestAttachments.length === 0 && (
                     <button type="button" className="context-drop-target" onClick={() => setActiveTab('files')}>
                       <span className="icon"><UiIcon name="paperclip" /></span>
-                      <strong>Drop files here</strong>
-                      <small>Images, PDFs, raw exports, and notes attach to this day.</small>
+                      <strong>Add files</strong>
+                      <small>Images, PDFs, spreadsheets, and notes attach to this entry.</small>
                     </button>
                   )}
                   {latestAttachments.map((file) => (
@@ -7362,21 +7895,6 @@ function EditorPane({
                     </button>
                   ))}
                 </div>
-              </section>
-
-              <section className="context-card context-capture-card">
-                <div className="section-title">Capture inbox</div>
-                <div className="context-intake-grid">
-                  <div>
-                    <span>{entry.telegramCaptures?.length ?? 0}</span>
-                    <small>Telegram</small>
-                  </div>
-                  <div>
-                    <span>{entry.whatsappCaptures?.length ?? 0}</span>
-                    <small>WhatsApp</small>
-                  </div>
-                </div>
-                <div className="muted tiny">Phone intake stays local and appears here when messages are imported.</div>
               </section>
 
               <section className="context-card context-actions-card">
@@ -7465,7 +7983,7 @@ function fileBoxRecoveryHint({
       label: 'Remote only',
       detail: 'Metadata is synced from Drive. Download the file only when you need to open or attach the local blob.',
       tone: 'warning',
-      canRetry: true,
+      canRetry: false,
     }
   }
   if (!item.attachmentId || !isLinkedToEntry) {
@@ -7492,7 +8010,6 @@ function EntryFileBoxPanel({
   attachments,
   fileBoxItems,
   transfers,
-  onQueueFiles,
   onAttachItem,
   onRejectItem,
   onRetrySync,
@@ -7504,7 +8021,6 @@ function EntryFileBoxPanel({
   attachments: Attachment[]
   fileBoxItems: FileBoxItem[]
   transfers: TransferRecord[]
-  onQueueFiles: (entryId: string, files: File[]) => Promise<void>
   onAttachItem: (itemId: string) => void
   onRejectItem: (itemId: string) => void
   onRetrySync: () => void
@@ -7512,74 +8028,23 @@ function EntryFileBoxPanel({
   onOpenAttachment: (attachmentId: string) => void
   onRemoveLocalAttachmentCopy: (attachmentId: string) => void
 }) {
-  const inputRef = useRef<HTMLInputElement | null>(null)
-  const [busy, setBusy] = useState(false)
-  const activeItems = fileBoxItems.filter((item) => item.status !== 'rejected' && item.status !== 'removed')
+  const activeItems = fileBoxItems.filter(
+    (item) => item.status !== 'attached' && item.status !== 'rejected' && item.status !== 'removed'
+  )
   const linkedAttachmentIds = useMemo(() => new Set(entry.linkedFiles), [entry.linkedFiles])
   const attachmentsById = useMemo(() => new Map(attachments.map((attachment) => [attachment.id, attachment])), [attachments])
 
-  const submitFiles = useCallback(
-    async (files: File[]) => {
-      if (!files.length) return
-      setBusy(true)
-      try {
-        await onQueueFiles(entry.id, files)
-      } finally {
-        setBusy(false)
-      }
-    },
-    [entry.id, onQueueFiles]
-  )
+  if (activeItems.length === 0) return null
 
   return (
     <div className="tab-panel connected-panel" data-testid="entry-filebox-panel">
-      <div className="connected-hero">
+      <div className="incoming-section-head">
         <div>
-          <div className="section-title">Entry File Box</div>
-          <h2>{entry.title}</h2>
-          <p className="muted">
-            Drop files from desktop, mobile share sheets, camera captures, or Drive-connected devices. Files stay in the box until you attach them to the entry.
-          </p>
+          <div className="section-title">Incoming</div>
+          <p className="muted tiny">{activeItems.length} file{activeItems.length === 1 ? '' : 's'} ready to review for this entry.</p>
         </div>
-        <button className="accent icon-btn" type="button" onClick={() => inputRef.current?.click()} disabled={busy}>
-          <span className="icon"><UiIcon name="plus" /></span>
-          Add files
-        </button>
-        <input
-          ref={inputRef}
-          type="file"
-          multiple
-          hidden
-          onChange={(event) => {
-            void submitFiles(Array.from(event.target.files ?? []))
-            event.currentTarget.value = ''
-          }}
-        />
       </div>
-
-      <div
-        className={`filebox-drop ${busy ? 'is-busy' : ''}`}
-        onDragOver={(event) => event.preventDefault()}
-        onDrop={(event) => {
-          event.preventDefault()
-          void submitFiles(Array.from(event.dataTransfer.files ?? []))
-        }}
-      >
-        <UiIcon name="paperclip" />
-        <strong>{busy ? 'Adding files...' : 'Drop files into this entry file box'}</strong>
-        <span>Images, PDFs, CSV/TSV, spreadsheets, Word docs, and raw instrument exports are accepted.</span>
-      </div>
-
-      <div className="connected-grid two">
-        <section className="connected-card">
-          <div className="connected-card-head">
-            <div>
-              <div className="section-title">Open items</div>
-              <div className="muted tiny">{activeItems.length} item{activeItems.length === 1 ? '' : 's'} linked to this entry</div>
-            </div>
-          </div>
-          <div className="connected-list">
-            {activeItems.length === 0 && <div className="connected-empty">No files waiting. Add one from this device or a mobile PWA share sheet.</div>}
+      <div className="connected-list incoming-file-list">
             {activeItems.map((item) => {
               const transfer = transfers.find((candidate) => candidate.fileBoxItemId === item.id)
               const attachment = item.attachmentId ? attachmentsById.get(item.attachmentId) : undefined
@@ -7616,41 +8081,30 @@ function EntryFileBoxPanel({
                     )
                   )}
                   {item.status !== 'attached' && (
-                    <button className="pill soft" type="button" onClick={() => onAttachItem(item.id)} disabled={!item.attachmentId || item.status === 'failed'}>
+                    <button className="accent subtle" type="button" onClick={() => onAttachItem(item.id)} disabled={!item.attachmentId || item.status === 'failed'}>
                       Attach
-                    </button>
-                  )}
-                  {attachment?.driveFileId && (attachment.cacheKey || attachment.cachedPath) && (
-                    <button className="ghost subtle" type="button" onClick={() => onRemoveLocalAttachmentCopy(attachment.id)}>
-                      Remove local
                     </button>
                   )}
                   {recovery?.canRetry && (
                     <button className="ghost subtle" type="button" onClick={onRetrySync}>
-                      Retry sync
+                      Retry
                     </button>
                   )}
                   {item.status !== 'attached' && (
-                    <button className="ghost subtle" type="button" onClick={() => onRejectItem(item.id)}>
-                      Reject
-                    </button>
+                    <details className="row-more-menu">
+                      <summary aria-label={`More actions for ${item.filename}`}><UiIcon name="more" /></summary>
+                      <div>
+                        {attachment?.driveFileId && (attachment.cacheKey || attachment.cachedPath) && (
+                          <button type="button" onClick={() => onRemoveLocalAttachmentCopy(attachment.id)}>Remove offline copy</button>
+                        )}
+                        <button type="button" onClick={() => onRejectItem(item.id)}>Reject</button>
+                      </div>
+                    </details>
                   )}
                 </div>
                 </div>
               )
             })}
-          </div>
-        </section>
-
-        <section className="connected-card">
-          <div className="section-title">Entry transfer history</div>
-          <div className="connected-list">
-            {transfers.length === 0 && <div className="connected-empty">No transfer history yet.</div>}
-            {transfers.map((transfer) => (
-              <TransferRow key={transfer.id} transfer={transfer} compact />
-            ))}
-          </div>
-        </section>
       </div>
     </div>
   )
@@ -7684,9 +8138,6 @@ function FileHubPane({
   const [hubQuery, setHubQuery] = useState('')
   const attachmentsById = useMemo(() => new Map(attachments.map((att) => [att.id, att])), [attachments])
   const openItems = fileBoxItems.filter((item) => item.status !== 'attached' && item.status !== 'rejected' && item.status !== 'removed')
-  const attachedItems = fileBoxItems.filter((item) => item.status === 'attached')
-  const queuedItems = fileBoxItems.filter((item) => item.status === 'queued' || item.status === 'uploading')
-  const failedTransfers = transfers.filter((transfer) => transfer.status === 'failed' || transfer.status === 'conflict')
   const normalizedHubQuery = hubQuery.trim().toLowerCase()
   const entryRows = useMemo(() => {
     return Object.values(entries)
@@ -7706,6 +8157,7 @@ function FileHubPane({
           latestTransfer: entryTransfers[0],
         }
       })
+      .filter(({ openCount, attachedCount, latestTransfer }) => openCount + attachedCount > 0 || Boolean(latestTransfer))
       .filter(({ entry, latestTransfer }) => {
         if (!normalizedHubQuery) return true
         return [
@@ -7732,17 +8184,15 @@ function FileHubPane({
     <main className="panel editor connected-workspace" data-testid="file-hub-pane">
       <div className="connected-page-head">
         <div>
-          <div className="eyebrow">File Hub</div>
-          <h1>Entry file boxes and incoming lab files</h1>
-          <p className="muted">Send, accept, attach, and track entry-owned files from desktop and mobile without leaving the notebook.</p>
+          <div className="eyebrow">Files</div>
+          <h1>Files</h1>
+          <p className="muted">Evidence and attachments for your notes.</p>
         </div>
-        <div className="connected-metrics">
-          <div><strong>{openItems.length}</strong><span>Open</span></div>
-          <div><strong>{attachedItems.length}</strong><span>Attached</span></div>
-          <div><strong>{transfers.length}</strong><span>Transfers</span></div>
-          <div><strong>{queuedItems.length}</strong><span>Queue</span></div>
-          <div><strong>{failedTransfers.length}</strong><span>Review</span></div>
-        </div>
+        {openItems.length > 0 && (
+          <div className="filehub-summary-pill">
+            <strong>{openItems.length} {openItems.length === 1 ? 'file needs' : 'files need'} attention</strong>
+          </div>
+        )}
       </div>
 
       <div className="filehub-toolbar" aria-label="File Hub controls">
@@ -7752,35 +8202,26 @@ function FileHubPane({
             type="search"
             value={hubQuery}
             onChange={(event) => setHubQuery(event.target.value)}
-            placeholder="Search entries, files, devices..."
+            placeholder="Search files"
           />
-          <kbd>Ctrl K</kbd>
         </label>
-        <div className="filehub-filter-group" aria-label="File Hub status filters">
-          <span><UiIcon name="folder" /> Entry boxes</span>
-          <span><UiIcon name="drive" /> Google Drive</span>
-          <span><UiIcon name="refresh" /> Newest first</span>
-        </div>
       </div>
 
       <section className="connected-card filehub-entry-table-card">
         <div className="connected-card-head">
           <div>
-            <div className="section-title">Daily entry file boxes</div>
-            <div className="muted tiny">Each day owns its attachments, pending files, and transfer history.</div>
+            <div className="section-title">Entries with files</div>
           </div>
         </div>
         <div className="connected-table filehub-table" data-testid="filehub-entry-table">
           <div className="connected-table-row head">
             <span>Entry</span>
-            <span>Open items</span>
-            <span>Attached</span>
-            <span>Latest transfer</span>
-            <span>Sync / Source</span>
+            <span>Files</span>
+            <span>Status</span>
             <span>Action</span>
           </div>
           {entryRows.length === 0 ? (
-            <div className="connected-empty">No entries yet. Create a daily entry to start a file box.</div>
+            <div className="connected-empty">No attached files yet. Add files from an entry when you need evidence.</div>
           ) : (
             entryRows.map(({ entry, openCount, attachedCount, latestTransfer }) => (
               <div className="connected-table-row" key={entry.id}>
@@ -7792,15 +8233,10 @@ function FileHubPane({
                     <small>{entry.dateBucket}</small>
                   </span>
                 </span>
-                <span data-label="Open">{openCount}</span>
-                <span data-label="Attached">{attachedCount}</span>
-                <span data-label="Latest transfer">
-                  <strong>{latestTransfer ? fileBoxStatusLabel(latestTransfer.status) : 'No transfer'}</strong>
-                  <small>{latestTransfer ? new Date(latestTransfer.updatedAt).toLocaleString() : 'Awaiting files'}</small>
-                </span>
-                <span data-label="Sync / Source">
-                  <strong>{latestTransfer?.fromDeviceName ?? 'Google Drive'}</strong>
-                  <small>{latestTransfer ? latestTransfer.provider.replace('-', ' ') : 'Ready for Drive sync'}</small>
+                <span data-label="Files">{attachedCount + openCount}</span>
+                <span data-label="Status">
+                  <strong>{latestTransfer ? fileBoxStatusLabel(latestTransfer.status) : openCount ? `${openCount} waiting` : 'Ready'}</strong>
+                  {latestTransfer && <small>{new Date(latestTransfer.updatedAt).toLocaleString()}</small>}
                 </span>
                 <span data-label="Action">
                   <button className="pill soft" type="button" onClick={() => onSelectEntry(entry.id)}>
@@ -7817,25 +8253,22 @@ function FileHubPane({
         <section className="connected-card">
           <div className="connected-card-head">
             <div>
-              <div className="section-title">Inbox</div>
-              <div className="muted tiny">Files waiting to be attached to entries.</div>
+              <div className="section-title">Needs attention</div>
+              <div className="muted tiny">Review files that are not yet attached to an entry.</div>
             </div>
           </div>
           <div className="connected-list">
             {visibleOpenItems.length === 0 && (
-              <div className="connected-empty filehub-empty-state">
-                <span className="filehub-empty-icon"><UiIcon name="paperclip" /></span>
-                <strong>No files waiting to be attached</strong>
-                <span>Attach a photo, document, or raw export from Today. It will appear here until it is accepted into an entry.</span>
+            <div className="connected-empty filehub-empty-state">
+              <span className="filehub-empty-icon"><UiIcon name="paperclip" /></span>
+                <strong>No files waiting</strong>
+                <span>Open an entry and add files when you need evidence.</span>
                 <div className="filehub-empty-actions">
                   {entryRows[0] && (
                     <button className="accent" type="button" onClick={() => onSelectEntry(entryRows[0].entry.id)}>
                       Open latest entry
                     </button>
                   )}
-                  <button className="pill soft" type="button" onClick={onRetrySync}>
-                    Check Drive queue
-                  </button>
                 </div>
               </div>
             )}
@@ -7859,7 +8292,7 @@ function FileHubPane({
                     )}
                   </div>
                   <div className="connected-row-actions">
-                    <button className="pill soft" type="button" onClick={() => onSelectEntry(item.entryId)}>Open</button>
+                    <button className="accent" type="button" onClick={() => onAttachItem(item.id)} disabled={!item.attachmentId || item.status === 'failed'}>Attach</button>
                     {attachment && (
                       isRemoteOnly ? (
                         <button className="pill soft" type="button" onClick={() => onDownloadAttachment(attachment.id)}>Download</button>
@@ -7867,10 +8300,15 @@ function FileHubPane({
                         <button className="pill soft" type="button" onClick={() => onOpenAttachment(attachment.id)}>View</button>
                       )
                     )}
-                    <button className="accent" type="button" onClick={() => onAttachItem(item.id)} disabled={!item.attachmentId || item.status === 'failed'}>Attach</button>
                     {recovery?.canRetry && <button className="ghost subtle" type="button" onClick={onRetrySync}>Retry sync</button>}
-                    {attachment?.driveFileId && (attachment.cacheKey || attachment.cachedPath) && <button className="ghost subtle" type="button" onClick={() => onRemoveLocalAttachmentCopy(attachment.id)}>Remove local</button>}
-                    <button className="ghost subtle" type="button" onClick={() => onRejectItem(item.id)}>Reject</button>
+                    <details className="row-more-menu">
+                      <summary aria-label={`More actions for ${item.filename}`}><UiIcon name="more" /></summary>
+                      <div>
+                        <button type="button" onClick={() => onSelectEntry(item.entryId)}>Open entry</button>
+                        {attachment?.driveFileId && (attachment.cacheKey || attachment.cachedPath) && <button type="button" onClick={() => onRemoveLocalAttachmentCopy(attachment.id)}>Remove offline copy</button>}
+                        <button type="button" onClick={() => onRejectItem(item.id)}>Reject</button>
+                      </div>
+                    </details>
                   </div>
                 </div>
               )
@@ -7879,14 +8317,17 @@ function FileHubPane({
         </section>
 
         {transfers.length > 0 && (
-          <section className="connected-card">
-            <div className="section-title">Recent transfer activity</div>
+          <details className="connected-card filehub-activity-disclosure">
+            <summary>
+              <span className="section-title">Activity</span>
+              <span className="muted tiny">Recent file and Drive events</span>
+            </summary>
             <div className="connected-list">
               {transfers.slice(0, 12).map((transfer) => (
                 <TransferRow key={transfer.id} transfer={transfer} />
               ))}
             </div>
-          </section>
+          </details>
         )}
       </div>
     </main>
@@ -7912,20 +8353,20 @@ function DevicesPane({
       <div className="connected-page-head">
         <div>
           <div className="eyebrow">Devices</div>
-          <h1>Connected Lab Notebook devices</h1>
-          <p className="muted">This first version registers the current desktop/PWA device locally and publishes it into the Google Drive manifest during sync.</p>
+          <h1>Devices</h1>
+          <p className="muted">Signed-in devices that can sync this notebook.</p>
         </div>
         <div className="connected-metrics">
           <div><strong>1</strong><span>Device</span></div>
           <div><strong>{driveConnection.status === 'ready' ? 'Ready' : 'Setup'}</strong><span>Drive</span></div>
-          <div><strong>{deviceTransferCount}</strong><span>Transfers</span></div>
+          <div><strong>{deviceTransferCount}</strong><span>File events</span></div>
         </div>
       </div>
       <section className="connected-card devices-table-card">
         <div className="connected-card-head">
           <div>
             <div className="section-title">Registered devices</div>
-            <div className="muted tiny">Device records published to the Drive manifest. More desktop and PWA devices will appear here after sync.</div>
+            <div className="muted tiny">This list updates after each successful Drive sync.</div>
           </div>
         </div>
         <div className="device-toolbar">
@@ -7937,21 +8378,21 @@ function DevicesPane({
         <div className="connected-table devices-table">
           <div className="connected-table-row head">
             <span>Device</span>
-            <span>Platform</span>
+            <span>Device type</span>
             <span>Last seen</span>
             <span>Drive</span>
-            <span>Transfers</span>
+            <span>File events</span>
             <span>Status</span>
           </div>
           <div className="connected-table-row">
             <span data-label="Device">
               <strong>{device.name}</strong>
-              <small>{device.id}</small>
+              <small>This install</small>
             </span>
-            <span data-label="Platform">{device.platform}</span>
+            <span data-label="Device type">{device.platform}</span>
             <span data-label="Last seen">{lastSeenLabel}</span>
             <span data-label="Drive">{driveStatusLabel}</span>
-            <span data-label="Transfers">{deviceTransferCount}</span>
+            <span data-label="File events">{deviceTransferCount}</span>
             <span data-label="Status"><span className="status-chip success">Local device</span></span>
           </div>
         </div>
@@ -7971,12 +8412,8 @@ function DevicesPane({
               />
             </label>
             <label className="field">
-              <span>Platform</span>
+              <span>Device type</span>
               <input value={device.platform} readOnly />
-            </label>
-            <label className="field">
-              <span>Device id</span>
-              <input value={device.id} readOnly />
             </label>
             <label className="field">
               <span>Last seen</span>
@@ -7985,7 +8422,7 @@ function DevicesPane({
           </div>
         </section>
         <section className="connected-card">
-          <div className="section-title">Drive presence</div>
+          <div className="section-title">Drive notebook</div>
           <div className="settings-output-grid compact">
             <div className="settings-path-card">
               <div className="settings-path-label">Google Drive folder</div>
@@ -7996,7 +8433,7 @@ function DevicesPane({
               <div className="settings-path">{driveStatusLabel}</div>
             </div>
             <div className="settings-path-card">
-              <div className="settings-path-label">Transfers from this device</div>
+              <div className="settings-path-label">File events from this device</div>
               <div className="settings-path">{deviceTransferCount}</div>
             </div>
           </div>
@@ -8030,9 +8467,9 @@ function TransfersPane({
     <main className="panel editor connected-workspace" data-testid="transfers-pane">
       <div className="connected-page-head">
         <div>
-          <div className="eyebrow">Transfers</div>
-          <h1>File transfer activity</h1>
-          <p className="muted">Every file-box action creates an auditable transfer row that can later be synced through Google Drive.</p>
+          <div className="eyebrow">Files</div>
+          <h1>File activity</h1>
+          <p className="muted">Recent file changes attached to this notebook.</p>
         </div>
         <div className="connected-metrics">
           <div><strong>{transfers.length}</strong><span>Total</span></div>
@@ -8041,7 +8478,7 @@ function TransfersPane({
         </div>
       </div>
       <section className="connected-card">
-        <div className="transfer-stage-grid" aria-label="Transfer status summary">
+        <div className="transfer-stage-grid" aria-label="File status summary">
           {transferStages.map((stage) => (
             <div className={`transfer-stage ${stage.tone}`} key={stage.label}>
               <span className="transfer-stage-icon"><UiIcon name={stage.icon} /></span>
@@ -8052,7 +8489,7 @@ function TransfersPane({
           ))}
         </div>
         <div className="transfer-toolbar">
-          <div className="transfer-filters" aria-label="Transfer status filters">
+          <div className="transfer-filters" aria-label="File status filters">
             <span className="status-chip success">All</span>
             <span className="status-chip warning">Queued</span>
             <span className="status-chip warning">Uploading</span>
@@ -8071,8 +8508,8 @@ function TransfersPane({
           {transfers.length === 0 && (
             <div className="connected-empty transfer-empty-state">
               <div className="transfer-empty-icon"><UiIcon name="folder" /></div>
-              <strong>No transfers yet</strong>
-              <span>Files attached from the desktop, Android PWA, or entry File Box will appear here with queue, sync, and conflict status.</span>
+              <strong>No file activity yet</strong>
+              <span>Files added to entries will appear here after they are saved.</span>
               <small>Try dropping a file into an entry or capturing a photo from the mobile app.</small>
             </div>
           )}
@@ -8094,12 +8531,113 @@ function TransfersPane({
   )
 }
 
+function AuthGate({
+  driveConnection,
+  onConnect,
+  onDisconnect,
+  syncing,
+}: {
+  driveConnection: DriveConnectionState
+  onConnect: () => Promise<void>
+  onDisconnect: () => Promise<void>
+  syncing: boolean
+}) {
+  const driveOAuthClient = resolveDriveClientId(driveConnection)
+  const googleOAuthNeedsExternalBrowser = driveOAuthClient.preferredKind === 'web' && isUnsupportedEmbeddedGoogleOAuthHost()
+  const hasPartialAccount = Boolean(driveConnection.connectedAccount || driveConnection.connectedAt || driveConnection.folderId)
+  const friendlyError = authGateErrorMessage(driveConnection.lastError)
+  const connectLabel = syncing
+    ? 'Opening notebook...'
+    : hasPartialAccount
+      ? 'Continue with Google'
+      : 'Continue with Google'
+
+  return (
+    <main className="app-bg auth-gate-shell" data-testid="auth-gate">
+      <section className="auth-gate-panel" aria-labelledby="auth-gate-title">
+        <div className="auth-gate-brand">
+          <img src={logoMark} alt="" />
+          <div>
+            <strong>Easylab</strong>
+            <span>Lab Notebook</span>
+          </div>
+        </div>
+
+        <div className="auth-gate-grid">
+          <div className="auth-gate-copy">
+            <div className="eyebrow">Private notebook</div>
+            <h1 id="auth-gate-title">Easylab Lab Notebook</h1>
+            <p>
+              Sign in with Google to open your notebook. Notes sync through your own Drive and stay available on this device when you are offline.
+            </p>
+            <div className="auth-gate-actions">
+              <button className="accent icon-btn" type="button" onClick={() => void onConnect()} disabled={syncing} data-testid="auth-gate-connect">
+                <span className="icon"><UiIcon name="drive" /></span>
+                {connectLabel}
+              </button>
+              {hasPartialAccount && (
+                <button className="ghost subtle" type="button" onClick={() => void onDisconnect()} disabled={syncing} data-testid="auth-gate-disconnect">
+                  Sign out
+                </button>
+              )}
+            </div>
+            <div className="auth-gate-device-strip" aria-label="Notebook promises">
+              <span><UiIcon name="save" /> Autosaves</span>
+              <span><UiIcon name="refresh" /> Syncs devices</span>
+              <span><UiIcon name="check" /> Your Drive</span>
+            </div>
+            {googleOAuthNeedsExternalBrowser && (
+              <div className="auth-gate-note warning" data-testid="embedded-oauth-warning">
+                Google sign-in cannot finish inside this embedded browser. Open the app in Brave or Chrome for this local build.
+              </div>
+            )}
+            {friendlyError && (
+              <div className="auth-gate-note error" data-testid="auth-gate-error">
+                {friendlyError}
+              </div>
+            )}
+          </div>
+
+          <aside className="auth-gate-card auth-gate-benefits" aria-label="How Easylab sync works">
+            <div>
+              <div className="section-title">Ready after sign-in</div>
+              <p>One Google account opens one private notebook.</p>
+            </div>
+            <div className="auth-benefit-list">
+              <div className="auth-benefit">
+                <span><UiIcon name="folder" /></span>
+                <div>
+                <strong>Your Drive notebook</strong>
+                <p>Entries and attachments stay in your Google Drive.</p>
+                </div>
+              </div>
+              <div className="auth-benefit">
+                <span><UiIcon name="note" /></span>
+                <div>
+                  <strong>Offline editing</strong>
+                  <p>The notebook keeps an offline copy after sign-in, so lab notes remain usable without internet.</p>
+                </div>
+              </div>
+              <div className="auth-benefit">
+                <span><UiIcon name="settings" /></span>
+                <div>
+                  <strong>Account isolation</strong>
+                  <p>Different Google accounts open separate notebooks in Drive.</p>
+                </div>
+              </div>
+            </div>
+          </aside>
+        </div>
+      </section>
+    </main>
+  )
+}
+
 function SyncPane({
-  appPaths,
-  masterSyncPath,
   driveConnection,
   onDriveConnectionChange,
   onRunDriveSync,
+  onDisconnectDrive,
   syncing,
   manifest,
   conflicts,
@@ -8113,11 +8651,10 @@ function SyncPane({
   onImportBackup,
   onResolveConflict,
 }: {
-  appPaths: AppPaths
-  masterSyncPath: string
   driveConnection: DriveConnectionState
   onDriveConnectionChange: React.Dispatch<React.SetStateAction<DriveConnectionState>>
   onRunDriveSync: () => Promise<void>
+  onDisconnectDrive: () => Promise<void>
   syncing: boolean
   manifest: SyncManifest
   conflicts: SyncConflict[]
@@ -8132,14 +8669,24 @@ function SyncPane({
   onResolveConflict: (conflictId: string, action: ConflictResolutionAction) => void
 }) {
   const backupInputRef = useRef<HTMLInputElement | null>(null)
-  const oauthImportInputRef = useRef<HTMLInputElement | null>(null)
-  const [oauthImportMessage, setOauthImportMessage] = useState('')
   const [storageHealth, setStorageHealth] = useState<StorageHealth>({ checked: false, supported: false })
   const [storagePersisting, setStoragePersisting] = useState(false)
   const driveOAuthClient = resolveDriveClientId(driveConnection)
-  const activeOAuthLabel = driveOAuthClient.preferredKind === 'desktop' ? 'Desktop app' : 'Web/PWA'
-  const hasActiveOAuthClient = Boolean(driveOAuthClient.clientId)
-  const hasLegacyOAuthClient = Boolean(driveConnection.clientId.trim())
+  const googleOAuthNeedsExternalBrowser = driveOAuthClient.preferredKind === 'web' && isUnsupportedEmbeddedGoogleOAuthHost()
+  const isDriveConnected = driveConnection.storageMode === 'google-drive' && Boolean(driveConnection.folderId || driveConnection.connectedAt)
+  const account = driveConnection.connectedAccount
+  const connectionStatus = syncing
+    ? 'Syncing'
+    : isDriveConnected
+      ? 'Up to date'
+      : driveConnection.status === 'error'
+        ? 'Needs attention'
+        : 'Sign-in required'
+  const driveActionLabel = syncing
+    ? 'Syncing...'
+    : isDriveConnected
+      ? 'Sync now'
+      : 'Continue with Google'
 
   const refreshStorageHealth = useCallback(async () => {
     const storage = typeof navigator !== 'undefined' ? navigator.storage : undefined
@@ -8208,30 +8755,6 @@ function SyncPane({
     }
   }
 
-  const handleOAuthJsonImport = async (file: File | undefined) => {
-    if (!file) return
-    try {
-      const parsed = parseGoogleOAuthClientConfig(await file.text())
-      onDriveConnectionChange((prev) => ({
-        ...prev,
-        desktopClientId: parsed.desktopClientId ?? prev.desktopClientId ?? '',
-        desktopClientSecret: parsed.desktopClientSecret ?? prev.desktopClientSecret ?? '',
-        webClientId: parsed.webClientId ?? prev.webClientId ?? '',
-        status: 'needs-auth',
-        lastError: undefined,
-      }))
-      const importedLabel =
-        parsed.importedKind === 'both'
-          ? 'desktop and web client IDs'
-          : parsed.importedKind === 'web'
-            ? 'web/PWA client ID'
-            : 'desktop client ID'
-      setOauthImportMessage(`Imported ${importedLabel}. Tokens were not imported or stored.`)
-    } catch (error) {
-      setOauthImportMessage(error instanceof Error ? error.message : String(error))
-    }
-  }
-
   const persistenceLabel = !storageHealth.checked
     ? 'Checking'
     : !storageHealth.supported
@@ -8248,172 +8771,128 @@ function SyncPane({
     <main className="panel editor connected-workspace" data-testid="sync-pane">
       <div className="connected-page-head">
         <div>
-          <div className="eyebrow">Google Drive Sync</div>
-          <h1>Device-owned sync without an Easylab cloud server</h1>
-          <p className="muted">Lab Notebook writes manifests, entries, file-box metadata, transfers, and attachments into a user-owned Google Drive folder.</p>
+          <div className="eyebrow">Sync</div>
+          <h1>Google Drive</h1>
+          <p className="muted">
+            {isDriveConnected ? 'Your notebook is saved to Drive and available offline on this device.' : 'Sign in with Google to open your notebook.'}
+          </p>
         </div>
         <button className="accent icon-btn" type="button" onClick={() => void onRunDriveSync()} disabled={syncing}>
           <span className="icon"><UiIcon name="refresh" /></span>
-          {syncing ? 'Syncing...' : 'Connect / Sync Drive'}
+          {driveActionLabel}
         </button>
       </div>
 
-      <div className="sync-mobile-status-grid" aria-label="Sync status summary">
-        <div>
-          <span className="icon"><UiIcon name="note" /></span>
-          <strong>Local first</strong>
-          <small>On this device</small>
-        </div>
-        <div>
-          <span className="icon"><UiIcon name="folder" /></span>
-          <strong>Google Drive</strong>
-          <small>{driveConnection.folderId ? 'Connected' : driveConnection.status === 'needs-auth' ? 'Needs sign-in' : 'Not connected'}</small>
-        </div>
-      </div>
+      <div className="sync-focus-grid">
+        <section className="connected-card sync-account-card">
+          <div className="section-title">Account</div>
+          {isDriveConnected ? (
+            <div className="drive-account-card" data-testid="drive-account-card">
+              {account?.picture ? <img src={account.picture} alt="" className="drive-account-avatar" /> : <div className="drive-account-avatar fallback">{account?.email?.slice(0, 1).toUpperCase() || 'G'}</div>}
+              <div>
+                <strong>{accountDisplayName(account)}</strong>
+                <span>{accountEmailDisplay(account)}</span>
+                <small>{driveConnection.lastSyncAt ? `Last sync ${new Date(driveConnection.lastSyncAt).toLocaleString()}` : 'All changes saved'}</small>
+              </div>
+              <button className="ghost subtle" type="button" onClick={() => void onDisconnectDrive()} disabled={syncing}>
+                Sign out
+              </button>
+            </div>
+          ) : (
+            <div className="drive-account-card local-only" data-testid="drive-account-card">
+              <div className="drive-account-avatar fallback"><UiIcon name="note" /></div>
+              <div>
+                <strong>Google account required</strong>
+                <span>Sign in to open your notebook.</span>
+                <small>Your Drive stores this notebook.</small>
+                {googleOAuthNeedsExternalBrowser && (
+                  <small className="drive-oauth-browser-note">
+                    Open this app in Brave or Chrome to finish sign-in.
+                  </small>
+                )}
+              </div>
+              <button className="accent" type="button" onClick={() => void onRunDriveSync()} disabled={syncing}>
+                Continue with Google
+              </button>
+            </div>
+          )}
+          {driveConnection.lastError && (
+            <details className="settings-disclosure sync-advanced debug-details">
+              <summary className="settings-disclosure-summary">
+              <span><strong>Drive details</strong><span className="muted tiny">View the latest Drive response.</span></span>
+                <span className="status-chip warning">Needs review</span>
+              </summary>
+              <div className="settings-disclosure-body">
+                <div className="settings-error">{driveConnection.lastError}</div>
+              </div>
+            </details>
+          )}
+        </section>
 
-      <div className="connected-grid two">
-        <section className="connected-card">
-          <div className="section-title">First sync setup</div>
-          <p className="muted">Local entries stay on this device first. When you connect Drive, the app creates an Easylab Lab Notebook folder and syncs only app-owned files with the narrow Drive file scope.</p>
-          <ol className="sync-setup-list">
-            <li><strong>Choose the Drive folder.</strong><span>Use the default or name a separate notebook folder.</span></li>
-            <li><strong>Connect Google Drive.</strong><span>Desktop and PWA use the matching OAuth client ID.</span></li>
-            <li><strong>Run sync.</strong><span>Entries, files, and conflicts sync there.</span></li>
-          </ol>
-          <div className="settings-grid">
-            <label className="field">
-              <span>Drive folder name</span>
-              <input
-                value={driveConnection.folderName}
-                onChange={(event) => onDriveConnectionChange((prev) => ({ ...prev, folderName: event.target.value || DRIVE_ROOT_FOLDER }))}
-                placeholder={DRIVE_ROOT_FOLDER}
-              />
-            </label>
-            <label className="field">
-              <span>Last sync</span>
-              <input value={driveConnection.lastSyncAt ? new Date(driveConnection.lastSyncAt).toLocaleString() : 'Not synced yet'} readOnly />
-            </label>
+        <section className="connected-card sync-status-card">
+          <div className="section-title">Notebook</div>
+          <div className="sync-simple-status">
+            <span className={`status-chip ${isDriveConnected ? 'success' : 'warning'}`}>{connectionStatus}</span>
+            <span>{driveConnection.folderName || DRIVE_ROOT_FOLDER}</span>
           </div>
-          <details className="settings-disclosure sync-advanced">
+          <details className="settings-disclosure sync-advanced debug-details">
             <summary className="settings-disclosure-summary">
-              <span><strong>Advanced OAuth client IDs</strong><span className="muted tiny">Desktop and PWA use different Google client types. OAuth client IDs are not secrets.</span></span>
-              <span className={`status-chip ${hasActiveOAuthClient ? 'success' : 'warning'}`}>{hasActiveOAuthClient ? `${activeOAuthLabel} configured` : `${activeOAuthLabel} needed`}</span>
+              <span><strong>Notebook settings</strong><span className="muted tiny">Folder name and latest save.</span></span>
             </summary>
             <div className="settings-disclosure-body">
-              <div className="settings-note">
-                Download the OAuth client JSON from Google Cloud, then import it here. The app reads only client IDs and the optional desktop client secret; access tokens and refresh tokens are never imported.
+              <div className="settings-grid">
+                <label className="field">
+                  <span>Notebook name</span>
+                  <input
+                    value={driveConnection.folderName}
+                    onChange={(event) => onDriveConnectionChange((prev) => ({ ...prev, folderName: event.target.value || DRIVE_ROOT_FOLDER }))}
+                    placeholder={DRIVE_ROOT_FOLDER}
+                  />
+                </label>
+                <label className="field">
+                  <span>Last saved</span>
+                  <input value={driveConnection.lastSyncAt ? new Date(driveConnection.lastSyncAt).toLocaleString() : 'Not synced yet'} readOnly />
+                </label>
               </div>
-              <div className="settings-actions-row">
-                <button className="pill soft" type="button" onClick={() => oauthImportInputRef.current?.click()} data-testid="import-oauth-json">
-                  <span className="icon"><UiIcon name="file" /></span>
-                  Import Google OAuth JSON
-                </button>
-                <input
-                  ref={oauthImportInputRef}
-                  type="file"
-                  accept="application/json,.json"
-                  style={{ display: 'none' }}
-                  data-testid="oauth-json-file"
-                  onChange={(event) => {
-                    void handleOAuthJsonImport(event.currentTarget.files?.[0])
-                    event.currentTarget.value = ''
-                  }}
-                />
-              </div>
-              {oauthImportMessage && (
-                <div className={`settings-note ${oauthImportMessage.startsWith('Imported ') ? 'success-note' : 'warning-note'}`} data-testid="oauth-import-message">
-                  {oauthImportMessage}
-                </div>
-              )}
-              <label className="field">
-                <span>Desktop app OAuth client ID</span>
-                <input
-                  value={driveConnection.desktopClientId ?? ''}
-                  onChange={(event) => onDriveConnectionChange((prev) => {
-                    const desktopClientId = event.target.value
-                    const hasAnyClient = Boolean(desktopClientId.trim() || prev.webClientId?.trim() || prev.clientId.trim())
-                    return { ...prev, desktopClientId, status: hasAnyClient ? 'needs-auth' : 'disconnected' }
-                  })}
-                  placeholder="Desktop OAuth client ID for Electron"
-                  spellCheck={false}
-                />
-              </label>
-              <label className="field">
-                <span>Desktop OAuth client secret (optional)</span>
-                <input
-                  type="password"
-                  value={driveConnection.desktopClientSecret ?? ''}
-                  onChange={(event) => onDriveConnectionChange((prev) => ({ ...prev, desktopClientSecret: event.target.value }))}
-                  placeholder="Optional; stored locally only when provided"
-                  autoComplete="off"
-                  spellCheck={false}
-                />
-              </label>
-              <label className="field">
-                <span>Web/PWA OAuth client ID</span>
-                <input
-                  value={driveConnection.webClientId ?? ''}
-                  onChange={(event) => onDriveConnectionChange((prev) => {
-                    const webClientId = event.target.value
-                    const hasAnyClient = Boolean(prev.desktopClientId?.trim() || webClientId.trim() || prev.clientId.trim())
-                    return { ...prev, webClientId, status: hasAnyClient ? 'needs-auth' : 'disconnected' }
-                  })}
-                  placeholder="Web OAuth client ID for browser/PWA"
-                  spellCheck={false}
-                />
-              </label>
-              {hasLegacyOAuthClient && !driveConnection.desktopClientId?.trim() && !driveConnection.webClientId?.trim() && (
-                <div className="settings-note">
-                  A legacy single OAuth client ID is saved and will be used as a fallback. Move it into the matching Desktop or Web/PWA field when you know which client type it is.
-                </div>
-              )}
             </div>
           </details>
-          {driveConnection.lastError && <div className="settings-error">{driveConnection.lastError}</div>}
-        </section>
-
-        <section className="connected-card">
-          <div className="section-title">Where files go</div>
-          <div className="settings-output-grid compact">
-            <div className="settings-path-card"><div className="settings-path-label">Local data</div><div className="settings-path" title={formatDisplayPath(appPaths.dataRoot)}>{formatDisplayPath(appPaths.dataRoot)}</div></div>
-            <div className="settings-path-card"><div className="settings-path-label">Local attachments</div><div className="settings-path" title={formatDisplayPath(appPaths.attachmentsRoot)}>{formatDisplayPath(appPaths.attachmentsRoot)}</div></div>
-            <div className="settings-path-card"><div className="settings-path-label">Exports</div><div className="settings-path" title={formatDisplayPath(appPaths.exportRoot)}>{formatDisplayPath(appPaths.exportRoot)}</div></div>
-            <div className="settings-path-card"><div className="settings-path-label">Legacy sync root</div><div className="settings-path" title={formatDisplayPath(masterSyncPath || appPaths.syncRoot)}>{formatDisplayPath(masterSyncPath || appPaths.syncRoot)}</div></div>
-            <div className="settings-path-card"><div className="settings-path-label">Drive folder id</div><div className="settings-path">{driveConnection.folderId ?? 'Created after first successful sync'}</div></div>
-            <div className="settings-path-card"><div className="settings-path-label">Drive layout</div><div className="settings-path">manifest.json, devices, entries, attachments, filebox, transfers, conflicts, tombstones</div></div>
-          </div>
         </section>
       </div>
 
-      <div className="connected-grid two">
+      <details className="settings-disclosure sync-advanced sync-diagnostics">
+        <summary className="settings-disclosure-summary">
+          <span><strong>Advanced</strong><span className="muted tiny">Backup, offline storage, and conflicts.</span></span>
+          <span className={`status-chip ${conflicts.length ? 'warning' : 'success'}`}>{conflicts.length ? `${conflicts.length} conflict${conflicts.length === 1 ? '' : 's'}` : 'Up to date'}</span>
+        </summary>
+        <div className="settings-disclosure-body connected-grid two">
         {syncSummary && (
           <section className="connected-card">
-            <div className="section-title">Last sync result</div>
+            <div className="section-title">Last save</div>
             <div className="connected-table">
               <div className="connected-table-row"><span>Completed</span><strong>{new Date(syncSummary.syncedAt).toLocaleString()}</strong></div>
               <div className="connected-table-row"><span>Entries</span><strong>{syncSummary.pulledEntries} pulled / {syncSummary.pushedEntries} pushed</strong></div>
-              <div className="connected-table-row"><span>Attachments</span><strong>{syncSummary.pulledAttachments} pulled / {syncSummary.pushedAttachments} metadata pushed</strong></div>
-              <div className="connected-table-row"><span>Blobs</span><strong>{syncSummary.downloadedBlobs} downloaded / {syncSummary.uploadedBlobs} uploaded</strong></div>
-              <div className="connected-table-row"><span>Tombstones</span><strong>{syncSummary.pushedTombstones} published</strong></div>
+              <div className="connected-table-row"><span>Attachments</span><strong>{syncSummary.pulledAttachments} pulled / {syncSummary.pushedAttachments} saved</strong></div>
+              <div className="connected-table-row"><span>Files</span><strong>{syncSummary.downloadedBlobs} downloaded / {syncSummary.uploadedBlobs} uploaded</strong></div>
+              <div className="connected-table-row"><span>Deletes</span><strong>{syncSummary.pushedTombstones} saved</strong></div>
               <div className="connected-table-row"><span>Conflicts</span><strong>{syncSummary.conflicts}</strong></div>
             </div>
           </section>
         )}
         <section className="connected-card">
-          <div className="section-title">Local data core</div>
+          <div className="section-title">Offline access</div>
           <div className="connected-table">
-            <div className="connected-table-row"><span>IndexedDB store</span><strong>{journalCoreStatus}</strong></div>
-            <div className="connected-table-row"><span>Hydration source</span><strong>{journalCoreSource}</strong></div>
-            <div className="connected-table-row"><span>Queued entities</span><strong>{journalCoreQueueCount}</strong></div>
-            <div className="connected-table-row"><span>Drive folder</span><strong>{driveConnection.folderId ? 'Ready' : 'Not linked'}</strong></div>
+            <div className="connected-table-row"><span>Notebook</span><strong>{journalCoreStatus}</strong></div>
+            <div className="connected-table-row"><span>Loaded from</span><strong>{journalCoreSource}</strong></div>
+            <div className="connected-table-row"><span>Waiting to save</span><strong>{journalCoreQueueCount}</strong></div>
+            <div className="connected-table-row"><span>Drive notebook</span><strong>{driveConnection.folderId ? 'Connected' : 'Not connected'}</strong></div>
           </div>
           {journalCoreError && <div className="settings-error">{journalCoreError}</div>}
         </section>
         <section className="connected-card" data-testid="storage-health-card">
-          <div className="section-title">Offline storage health</div>
-          <p className="muted">Daily entries, metadata, queues, conflicts, and tombstones stay in IndexedDB. Attachment metadata syncs automatically; large attachment blobs are downloaded only when opened or requested.</p>
+          <div className="section-title">Offline storage</div>
+          <p className="muted">The notebook keeps an offline copy on this device. Files download when opened.</p>
           <div className="connected-table storage-health-table">
-            <div className="connected-table-row"><span>Browser storage API</span><strong>{storageHealth.supported ? 'Available' : storageHealth.checked ? 'Not available' : 'Checking'}</strong></div>
+            <div className="connected-table-row"><span>Storage access</span><strong>{storageHealth.supported ? 'Available' : storageHealth.checked ? 'Not available' : 'Checking'}</strong></div>
             <div className="connected-table-row"><span>Persistence</span><strong data-testid="storage-persistence-status">{persistenceLabel}</strong></div>
             <div className="connected-table-row"><span>Estimated local usage</span><strong>{storageHealth.usage == null ? 'Unknown' : fileSizeLabel(storageHealth.usage)}</strong></div>
             <div className="connected-table-row"><span>Estimated quota</span><strong>{storageHealth.quota == null ? 'Unknown' : fileSizeLabel(storageHealth.quota)}</strong></div>
@@ -8428,14 +8907,14 @@ function SyncPane({
               data-testid="storage-persist-button"
             >
               <span className="icon"><UiIcon name="save" /></span>
-              {storagePersisting ? 'Requesting...' : 'Request persistent storage'}
+              {storagePersisting ? 'Requesting...' : 'Keep offline copy'}
             </button>
           </div>
           {storageHealth.error && <div className="settings-note warning-note" data-testid="storage-health-note">{storageHealth.error}</div>}
         </section>
         <section className="connected-card">
-          <div className="section-title">Local backup and restore</div>
-          <p className="muted">Export a self-contained JSON backup with daily entries, sync metadata, conflicts, tombstones, and cached attachment blobs. Keep this file private.</p>
+          <div className="section-title">Backup and restore</div>
+          <p className="muted">Export a private backup with entries, files, conflicts, and offline file copies.</p>
           <div className="settings-actions" style={{ marginTop: 10 }}>
             <button className="ghost icon-btn" type="button" onClick={() => void onExportBackup()}>
               <span className="icon"><UiIcon name="download" /></span>
@@ -8468,18 +8947,18 @@ function SyncPane({
           )}
         </section>
         <section className="connected-card">
-          <div className="section-title">Sync manifest preview</div>
+          <div className="section-title">Notebook summary</div>
           <div className="connected-table">
             <div className="connected-table-row"><span>Entries</span><strong>{manifest.entryCount}</strong></div>
             <div className="connected-table-row"><span>Attachments</span><strong>{manifest.attachmentCount}</strong></div>
-            <div className="connected-table-row"><span>File Box</span><strong>{manifest.fileBoxCount}</strong></div>
-            <div className="connected-table-row"><span>Transfers</span><strong>{manifest.transferCount}</strong></div>
+            <div className="connected-table-row"><span>Inbox files</span><strong>{manifest.fileBoxCount}</strong></div>
+            <div className="connected-table-row"><span>File events</span><strong>{manifest.transferCount}</strong></div>
           </div>
         </section>
         <section className="connected-card">
           <div className="section-title">Conflicts</div>
           <div className="connected-list">
-            {conflicts.length === 0 && <div className="connected-empty">No conflicts detected locally.</div>}
+            {conflicts.length === 0 && <div className="connected-empty">No conflicts.</div>}
             {conflicts.map((conflict) => (
               <div className="connected-row" key={conflict.id}>
                 <div className="connected-row-icon"><UiIcon name="alert" /></div>
@@ -8500,7 +8979,8 @@ function SyncPane({
             ))}
           </div>
         </section>
-      </div>
+        </div>
+      </details>
     </main>
   )
 }
@@ -8520,7 +9000,7 @@ function TransferRow({ transfer, compact = false }: { transfer: TransferRecord; 
   )
 }
 
-function ProtocolPane({ protocol, onUpdateProtocol, onUpdateProtocolMeta }: ProtocolPaneProps) {
+function ProtocolPane({ protocol, onUpdateProtocol, onUpdateProtocolMeta, onOpenMobileNav }: ProtocolPaneProps) {
   const [isEditing, setIsEditing] = useState(false)
   const [draftTitle, setDraftTitle] = useState(protocol?.title ?? '')
   const [headerCollapsed, setHeaderCollapsed] = useState(false)
@@ -8596,9 +9076,19 @@ function ProtocolPane({ protocol, onUpdateProtocol, onUpdateProtocolMeta }: Prot
 
   return (
     <main className="panel editor">
-      <div className={`editor-header ${headerCollapsed ? 'collapsed' : ''}`} data-testid="protocol-header">
+      <div className={`editor-header protocol-editor-header ${headerCollapsed ? 'collapsed' : ''}`} data-testid="protocol-header">
         <div className="editor-header-inner">
           <div className="breadcrumb-row">
+            <button
+              className="ghost icon-btn mobile-open-sidebar"
+              type="button"
+              onClick={onOpenMobileNav}
+              aria-label="Open navigation"
+              data-testid="mobile-open-sidebar-protocol"
+            >
+              <span className="icon"><UiIcon name="list" /></span>
+              Menu
+            </button>
             <div className="breadcrumbs">
               <span>Protocol</span>
               <span>/</span>
@@ -8725,6 +9215,12 @@ function ProtocolPane({ protocol, onUpdateProtocol, onUpdateProtocolMeta }: Prot
                     return
                   }
                 }
+
+                if (event.key !== 'Backspace' && event.key !== 'Delete') return
+
+                const selection = editor.selection
+                if (!selection) return
+                handleDestructiveSelectionKey(editor, selection, event)
               }}
             />
           </Slate>
@@ -8770,7 +9266,6 @@ const renderElement = (props: RenderElementProps) => {
           {...attributes}
           style={style}
           data-block-id={(element as { blockId?: string }).blockId}
-          contentEditable={false}
         >
           {children}
         </h2>
@@ -8791,7 +9286,6 @@ const renderElement = (props: RenderElementProps) => {
           {...attributes}
           style={style}
           data-block-id={(element as { blockId?: string }).blockId}
-          contentEditable={false}
         >
           {children}
         </h3>
@@ -9233,7 +9727,9 @@ function WorkbookSheet({
   onStylesChange: (styles: WorkbookCellStyles) => void
 }) {
   const grid = normalizeWorkbookData(data)
+  const gridRef = useRef<HTMLTableElement>(null)
   const [selectedCell, setSelectedCell] = useState<WorkbookCellPosition>({ rowIdx: 0, colIdx: 0 })
+  const [confirmClearWorkbook, setConfirmClearWorkbook] = useState(false)
   const [selectedRange, setSelectedRange] = useState<WorkbookCellRange>({
     start: { rowIdx: 0, colIdx: 0 },
     end: { rowIdx: 0, colIdx: 0 },
@@ -9433,6 +9929,7 @@ function WorkbookSheet({
     ensureEditing()
     onChange(makeEmptyWorkbookData())
     onStylesChange({})
+    setConfirmClearWorkbook(false)
   }
 
   const renderFormatButton = (
@@ -9453,7 +9950,33 @@ function WorkbookSheet({
     </button>
   )
 
+  const focusWorkbookCell = (cell: WorkbookCellPosition) => {
+    window.requestAnimationFrame(() => {
+      const input = gridRef.current?.querySelector<HTMLInputElement>(
+        `input[data-workbook-row="${cell.rowIdx}"][data-workbook-col="${cell.colIdx}"]`
+      )
+      input?.focus({ preventScroll: true })
+      input?.select()
+      input?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+    })
+  }
+
+  const moveWorkbookSelection = (rowIdx: number, colIdx: number, rowDelta: number) => {
+    const nextCell = {
+      rowIdx: Math.max(0, Math.min(rowIdx + rowDelta, grid.length - 1)),
+      colIdx: Math.max(0, Math.min(colIdx, (grid[0]?.length ?? 1) - 1)),
+    }
+    setWorkbookSelection(nextCell)
+    focusWorkbookCell(nextCell)
+  }
+
   const handleCellKeyDown = (event: React.KeyboardEvent<HTMLInputElement>, rowIdx: number, colIdx: number) => {
+    if (event.key === 'Enter' && !event.ctrlKey && !event.metaKey && !event.altKey) {
+      event.preventDefault()
+      moveWorkbookSelection(rowIdx, colIdx, event.shiftKey ? -1 : 1)
+      return
+    }
+
     if (!(event.ctrlKey || event.metaKey)) return
     const key = event.key.toLowerCase()
     if (!['c', 'x', 'v'].includes(key)) return
@@ -9475,16 +9998,7 @@ function WorkbookSheet({
     <div className="workbook-shell" data-testid="entry-workbook">
       <div className="workbook-toolbar">
         <div className="muted tiny">
-          {grid.length} rows - {grid[0]?.length ?? 0} columns
-          <span className="workbook-selection">
-            Selected {selectedRangeLabel}
-          </span>
-        </div>
-        <div className="workbook-actions">
-          <button className="pill soft" type="button" onClick={clearWorkbook} disabled={!workbookHasContent(grid)}>
-            <UiIcon name="trash" />
-            Clear all
-          </button>
+          {grid.length} rows <span aria-hidden="true">·</span> {grid[0]?.length ?? 0} columns
         </div>
       </div>
       <div className="workbook-formula-row">
@@ -9494,32 +10008,33 @@ function WorkbookSheet({
           value={grid[selectedCell.rowIdx]?.[selectedCell.colIdx] ?? ''}
           onFocus={ensureEditing}
           onChange={(event) => updateCell(selectedCell.rowIdx, selectedCell.colIdx, event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key !== 'Enter' || event.ctrlKey || event.metaKey || event.altKey) return
+            event.preventDefault()
+            moveWorkbookSelection(selectedCell.rowIdx, selectedCell.colIdx, event.shiftKey ? -1 : 1)
+          }}
           placeholder="Enter value or formula"
           aria-label={`Formula bar for ${selectedRangeLabel}`}
         />
       </div>
-      <div className="workbook-commandbar" aria-label="Workbook structure commands">
-        <div className="workbook-command-group">
-          <button type="button" onClick={() => void copySelection()}>Copy</button>
-          <button type="button" onClick={() => void cutCell()}>Cut</button>
-          <button type="button" onClick={() => void pasteFromClipboard()}>Paste</button>
-          <span className="workbook-command-label">Clipboard</span>
-        </div>
-        <div className="workbook-command-group">
-          <button type="button" onClick={() => insertRow(selectedCell.rowIdx)} disabled={grid.length >= WORKBOOK_MAX_ROWS} title="Insert row above">+ Row</button>
-          <button type="button" onClick={() => insertColumn(selectedCell.colIdx + 1)} disabled={(grid[0]?.length ?? 0) >= WORKBOOK_MAX_COLS} title="Insert column right">+ Col</button>
-          <span className="workbook-command-label">Insert</span>
-        </div>
-        <div className="workbook-command-group">
-          <button type="button" onClick={() => insertRow(selectedCell.rowIdx + 1)} disabled={grid.length >= WORKBOOK_MAX_ROWS} title="Insert row below">Row below</button>
-          <button type="button" onClick={deleteRow} title="Delete selected row">Del row</button>
-          <button type="button" onClick={() => insertColumn(selectedCell.colIdx)} disabled={(grid[0]?.length ?? 0) >= WORKBOOK_MAX_COLS} title="Insert column left">Col left</button>
-          <button type="button" onClick={deleteColumn} title="Delete selected column">Del col</button>
-          <span className="workbook-command-label">Rows / columns</span>
-        </div>
-      </div>
-      <div className="workbook-formatbar" aria-label="Workbook cell formatting">
-        <span className="workbook-format-label">Cell</span>
+      <div className="workbook-commandbar" aria-label="Workbook commands">
+        <details className="workbook-action-menu">
+          <summary>Insert <UiIcon name="chevronDown" /></summary>
+          <div className="workbook-action-popover">
+            <button type="button" onClick={() => insertRow(selectedCell.rowIdx)} disabled={grid.length >= WORKBOOK_MAX_ROWS}>Row above</button>
+            <button type="button" onClick={() => insertRow(selectedCell.rowIdx + 1)} disabled={grid.length >= WORKBOOK_MAX_ROWS}>Row below</button>
+            <button type="button" onClick={() => insertColumn(selectedCell.colIdx)} disabled={(grid[0]?.length ?? 0) >= WORKBOOK_MAX_COLS}>Column left</button>
+            <button type="button" onClick={() => insertColumn(selectedCell.colIdx + 1)} disabled={(grid[0]?.length ?? 0) >= WORKBOOK_MAX_COLS}>Column right</button>
+          </div>
+        </details>
+        <details className="workbook-action-menu">
+          <summary>Delete <UiIcon name="chevronDown" /></summary>
+          <div className="workbook-action-popover">
+            <button type="button" onClick={deleteRow}>Selected row</button>
+            <button type="button" onClick={deleteColumn}>Selected column</button>
+          </div>
+        </details>
+        <span className="workbook-format-divider" />
         {renderFormatButton('B', Boolean(selectedStyle.bold), () => updateCellStyle({ bold: !selectedStyle.bold }), 'Bold selected cell', 'bold')}
         {renderFormatButton('I', Boolean(selectedStyle.italic), () => updateCellStyle({ italic: !selectedStyle.italic }), 'Italic selected cell', 'italic')}
         {renderFormatButton('U', Boolean(selectedStyle.underline), () => updateCellStyle({ underline: !selectedStyle.underline }), 'Underline selected cell', 'underline')}
@@ -9527,14 +10042,33 @@ function WorkbookSheet({
         {renderFormatButton('Left', selectedStyle.align === 'left' || !selectedStyle.align, () => updateCellStyle({ align: 'left' }), 'Align selected cell left')}
         {renderFormatButton('Center', selectedStyle.align === 'center', () => updateCellStyle({ align: 'center' }), 'Align selected cell center')}
         {renderFormatButton('Right', selectedStyle.align === 'right', () => updateCellStyle({ align: 'right' }), 'Align selected cell right')}
-        <span className="workbook-format-divider" />
-        <button className="workbook-format-button" type="button" onClick={clearCellStyle}>
-          Clear format
-        </button>
+        <details className="workbook-action-menu workbook-more-menu">
+          <summary aria-label="More workbook actions"><UiIcon name="more" /> More</summary>
+          <div className="workbook-action-popover align-right">
+            <button type="button" onClick={() => void copySelection()}>Copy selection</button>
+            <button type="button" onClick={() => void cutCell()}>Cut selection</button>
+            <button type="button" onClick={() => void pasteFromClipboard()}>Paste</button>
+            <button type="button" onClick={clearCellStyle}>Clear formatting</button>
+            <span className="workbook-menu-divider" />
+            {confirmClearWorkbook ? (
+              <div className="workbook-clear-actions" role="group" aria-label="Confirm clearing all workbook cells">
+                <span>Clear every cell?</span>
+                <div>
+                  <button type="button" onClick={() => setConfirmClearWorkbook(false)}>Cancel</button>
+                  <button className="danger-text" type="button" onClick={clearWorkbook}>Clear all cells</button>
+                </div>
+              </div>
+            ) : (
+              <button className="danger-text" type="button" onClick={() => setConfirmClearWorkbook(true)} disabled={!workbookHasContent(grid)}>
+                <UiIcon name="trash" /> Clear all cells…
+              </button>
+            )}
+          </div>
+        </details>
         {!isEditing && <span className="workbook-edit-hint">Click a cell to edit</span>}
       </div>
       <div className="workbook-grid-wrap">
-        <table className="workbook-grid">
+        <table ref={gridRef} className="workbook-grid">
           <thead>
             <tr>
               <th className="workbook-corner" aria-label="Workbook row numbers" />
@@ -9577,8 +10111,11 @@ function WorkbookSheet({
                         value={cell}
                         style={cellCss}
                         aria-label={`Cell ${WORKBOOK_COLUMN_LABELS[colIdx]}${rowIdx + 1}`}
+                        data-workbook-row={rowIdx}
+                        data-workbook-col={colIdx}
                         onFocus={() => {
                           ensureEditing()
+                          setWorkbookSelection({ rowIdx, colIdx })
                         }}
                         onClick={(event) => setWorkbookSelection({ rowIdx, colIdx }, event.shiftKey)}
                         onChange={(event) => updateCell(rowIdx, colIdx, event.target.value)}
@@ -9606,7 +10143,6 @@ function WorkbookSheet({
         <button type="button">ELISA</button>
         <button type="button" aria-label="Add sheet">+</button>
         <span>Ready</span>
-        <span>Selected: {selectedRangeLabel}</span>
         <span>{grid.length} x {grid[0]?.length ?? 0}</span>
       </div>
     </div>
@@ -9658,7 +10194,7 @@ function FileDestinationModal({
         <div className="modal-head">
           <div>
             <div className="title-sm">Add file destination</div>
-            <div className="muted tiny">Store a path to raw data or output files (no upload).</div>
+            <div className="muted tiny">Store a path to a data file or output folder.</div>
           </div>
           <button className="ghost" onClick={onClose} type="button">Close</button>
         </div>
@@ -9743,7 +10279,11 @@ function EditorInsertBar({
   const imgRef = useRef<HTMLInputElement | null>(null)
   const cameraRef = useRef<HTMLInputElement | null>(null)
   const fileRef = useRef<HTMLInputElement | null>(null)
+  const mobileMoreButtonRef = useRef<HTMLButtonElement | null>(null)
+  const mobileMoreMenuRef = useRef<HTMLDivElement | null>(null)
   const [destOpen, setDestOpen] = useState(false)
+  const [mobileMoreOpen, setMobileMoreOpen] = useState(false)
+  const [desktopMoreOpen, setDesktopMoreOpen] = useState(false)
   void revision
   const activeFont = getActiveFont(editor)
   const activeFontSize = getActiveFontSize(editor)
@@ -9754,6 +10294,32 @@ function EditorInsertBar({
   const isSubscript = isScriptActive(editor, 'subscript')
   const canUndo = HistoryEditor.isHistoryEditor(editor) ? editor.history.undos.length > 0 : false
   const canRedo = HistoryEditor.isHistoryEditor(editor) ? editor.history.redos.length > 0 : false
+
+  useEffect(() => {
+    if (!mobileMoreOpen) return
+
+    mobileMoreMenuRef.current?.querySelector<HTMLElement>('[role="menuitem"]')?.focus()
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      event.preventDefault()
+      setMobileMoreOpen(false)
+      mobileMoreButtonRef.current?.focus()
+    }
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target
+      if (!(target instanceof globalThis.Node)) return
+      if (mobileMoreMenuRef.current?.contains(target) || mobileMoreButtonRef.current?.contains(target)) return
+      setMobileMoreOpen(false)
+    }
+
+    document.addEventListener('keydown', handleKeyDown)
+    document.addEventListener('pointerdown', handlePointerDown)
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown)
+      document.removeEventListener('pointerdown', handlePointerDown)
+    }
+  }, [mobileMoreOpen])
 
   const insertFromAttachments = useCallback(
     (attachments: Attachment[]) => {
@@ -9822,33 +10388,46 @@ function EditorInsertBar({
           >
             I
           </button>
-          <button
-            className={`pill soft ${isMarkActive(editor, 'underline') ? 'active-pill' : ''}`}
-            type="button"
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={() => toggleMark(editor, 'underline')}
-            aria-label="Underline"
-          >
-            U
-          </button>
         </div>
         <div className="toolbar-group">
-          <button className="pill soft" type="button" aria-label="Header" title="Header" onMouseDown={(e) => e.preventDefault()} onClick={() => insertHeadingBlock(editor, 2)}>
-            <UiIcon name="note" />
-            H
-          </button>
           <button className="pill soft" type="button" aria-label="Checklist" title="Checklist" onMouseDown={(e) => e.preventDefault()} onClick={() => insertChecklistBlock(editor)}>
             <UiIcon name="check" />
           </button>
-          <button className="pill soft" type="button" aria-label="Table" title="Table" onMouseDown={(e) => e.preventDefault()} onClick={() => insertTableBlock(editor, [['Sample', 'Value']])}>
-            <UiIcon name="table" />
-          </button>
         </div>
-        <div className="toolbar-group">
-          {onShowTags && (
-            <button className="pill soft" type="button" aria-label="Tags" title="Tags" onMouseDown={(e) => e.preventDefault()} onClick={onShowTags}>
-              <UiIcon name="tag" />
-            </button>
+        <div className="toolbar-overflow mobile-toolbar-overflow">
+          <button
+            ref={mobileMoreButtonRef}
+            className="pill soft toolbar-more-button"
+            type="button"
+            aria-label="More formatting options"
+            aria-expanded={mobileMoreOpen}
+            aria-controls="mobile-formatting-menu"
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => setMobileMoreOpen((open) => !open)}
+          >
+            <UiIcon name="more" />
+          </button>
+          {mobileMoreOpen && typeof document !== 'undefined' && createPortal(
+            <div ref={mobileMoreMenuRef} className="toolbar-popover mobile-toolbar-popover" id="mobile-formatting-menu" role="menu">
+              <button className={`pill soft ${isMarkActive(editor, 'underline') ? 'active-pill' : ''}`} type="button" role="menuitem" onMouseDown={(event) => event.preventDefault()} onClick={() => { toggleMark(editor, 'underline'); setMobileMoreOpen(false); mobileMoreButtonRef.current?.focus() }}>
+                <strong>U</strong><span>Underline</span>
+              </button>
+              <button className="pill soft" type="button" role="menuitem" onMouseDown={(event) => event.preventDefault()} onClick={() => { insertHeadingBlock(editor, 2); setMobileMoreOpen(false); mobileMoreButtonRef.current?.focus() }}>
+                <UiIcon name="note" /><span>Heading</span>
+              </button>
+              <button className="pill soft" type="button" role="menuitem" onMouseDown={(event) => event.preventDefault()} onClick={() => { insertTableBlock(editor, [['Sample', 'Value']]); setMobileMoreOpen(false); mobileMoreButtonRef.current?.focus() }}>
+                <UiIcon name="table" /><span>Table</span>
+              </button>
+              <button className="pill soft" type="button" role="menuitem" onMouseDown={(event) => event.preventDefault()} onClick={() => { cameraRef.current?.click(); setMobileMoreOpen(false); mobileMoreButtonRef.current?.focus() }}>
+                <UiIcon name="camera" /><span>Take photo</span>
+              </button>
+              {onShowTags && (
+                <button className="pill soft" type="button" role="menuitem" onMouseDown={(event) => event.preventDefault()} onClick={() => { onShowTags(); setMobileMoreOpen(false); mobileMoreButtonRef.current?.focus() }}>
+                  <UiIcon name="tag" /><span>Tags</span>
+                </button>
+              )}
+            </div>,
+            document.body
           )}
         </div>
       </div>
@@ -9907,69 +10486,6 @@ function EditorInsertBar({
               ))}
             </select>
           </label>
-          <label className="toolbar-label">
-            <span className="toolbar-label-text">Color</span>
-            <input
-              type="color"
-              value={activeColor}
-              onChange={(event) => setColorMark(editor, event.target.value)}
-              data-testid="editor-font-color"
-            />
-          </label>
-          <button
-            className="pill soft"
-            type="button"
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={() => clearColorMark(editor)}
-            data-testid="editor-color-clear"
-          >
-            Clear
-          </button>
-          <div className="color-swatches">
-            {FONT_COLOR_SWATCHES.map((swatch) => (
-              <button
-                key={swatch}
-                type="button"
-                className="color-swatch"
-                style={{ backgroundColor: swatch }}
-                onMouseDown={(e) => e.preventDefault()}
-                onClick={() => setColorMark(editor, swatch)}
-                aria-label={`Set color ${swatch}`}
-              />
-            ))}
-          </div>
-          <label className="toolbar-label">
-            <span className="toolbar-label-text">Highlight</span>
-            <input
-              type="color"
-              value={activeHighlight}
-              onChange={(event) => setHighlightMark(editor, event.target.value)}
-              data-testid="editor-highlight-color"
-            />
-          </label>
-          <button
-            className="pill soft"
-            type="button"
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={() => clearHighlightMark(editor)}
-            data-testid="editor-highlight-clear"
-          >
-            Clear HL
-          </button>
-          <div className="color-swatches">
-            {HIGHLIGHT_SWATCHES.map((swatch, idx) => (
-              <button
-                key={swatch}
-                type="button"
-                className="color-swatch"
-                style={{ backgroundColor: swatch }}
-                onMouseDown={(e) => e.preventDefault()}
-                onClick={() => toggleHighlight(editor, swatch)}
-                aria-label={`Set highlight ${swatch}`}
-                data-testid={`editor-highlight-swatch-${idx}`}
-              />
-            ))}
-          </div>
           <button
             className={`pill soft ${isMarkActive(editor, 'bold') ? 'active-pill' : ''}`}
             type="button"
@@ -9999,26 +10515,6 @@ function EditorInsertBar({
             data-testid="editor-underline"
           >
             U
-          </button>
-          <button
-            className={`pill soft ${isSuperscript ? 'active-pill' : ''}`}
-            type="button"
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={() => toggleScript(editor, 'superscript')}
-            aria-label="Superscript"
-            data-testid="editor-superscript"
-          >
-            Sup
-          </button>
-          <button
-            className={`pill soft ${isSubscript ? 'active-pill' : ''}`}
-            type="button"
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={() => toggleScript(editor, 'subscript')}
-            aria-label="Subscript"
-            data-testid="editor-subscript"
-          >
-            Sub
           </button>
         </div>
 
@@ -10070,76 +10566,100 @@ function EditorInsertBar({
         <div className="toolbar-sep" />
 
         <div className="toolbar-group toolbar-structure">
-          <button className="pill soft" type="button" aria-label="Header" title="Insert header" onMouseDown={(e) => e.preventDefault()} onClick={() => insertHeadingBlock(editor, 2)}>
-            <UiIcon name="note" />
-            Header
-          </button>
-          <button className="pill soft" type="button" aria-label="Checks" title="Insert checklist" onMouseDown={(e) => e.preventDefault()} onClick={() => insertChecklistBlock(editor)}>
+          <button className="pill soft" type="button" aria-label="Checklist" title="Insert checklist" onMouseDown={(e) => e.preventDefault()} onClick={() => insertChecklistBlock(editor)}>
             <UiIcon name="check" />
-            Checks
-          </button>
-          {LIST_STYLE_OPTIONS.map((option) => (
-            <button
-              key={option.id}
-              className="pill soft"
-              type="button"
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={() => insertListBlock(editor, option.id)}
-              aria-label={option.label}
-              data-testid={`editor-list-${option.id}`}
-            >
-              {option.symbol}
-            </button>
-          ))}
-          {onShowTags && (
-            <button className="pill soft" type="button" aria-label="Tags" title="Manage tags" onMouseDown={(e) => e.preventDefault()} onClick={onShowTags}>
-              <UiIcon name="tag" />
-              Tags
-            </button>
-          )}
-        </div>
-
-        <div className="toolbar-sep" />
-
-        <div className="toolbar-group toolbar-sections">
-          <button className="pill soft" type="button" aria-label="Add context section" title="Add context section" onMouseDown={(e) => e.preventDefault()} onClick={() => insertSection(editor, 'Context')}>
-            + Context
-          </button>
-          <button className="pill soft" type="button" aria-label="Add setup checklist section" title="Add setup checklist section" onMouseDown={(e) => e.preventDefault()} onClick={() => insertSectionWithChecklist(editor, 'Setup')}>
-            + Setup
-          </button>
-          <button className="pill soft" type="button" aria-label="Add observations section" title="Add observations section" onMouseDown={(e) => e.preventDefault()} onClick={() => insertSection(editor, 'Observations')}>
-            + Observations
-          </button>
-        </div>
-
-        <div className="toolbar-sep" />
-
-        <div className="toolbar-group toolbar-insert">
-          <button className="pill soft" type="button" aria-label="Image" title="Insert image" onMouseDown={(e) => e.preventDefault()} onClick={() => imgRef.current?.click()}>
-            <UiIcon name="image" />
-            Image
-          </button>
-          <button className="pill soft" type="button" aria-label="Camera" title="Capture photo" onMouseDown={(e) => e.preventDefault()} onClick={() => cameraRef.current?.click()}>
-            <UiIcon name="camera" />
-            Camera
+            Checklist
           </button>
           <button className="pill soft" type="button" aria-label="Table" title="Insert table" onMouseDown={(e) => e.preventDefault()} onClick={() => insertTableBlock(editor, [['Sample', 'Value']])}>
             <UiIcon name="table" />
             Table
           </button>
+          <button
+            className="pill soft"
+            type="button"
+            aria-label="Bulleted list"
+            title="Insert bulleted list"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => insertListBlock(editor, 'dot')}
+            data-testid="editor-list-dot"
+          >
+            <UiIcon name="list" />
+            <span>List</span>
+          </button>
           <button className="pill soft" type="button" aria-label="File" title="Attach file" onMouseDown={(e) => e.preventDefault()} onClick={() => fileRef.current?.click()}>
             <UiIcon name="file" />
             File
           </button>
-          <button className="pill soft" type="button" aria-label="File destination" title="Set file destination" onMouseDown={(e) => e.preventDefault()} onClick={() => setDestOpen(true)}>
-            <UiIcon name="folder" />
-            File destination
+        </div>
+        <div className="toolbar-overflow desktop-toolbar-overflow">
+          <button
+            className="pill soft toolbar-more-button"
+            type="button"
+            aria-label="More editor options"
+            aria-expanded={desktopMoreOpen}
+            aria-controls="desktop-editor-more-menu"
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => setDesktopMoreOpen((open) => !open)}
+          >
+            <UiIcon name="more" />
+            <span>More</span>
           </button>
-          <button className="pill soft" type="button" aria-label="Divider" title="Insert divider" onMouseDown={(e) => e.preventDefault()} onClick={() => insertDividerBlock(editor)}>
-            <UiIcon name="minus" />
-            Divider
-          </button>
+          {desktopMoreOpen && (
+            <div className="toolbar-popover desktop-toolbar-popover" id="desktop-editor-more-menu" role="menu">
+              <button className="pill soft tablet-more-only" type="button" role="menuitem" onMouseDown={(event) => event.preventDefault()} onClick={() => { setAlign(editor, 'left'); setDesktopMoreOpen(false) }}>
+                <AlignIcon align="left" /><span>Align left</span>
+              </button>
+              <button className="pill soft tablet-more-only" type="button" role="menuitem" onMouseDown={(event) => event.preventDefault()} onClick={() => { setAlign(editor, 'center'); setDesktopMoreOpen(false) }}>
+                <AlignIcon align="center" /><span>Align center</span>
+              </button>
+              <button className="pill soft tablet-more-only" type="button" role="menuitem" onMouseDown={(event) => event.preventDefault()} onClick={() => { setAlign(editor, 'right'); setDesktopMoreOpen(false) }}>
+                <AlignIcon align="right" /><span>Align right</span>
+              </button>
+              <button className="pill soft tablet-more-only" type="button" role="menuitem" onMouseDown={(event) => event.preventDefault()} onClick={() => { setAlign(editor, 'justify'); setDesktopMoreOpen(false) }}>
+                <AlignIcon align="justify" /><span>Justify</span>
+              </button>
+              <button className="pill soft tablet-more-only" type="button" role="menuitem" onMouseDown={(event) => event.preventDefault()} onClick={() => { insertChecklistBlock(editor); setDesktopMoreOpen(false) }}>
+                <UiIcon name="check" /><span>Checklist</span>
+              </button>
+              <button className="pill soft tablet-more-only" type="button" role="menuitem" onMouseDown={(event) => event.preventDefault()} onClick={() => { insertTableBlock(editor, [['Sample', 'Value']]); setDesktopMoreOpen(false) }}>
+                <UiIcon name="table" /><span>Table</span>
+              </button>
+              <button className="pill soft tablet-more-only" type="button" role="menuitem" onMouseDown={(event) => event.preventDefault()} onClick={() => { insertListBlock(editor, 'dot'); setDesktopMoreOpen(false) }}>
+                <UiIcon name="list" /><span>Bulleted list</span>
+              </button>
+              <button className="pill soft tablet-more-only" type="button" role="menuitem" onMouseDown={(event) => event.preventDefault()} onClick={() => { fileRef.current?.click(); setDesktopMoreOpen(false) }}>
+                <UiIcon name="file" /><span>Attach file</span>
+              </button>
+              <button className="pill soft" type="button" role="menuitem" onMouseDown={(event) => event.preventDefault()} onClick={() => { insertHeadingBlock(editor, 2); setDesktopMoreOpen(false) }}>
+                <UiIcon name="note" /><span>Heading</span>
+              </button>
+              <label className="toolbar-popover-field">
+                <span>Text color</span>
+                <input type="color" value={activeColor} onChange={(event) => setColorMark(editor, event.target.value)} data-testid="editor-font-color" />
+              </label>
+              <label className="toolbar-popover-field">
+                <span>Highlight</span>
+                <input type="color" value={activeHighlight} onChange={(event) => setHighlightMark(editor, event.target.value)} data-testid="editor-highlight-color" />
+              </label>
+              <button className={`pill soft ${isSuperscript ? 'active-pill' : ''}`} type="button" role="menuitem" onMouseDown={(event) => event.preventDefault()} onClick={() => toggleScript(editor, 'superscript')} data-testid="editor-superscript">
+                <span>Superscript</span>
+              </button>
+              <button className={`pill soft ${isSubscript ? 'active-pill' : ''}`} type="button" role="menuitem" onMouseDown={(event) => event.preventDefault()} onClick={() => toggleScript(editor, 'subscript')} data-testid="editor-subscript">
+                <span>Subscript</span>
+              </button>
+              <button className="pill soft" type="button" role="menuitem" onMouseDown={(event) => event.preventDefault()} onClick={() => { setDestOpen(true); setDesktopMoreOpen(false) }} data-testid="file-destination-button">
+                <UiIcon name="folder" /><span>Link file path</span>
+              </button>
+              {onShowTags && (
+                <button className="pill soft" type="button" role="menuitem" onMouseDown={(event) => event.preventDefault()} onClick={() => { onShowTags(); setDesktopMoreOpen(false) }}>
+                  <UiIcon name="tag" /><span>Manage tags</span>
+                </button>
+              )}
+              <button className="pill soft" type="button" role="menuitem" onMouseDown={(event) => event.preventDefault()} onClick={() => { clearColorMark(editor); clearHighlightMark(editor); setDesktopMoreOpen(false) }}>
+                <span>Clear colors</span>
+              </button>
+            </div>
+          )}
         </div>
         </div>
 
@@ -10866,6 +11386,19 @@ function renderTextRuns(runs: TextRun[] | undefined, fallbackText: string) {
   })
 }
 
+function formatJournalDisplayText(text: string) {
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/.test(text.trim())) return text
+  const date = new Date(text)
+  if (Number.isNaN(date.getTime())) return text
+  return new Intl.DateTimeFormat('en-US', {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  }).format(date)
+}
+
 const blocksToSlate = (blocks: Block[]): Descendant[] => {
   return blocks.map((block) => {
     switch (block.type) {
@@ -11048,7 +11581,7 @@ function BlockRenderer({ block, attachments, attachmentUrls, onUpdateBlock }: Bl
       if (block.level === 3) return <h3 className="block-heading h3" style={style}>{renderTextRuns(block.runs, block.text)}</h3>
       return <h2 className="block-heading h2" style={style}>{renderTextRuns(block.runs, block.text)}</h2>
     case 'paragraph':
-      return <p className="block-paragraph" style={style}>{renderTextRuns(block.runs, block.text)}</p>
+      return <p className="block-paragraph" style={style}>{renderTextRuns(block.runs, formatJournalDisplayText(block.text))}</p>
     case 'checklist': {
       const visibleItems = block.items.filter((item) => item.text.trim() || !item.guide)
       return (
@@ -11088,13 +11621,17 @@ function BlockRenderer({ block, attachments, attachmentUrls, onUpdateBlock }: Bl
     case 'table': {
       const headerRow = block.headerRow !== false
       return (
-        <div className="table-wrap">
+        <div className="table-wrap semantic-table">
           <table>
             <tbody>
               {block.data.map((row, idx) => (
                 <tr key={idx}>
                   {row.map((cell, cIdx) => (
-                    <td key={cIdx} className={headerRow && idx === 0 ? 'th' : ''}>
+                    <td
+                      key={cIdx}
+                      className={headerRow && idx === 0 ? 'th' : ''}
+                      data-label={headerRow && idx > 0 ? block.data[0]?.[cIdx] : undefined}
+                    >
                       {cell}
                     </td>
                   ))}
@@ -11379,6 +11916,7 @@ function TagPicker({
 }) {
   const [draft, setDraft] = useState('')
   const showMeta = variant !== 'inline' || selected.length > 0
+  const visibleOptions = variant === 'inline' ? Array.from(new Set([...selected, ...options])) : options
 
   const handleAdd = () => {
     if (!onAdd) return
@@ -11410,7 +11948,7 @@ function TagPicker({
           ))}
       </div>
       <div className="chip-row" data-testid={testId}>
-        {options.map((tag) => (
+        {visibleOptions.map((tag) => (
           <button
             key={tag}
             type="button"
@@ -11422,7 +11960,7 @@ function TagPicker({
             {tag}
           </button>
         ))}
-        {options.length === 0 && <span className="muted tiny">No tags yet.</span>}
+        {variant !== 'inline' && options.length === 0 && <span className="muted tiny">No tags yet.</span>}
       </div>
       {onAdd && (
         <div className="tag-add-row">
@@ -11456,7 +11994,7 @@ function NewProtocolModal({
   onCreate: (val: { title?: string; templateId: EntryTemplateId }) => void
 }) {
   const [title, setTitle] = useState('')
-  const [templateId, setTemplateId] = useState<EntryTemplateId>('guided')
+  const [templateId, setTemplateId] = useState<EntryTemplateId>('blank')
   const titleRef = useRef<HTMLInputElement | null>(null)
 
   useEffect(() => {
@@ -11534,23 +12072,11 @@ function NewProtocolModal({
 
 function SettingsModal({
   onClose,
-  theme,
-  onThemeChange,
   appName,
   appOwner,
   appInfo,
   appPaths,
   onEditSetup,
-  masterSyncPath,
-  onMasterSyncPathChange,
-  mobilePairLink,
-  onMobilePairLinkChange,
-  onAutoDetectMobilePairLink,
-  mobilePairAutoMessage,
-  mobilePairStatus,
-  mobilePairQrDataUrl,
-  onCopyMobilePairLink,
-  labStoragePath,
   fsEnabled,
   fsNeedsPermission,
   fsSupported,
@@ -11562,23 +12088,11 @@ function SettingsModal({
   onImportLegacyFile,
 }: {
   onClose: () => void
-  theme: ThemeName
-  onThemeChange: (theme: ThemeName) => void
   appName: string
   appOwner: string
   appInfo: { name: string; version: string; platform: string } | null
   appPaths: AppPaths
   onEditSetup: () => void
-  masterSyncPath: string
-  onMasterSyncPathChange: (value: string) => void
-  mobilePairLink: string
-  onMobilePairLinkChange: (value: string) => void
-  onAutoDetectMobilePairLink: () => Promise<void>
-  mobilePairAutoMessage: string
-  mobilePairStatus: PairLinkStatus
-  mobilePairQrDataUrl: string
-  onCopyMobilePairLink: () => Promise<boolean>
-  labStoragePath: string
   fsEnabled: boolean
   fsNeedsPermission: boolean
   fsSupported: boolean
@@ -11593,68 +12107,24 @@ function SettingsModal({
   const [validation, setValidation] = useState<{ ok: boolean; message?: string } | null>(null)
   const [importing, setImporting] = useState(false)
   const [importStatus, setImportStatus] = useState<{ ok: boolean; message: string } | null>(null)
-  const [pairCopyState, setPairCopyState] = useState<'idle' | 'copied' | 'error'>('idle')
   const importFileRef = useRef<HTMLInputElement | null>(null)
-  const versionLabel = appInfo?.version ? `v${appInfo.version}` : 'Preview build'
+  const versionLabel = appInfo?.version ? `v${appInfo.version}` : 'Installed app'
   const platformLabel = appInfo?.platform ?? 'Web'
-  const mobilePairLinkTrimmed = mobilePairLink.trim()
-  const mobilePairLinkIsValid = isHttpUrl(mobilePairLinkTrimmed)
-  const mobilePairIsTailscale = mobilePairLinkIsValid && isTailscaleUrl(mobilePairLinkTrimmed)
-  const mobilePairConnected = mobilePairLinkIsValid && mobilePairStatus === 'online'
-  const mobilePairStatusLabel =
-    !mobilePairLinkIsValid
-      ? 'Add link'
-      : mobilePairStatus === 'online'
-        ? 'Link online'
-        : mobilePairStatus === 'checking'
-          ? 'Checking'
-          : mobilePairStatus === 'offline'
-            ? 'Link offline'
-            : 'Idle'
-  const mobilePairStatusClass =
-    !mobilePairLinkIsValid
-      ? 'warning'
-      : mobilePairStatus === 'online'
-        ? 'success'
-        : mobilePairStatus === 'offline'
-          ? 'danger'
-          : 'warning'
-  const mobilePairConnectedLabel =
-    !mobilePairLinkIsValid
-      ? 'Awaiting link'
-      : mobilePairConnected
-        ? 'Reachable from phone'
-        : mobilePairStatus === 'checking'
-          ? 'Checking connectivity'
-          : 'Not reachable yet'
-  const mobilePairConnectedClass =
-    !mobilePairLinkIsValid
-      ? 'warning'
-      : mobilePairConnected
-        ? 'success'
-        : mobilePairStatus === 'checking'
-          ? 'warning'
-          : 'danger'
   const outputDestinations = [
     {
-      label: 'Notebook data and state',
+      label: 'Notebook data',
       path: appPaths.dataRoot,
-      use: 'Daily entries, metadata, workbook content, sync queue, and the shared state file.',
+      use: 'Entries, workbook content, and the local save queue.',
     },
     {
-      label: 'Attachment intake and uploads',
+      label: 'Attachments',
       path: appPaths.attachmentsRoot,
-      use: 'Dragged files, pasted images, camera uploads, and Telegram/WhatsApp image or file captures.',
+      use: 'Files added from this device, camera, or share sheet.',
     },
     {
-      label: 'Generated exports',
+      label: 'Exports',
       path: appPaths.exportRoot,
-      use: 'PDFs, Markdown bundles, manifests, and exported experiment folders. Some browser exports may still ask for a destination.',
-    },
-    {
-      label: 'Sync and file destinations',
-      path: appPaths.syncRoot,
-      use: 'Relative file destination blocks and attachment references. The master sync folder uses this value by default.',
+      use: 'PDFs, Markdown bundles, manifests, and experiment exports.',
     },
   ]
 
@@ -11675,7 +12145,7 @@ function SettingsModal({
         <div className="modal-head">
           <div>
             <div className="title-sm">Settings</div>
-            <div className="muted tiny">Storage and sync options (local-first).</div>
+              <div className="muted tiny">Account, files, and advanced tools.</div>
           </div>
           <button className="ghost" onClick={onClose} type="button">Close</button>
         </div>
@@ -11683,385 +12153,231 @@ function SettingsModal({
         <div className="meta-card">
           <div className="settings-row">
             <div>
-              <div className="title-sm">Output and storage destinations</div>
-              <div className="muted tiny">Where Easylab writes generated files, captured media, and notebook data on this laptop.</div>
+              <div className="title-sm">Notebook</div>
+              <div className="muted tiny">Google Drive keeps this notebook backed up. This device keeps an offline copy after sign-in.</div>
             </div>
             <button className="ghost" type="button" onClick={onEditSetup}>
-              Edit setup
+              Notebook location
             </button>
           </div>
-          <div className="settings-output-grid">
-            {outputDestinations.map((item) => {
-              const displayPath = formatDisplayPath(item.path)
-              return (
-                <div className="settings-path-card" key={item.label}>
-                  <div className="settings-path-card-head">
-                    <div className="settings-path-label">{item.label}</div>
-                    <span className={`status-chip ${item.path ? 'success' : 'warning'}`}>
-                      {item.path ? 'Set' : 'Missing'}
-                    </span>
-                  </div>
-                  <div className="settings-path" title={displayPath || undefined}>{displayPath || 'Not set'}</div>
-                  <div className="settings-path-use">{item.use}</div>
-                </div>
-              )
-            })}
-          </div>
-          <div className="settings-notes">
-            <div className="muted tiny">
-              <strong>Export buttons:</strong> use <code>{formatDisplayPath(appPaths.exportRoot) || 'Generated exports'}</code> as the intended output folder. Chrome/Edge folder exports may still ask you to confirm a location; fallback downloads go to the browser Downloads folder.
+          <div className="settings-grid">
+            <div className="settings-path-card">
+              <div className="settings-path-label">Drive notebook</div>
+              <div className="title-sm">Primary notebook</div>
+              <div className="settings-path-use">Entries, attachments, and devices sync through Google Drive.</div>
             </div>
-            <div className="muted tiny">
-              <strong>Phone intake:</strong> Telegram and WhatsApp captures save files under{' '}
-              <code>{formatDisplayPath(appPaths.attachmentsRoot) || 'Attachment intake'}</code> and then link them into the daily note.
+            <div className="settings-path-card">
+              <div className="settings-path-label">Files</div>
+              <div className="title-sm">Add from this device</div>
+              <div className="settings-path-use">Camera captures, PDFs, spreadsheets, and documents attach to entries.</div>
+            </div>
+            <div className="settings-path-card">
+              <div className="settings-path-label">Offline access</div>
+              <div className="title-sm">Available after sign-in</div>
+              <div className="settings-path-use">Recent work remains editable without internet.</div>
             </div>
           </div>
         </div>
 
-        <div className="meta-card">
-          <div className="settings-row">
-            <div>
-              <div className="title-sm">Master sync / file destination root</div>
-              <div className="muted tiny">Where new relative file destinations resolve. This is for lab folders, raw data paths, and shared-drive references.</div>
-            </div>
-          </div>
-
-          <div style={{ marginTop: 10 }}>
-            <label className="field">
-              <span className="muted tiny">Folder or URL</span>
-              <div className="field-row">
-                <input
-                  data-testid="master-sync-input-settings"
-                  value={masterSyncPath}
-                  onChange={(e) => onMasterSyncPathChange(e.target.value)}
-                  placeholder="e.g. D:\\lab-notes\\sync or https://drive.company.com/lab"
-                />
-                {labStoragePath && (
-                  <button className="ghost" type="button" onClick={() => onMasterSyncPathChange(labStoragePath)}>
-                    Use lab storage
-                  </button>
-                )}
-              </div>
-              <span className="field-hint">
-                Changing this does not move existing files. It controls how new file destination blocks and relative attachment paths are resolved.
-              </span>
-            </label>
-          </div>
-        </div>
-
-        <details className="meta-card settings-disclosure" data-testid="mobile-pair-card">
+        <details className="meta-card settings-disclosure" data-testid="settings-advanced">
           <summary className="settings-disclosure-summary">
             <div>
-              <div className="title-sm">Phone access</div>
-              <div className="muted tiny">Optional QR link for opening this notebook from your phone.</div>
+              <div className="title-sm">Advanced</div>
+              <div className="muted tiny">Backup, restore, local folders, and troubleshooting.</div>
             </div>
-            <div className="settings-status-row">
-              <div className={`status-chip ${mobilePairStatusClass}`} data-testid="mobile-pair-status">
-                <span className={`status-dot ${mobilePairStatusClass}`} aria-hidden="true" />
-                {mobilePairStatusLabel}
-              </div>
-              <div className={`status-chip ${mobilePairConnectedClass}`} data-testid="mobile-pair-connected">
-                <span className={`status-dot ${mobilePairConnectedClass}`} aria-hidden="true" />
-                {mobilePairConnectedLabel}
-              </div>
-            </div>
+            <span className="status-chip warning">Backup</span>
           </summary>
 
-          <div className="settings-disclosure-body">
-            <label className="field">
-              <span className="muted tiny">Phone link</span>
-              <div className="field-row">
-                <input
-                  data-testid="mobile-pair-link"
-                  value={mobilePairLink}
-                  onChange={(e) => {
-                    setPairCopyState('idle')
-                    onMobilePairLinkChange(e.target.value)
-                  }}
-                  placeholder="Paste a reachable http(s) notebook link"
-                />
-                <button
-                  className="ghost"
-                  type="button"
-                  onClick={() => {
-                    void onAutoDetectMobilePairLink()
-                  }}
-                >
-                  Detect
-                </button>
-                <button
-                  className="ghost"
-                  type="button"
-                  disabled={!mobilePairLinkIsValid}
-                  onClick={async () => {
-                    const ok = await onCopyMobilePairLink()
-                    setPairCopyState(ok ? 'copied' : 'error')
-                  }}
-                >
-                  Copy link
-                </button>
+          <div className="settings-disclosure-body settings-advanced-body">
+            <div className="settings-subsection">
+              <div className="settings-row">
+                <div>
+                  <div className="title-sm">Local folders</div>
+                  <div className="muted tiny">Used for offline access, attachments, and exports on this device.</div>
+                </div>
+                <button className="ghost" type="button" onClick={onEditSetup}>Change folders</button>
               </div>
-            </label>
-
-            <div className="muted tiny" style={{ marginTop: 8 }}>
-              {pairCopyState === 'copied'
-                ? 'Link copied to clipboard.'
-                  : pairCopyState === 'error'
-                    ? 'Unable to copy link from this browser session.'
-                    : 'Use any private network or local URL your phone can open. Leave this blank if you only use the desktop app.'}
+              <div className="settings-output-grid">
+                {outputDestinations.map((item) => {
+                  const displayPath = formatDisplayPath(item.path)
+                  return (
+                    <div className="settings-path-card" key={item.label}>
+                      <div className="settings-path-card-head">
+                        <div className="settings-path-label">{item.label}</div>
+                        <span className={`status-chip ${item.path ? 'success' : 'warning'}`}>
+                          {item.path ? 'Set' : 'Missing'}
+                        </span>
+                      </div>
+                      <div className="settings-path" title={displayPath || undefined}>{displayPath || 'Not set'}</div>
+                      <div className="settings-path-use">{item.use}</div>
+                    </div>
+                  )
+                })}
+              </div>
             </div>
 
-            {mobilePairAutoMessage ? (
-              <div className="muted tiny" style={{ marginTop: 4 }}>
-                {mobilePairAutoMessage}
+            <div className="settings-subsection">
+              <div className="settings-row">
+                <div>
+                  <div className="title-sm">File access</div>
+                  <div className="muted tiny">Keeps attachments available on this device when supported by the browser.</div>
+                </div>
+                <div className={`status-chip ${badgeClass}`}>{status}</div>
               </div>
-            ) : null}
 
-            <div className="muted tiny mobile-pair-hint">
-              {mobilePairIsTailscale
-                ? 'Private network link detected. The QR code will work when the phone can reach the same network.'
-                : 'This is optional. It does not affect Telegram, WhatsApp, desktop notes, or local file storage.'}
+              {!fsSupported && (
+                <div className="muted tiny" style={{ marginTop: 8 }}>
+                  Attachment files will use browser storage on this device.
+                </div>
+              )}
+
+              {fsSupported && (
+                <div className="settings-actions" style={{ marginTop: 10 }}>
+                  {!fsEnabled && (
+                    <button className="ghost" type="button" onClick={onEnable}>
+                      {fsNeedsPermission ? 'Grant permission' : 'Enable'}
+                    </button>
+                  )}
+                  <button className="ghost" type="button" onClick={onPickDir}>
+                    {fsEnabled ? 'Change folder' : 'Choose folder'}
+                  </button>
+                  <button className="ghost" type="button" onClick={onDisconnect}>
+                    Disconnect folder
+                  </button>
+                  <button
+                    className="accent"
+                    type="button"
+                    disabled={!fsEnabled || validating}
+                    onClick={async () => {
+                      setValidating(true)
+                      try {
+                        const res = await onValidate()
+                        setValidation(res)
+                      } finally {
+                        setValidating(false)
+                      }
+                    }}
+                  >
+                    Check file access
+                  </button>
+                </div>
+              )}
+
+              {validation && (
+                <div className="muted tiny" style={{ marginTop: 10, color: validation.ok ? 'var(--accent)' : 'var(--danger)' }}>
+                  {validation.ok ? 'File access looks good.' : `File access error: ${validation.message ?? 'Unknown error'}`}
+                </div>
+              )}
             </div>
 
-            {mobilePairQrDataUrl ? (
-              <div className="mobile-pair-grid">
-                <img
-                  src={mobilePairQrDataUrl}
-                  alt="QR code for mobile pairing link"
-                  className="mobile-pair-qr"
-                  data-testid="mobile-pair-qr"
-                />
-                <div className="muted tiny">
-                  Scan the QR code from your phone camera to open this notebook.
-                  <br />
-                  Connectivity checks run only while Settings is open.
+            <div className="settings-subsection">
+              <div className="settings-row">
+                <div>
+                  <div className="title-sm">Import existing notes</div>
+                  <div className="muted tiny">Load a previous Easylab backup or state file.</div>
                 </div>
               </div>
-            ) : (
-              <div className="muted tiny" style={{ marginTop: 10 }}>
-                Enter a valid http(s) link to generate the QR code.
+
+              <div className="settings-actions" style={{ marginTop: 10 }}>
+                <button
+                  className="accent"
+                  type="button"
+                  data-testid="import-legacy"
+                  disabled={importing}
+                  onClick={async () => {
+                    setImporting(true)
+                    try {
+                      const res = await onImportLegacy()
+                      setImportStatus(res)
+                    } finally {
+                      setImporting(false)
+                    }
+                  }}
+                >
+                  {importing ? 'Importing...' : 'Import legacy folder'}
+                </button>
+                <button
+                  className="ghost"
+                  type="button"
+                  data-testid="import-legacy-file"
+                  disabled={importing}
+                  onClick={() => importFileRef.current?.click()}
+                >
+                  Import backup file
+                </button>
+                <input
+                  ref={importFileRef}
+                  type="file"
+                  accept="application/json"
+                  data-testid="import-legacy-file-input"
+                  style={{ display: 'none' }}
+                  onChange={async (event) => {
+                    const file = event.target.files?.[0]
+                    if (!file) return
+                    setImporting(true)
+                    try {
+                      const res = await onImportLegacyFile(file)
+                      setImportStatus(res)
+                    } finally {
+                      setImporting(false)
+                      event.target.value = ''
+                    }
+                  }}
+                />
               </div>
-            )}
+
+              {importStatus && (
+                <div className="muted tiny" style={{ marginTop: 10, color: importStatus.ok ? 'var(--accent)' : 'var(--danger)' }}>
+                  {importStatus.message}
+                </div>
+              )}
+            </div>
+
+            <div className="settings-subsection">
+              <div className="settings-row">
+                <div>
+                  <div className="title-sm">Help & about</div>
+                  <div className="muted tiny">App information and support links.</div>
+                </div>
+              </div>
+              <div className="settings-grid">
+                <div>
+                  <div className="muted tiny">App</div>
+                  <div className="settings-path">{appName}</div>
+                </div>
+                <div>
+                  <div className="muted tiny">GitHub</div>
+                  <a
+                    className="settings-path settings-link"
+                    href={APP_GITHUB_URL}
+                    target="_blank"
+                    rel="noreferrer"
+                    data-testid="help-github"
+                  >
+                    github.com/meghamsh738
+                  </a>
+                </div>
+                <div>
+                  <div className="muted tiny">Made by</div>
+                  <div className="title-sm">{appOwner}</div>
+                </div>
+                <div>
+                  <div className="muted tiny">Version</div>
+                  <div className="settings-path">{versionLabel}</div>
+                </div>
+                <div>
+                  <div className="muted tiny">Device type</div>
+                  <div className="settings-path">{platformLabel}</div>
+                </div>
+                <div>
+                  <div className="muted tiny">License</div>
+                  <div className="settings-path">All Rights Reserved</div>
+                </div>
+              </div>
+            </div>
           </div>
         </details>
 
-        <div className="meta-card">
-          <div className="settings-row">
-            <div>
-              <div className="title-sm">Disk cache</div>
-              <div className="muted tiny">Keeps attachments on disk (Chrome/Edge desktop) with IndexedDB fallback.</div>
-            </div>
-            <div className={`status-chip ${badgeClass}`}>{status}</div>
-          </div>
-
-          {!fsSupported && (
-            <div className="muted tiny" style={{ marginTop: 8 }}>
-              File System Access API is not available in this browser. Attachments will use IndexedDB.
-            </div>
-          )}
-
-          {fsSupported && (
-            <div className="settings-actions" style={{ marginTop: 10 }}>
-              {!fsEnabled && (
-                <button className="ghost" type="button" onClick={onEnable}>
-                  {fsNeedsPermission ? 'Grant permission' : 'Enable'}
-                </button>
-              )}
-              <button className="ghost" type="button" onClick={onPickDir}>
-                {fsEnabled ? 'Change folder' : 'Choose folder'}
-              </button>
-              <button className="ghost" type="button" onClick={onDisconnect}>
-                Disconnect
-              </button>
-              <button
-                className="accent"
-                type="button"
-                disabled={!fsEnabled || validating}
-                onClick={async () => {
-                  setValidating(true)
-                  try {
-                    const res = await onValidate()
-                    setValidation(res)
-                  } finally {
-                    setValidating(false)
-                  }
-                }}
-              >
-                Validate write access
-              </button>
-            </div>
-          )}
-
-          {validation && (
-            <div className="muted tiny" style={{ marginTop: 10, color: validation.ok ? 'var(--accent)' : 'var(--danger)' }}>
-              {validation.ok ? 'Disk cache looks good.' : `Disk cache error: ${validation.message ?? 'Unknown error'}`}
-            </div>
-          )}
-        </div>
-
-        <div className="meta-card">
-          <div className="settings-row">
-            <div>
-              <div className="title-sm">Import existing notes</div>
-              <div className="muted tiny">Load labnote-state.json from a folder (for example OneDrive).</div>
-            </div>
-          </div>
-
-          <div className="settings-actions" style={{ marginTop: 10 }}>
-            <button
-              className="accent"
-              type="button"
-              data-testid="import-legacy"
-              disabled={importing}
-              onClick={async () => {
-                setImporting(true)
-                try {
-                  const res = await onImportLegacy()
-                  setImportStatus(res)
-                } finally {
-                  setImporting(false)
-                }
-              }}
-            >
-              {importing ? 'Importing...' : 'Import from folder'}
-            </button>
-            <button
-              className="ghost"
-              type="button"
-              data-testid="import-legacy-file"
-              disabled={importing}
-              onClick={() => importFileRef.current?.click()}
-            >
-              Import from file
-            </button>
-            <input
-              ref={importFileRef}
-              type="file"
-              accept="application/json"
-              data-testid="import-legacy-file-input"
-              style={{ display: 'none' }}
-              onChange={async (event) => {
-                const file = event.target.files?.[0]
-                if (!file) return
-                setImporting(true)
-                try {
-                  const res = await onImportLegacyFile(file)
-                  setImportStatus(res)
-                } finally {
-                  setImporting(false)
-                  event.target.value = ''
-                }
-              }}
-            />
-          </div>
-
-          {importStatus && (
-            <div className="muted tiny" style={{ marginTop: 10, color: importStatus.ok ? 'var(--accent)' : 'var(--danger)' }}>
-              {importStatus.message}
-            </div>
-          )}
-        </div>
-
-        <div className="meta-card">
-          <div className="settings-row">
-            <div>
-              <div className="title-sm">Appearance</div>
-              <div className="muted tiny">Pick a visual style for your notebook.</div>
-            </div>
-          </div>
-
-          <div className="theme-grid" role="radiogroup" aria-label="Theme">
-            {THEME_OPTIONS.map((option) => (
-              <label
-                key={option.id}
-                className={`theme-card ${theme === option.id ? 'active' : ''}`}
-                data-testid={`theme-option-${option.id}`}
-                style={
-                  {
-                    '--preview-bg': option.preview.bg,
-                    '--preview-surface': option.preview.surface,
-                    '--preview-accent': option.preview.accent,
-                    '--preview-border': option.preview.border,
-                  } as React.CSSProperties
-                }
-              >
-                <input
-                  className="theme-radio"
-                  type="radio"
-                  name="theme"
-                  value={option.id}
-                  checked={theme === option.id}
-                  onChange={() => onThemeChange(option.id)}
-                />
-                <div className="theme-card-inner">
-                  <div className="theme-preview" aria-hidden="true">
-                    <div className="theme-preview-surface" />
-                    <div className="theme-preview-accent" />
-                    <div className="theme-preview-chip" />
-                  </div>
-                  <div>
-                    <div className="title-sm">{option.label}</div>
-                    <div className="muted tiny">{option.description}</div>
-                  </div>
-                </div>
-              </label>
-            ))}
-          </div>
-        </div>
-
-        <div className="meta-card">
-          <div className="settings-row">
-            <div>
-              <div className="title-sm">Help & support</div>
-              <div className="muted tiny">Questions, feature requests, and issue reports.</div>
-            </div>
-          </div>
-          <div className="settings-grid">
-            <div>
-              <div className="muted tiny">GitHub</div>
-              <a
-                className="settings-path settings-link"
-                href={APP_GITHUB_URL}
-                target="_blank"
-                rel="noreferrer"
-                data-testid="help-github"
-              >
-                github.com/meghamsh738
-              </a>
-            </div>
-          </div>
-        </div>
-
-        <div className="meta-card">
-          <div className="settings-row">
-            <div>
-              <div className="title-sm">About</div>
-              <div className="muted tiny">{appName}</div>
-            </div>
-          </div>
-          <div className="settings-grid">
-            <div>
-              <div className="muted tiny">Made by</div>
-              <div className="title-sm">{appOwner}</div>
-            </div>
-            <div>
-              <div className="muted tiny">Version</div>
-              <div className="settings-path">{versionLabel}</div>
-            </div>
-            <div>
-              <div className="muted tiny">Platform</div>
-              <div className="settings-path">{platformLabel}</div>
-            </div>
-            <div>
-              <div className="muted tiny">License</div>
-              <div className="settings-path">All Rights Reserved</div>
-            </div>
-          </div>
-        </div>
-
-        <div className="modal-actions">
-          <button className="ghost" onClick={onClose} type="button">Done</button>
-        </div>
       </div>
     </div>
   )
@@ -12127,27 +12443,27 @@ function SetupWizard({
       <div className="setup-card">
         <div className="setup-header">
           <div className="setup-brand">
-            <img src={logoMark} alt={`${appName} logo`} className="brand-mark" />
-            <div>
-              <div className="brand-title">{appName}</div>
-              <div className="muted tiny">First-time storage setup</div>
-            </div>
-          </div>
-          <span className="pill soft">Required</span>
+	            <img src={logoMark} alt={`${appName} logo`} className="brand-mark" />
+	            <div>
+	              <div className="brand-title">{appName}</div>
+	              <div className="muted tiny">Notebook storage</div>
+	            </div>
+	          </div>
+	          <span className="pill soft">Required</span>
         </div>
 
-        <div className="setup-body">
-          <p className="muted tiny">
-            Choose where notebook data, attachment intake, generated exports, and file-destination references should live
-            on this machine. You can edit these later in Settings.
-          </p>
+	        <div className="setup-body">
+	          <p className="muted tiny">
+	            Choose where offline notebook data, attachments, exports, and file references live on this machine.
+	            You can edit these later in Settings &gt; Advanced.
+	          </p>
           <p className="muted tiny">
             These folders do not need to exist yet - Easylab will create them when you finish setup.
           </p>
 
-          <div className="setup-grid">
-            <label className="field">
-              <span className="muted tiny">Notebook data and state</span>
+	          <div className="setup-grid">
+	            <label className="field">
+	              <span className="muted tiny">Notebook data</span>
               <div className="field-row">
                 <input
                   data-testid="setup-data-root"
@@ -12161,11 +12477,11 @@ function SetupWizard({
                   </button>
                 )}
               </div>
-              <span className="field-hint">Daily entries, workbook content, metadata, and shared state.</span>
-            </label>
+	              <span className="field-hint">Entries, workbook content, and save queue.</span>
+	            </label>
 
-            <label className="field">
-              <span className="muted tiny">Attachment intake and uploads</span>
+	            <label className="field">
+	              <span className="muted tiny">Attachments</span>
               <div className="field-row">
                 <input
                   data-testid="setup-attachments-root"
@@ -12179,8 +12495,8 @@ function SetupWizard({
                   </button>
                 )}
               </div>
-              <span className="field-hint">Dragged files, pasted images, camera uploads, and phone intake media.</span>
-            </label>
+	              <span className="field-hint">Files added from this device, camera, or share sheet.</span>
+	            </label>
 
             <label className="field">
               <span className="muted tiny">Generated exports</span>
@@ -12200,8 +12516,8 @@ function SetupWizard({
               <span className="field-hint">PDFs, Markdown bundles, manifests, and experiment export folders.</span>
             </label>
 
-            <label className="field">
-              <span className="muted tiny">Sync and file destinations</span>
+	            <label className="field">
+	              <span className="muted tiny">File references</span>
               <div className="field-row">
                 <input
                   data-testid="setup-sync-root"
@@ -12215,8 +12531,8 @@ function SetupWizard({
                   </button>
                 )}
               </div>
-              <span className="field-hint">Relative file destination blocks and shared lab folder references.</span>
-            </label>
+	              <span className="field-hint">Relative references for lab data paths.</span>
+	            </label>
           </div>
 
           {error && <div className="setup-error">{error}</div>}
