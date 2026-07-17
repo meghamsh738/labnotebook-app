@@ -1,0 +1,140 @@
+{
+  "version": 1,
+  "app": "easylab-lab-notebook",
+  "exportedAt": "2026-07-16T12:00:00.000Z",
+  "snapshot": {
+    "entries": {
+      "entry-local": {
+        "id": "entry-local",
+        "createdDatetime": "2026-07-16T10:00:00.000Z",
+        "lastEditedDatetime": "2026-07-16T11:00:00.000Z",
+        "authorId": "legacy-researcher",
+        "title": "Local observation",
+        "dateBucket": "2026-07-16",
+        "isDaily": true,
+        "content": [
+          {
+            "id": "block-local",
+            "type": "paragraph",
+            "text": "Microglia remained viable after treatment."
+          }
+        ],
+        "tags": ["microglia"],
+        "projectTags": ["IL-17"],
+        "experimentTags": ["viability"],
+        "searchTerms": ["microglia", "viability"],
+        "linkedFiles": ["att-local"],
+        "pinnedRegions": [],
+        "syncPath": "~/Documents/Easylab/entry-local.json",
+        "version": 3,
+        "updatedByDeviceId": "legacy-web-device",
+        "syncStatus": "queued",
+        "source": "manual"
+      }
+    },
+    "attachments": [
+      {
+        "id": "att-local",
+        "entryId": "entry-local",
+        "type": "file",
+        "filename": "viability.csv",
+        "filesize": "5 bytes",
+        "bytes": 5,
+        "storagePath": "fs:///Users/researcher/viability.csv",
+        "thumbnail": "blob:https://legacy.invalid/thumbnail",
+        "pinnedOffline": true,
+        "cachedPath": "/Users/researcher/Library/Caches/viability.csv",
+        "contentType": "text/csv",
+        "mimeType": "text/csv",
+        "sha256": "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824",
+        "cacheKey": "attachment-att-local",
+        "syncStatus": "failed",
+        "createdAt": "2026-07-16T10:30:00.000Z",
+        "updatedAt": "2026-07-16T11:10:00.000Z"
+      }
+    ],
+    "fileBoxItems": [
+      {
+        "id": "filebox-local",
+        "entryId": "entry-local",
+        "attachmentId": "att-local",
+        "filename": "viability.csv",
+        "filesize": "5 bytes",
+        "contentType": "text/csv",
+        "sourceDeviceId": "legacy-web-device",
+        "sourceDeviceName": "Legacy web app",
+        "status": "queued",
+        "createdAt": "2026-07-16T10:30:00.000Z",
+        "updatedAt": "2026-07-16T11:10:00.000Z",
+        "localObjectUrl": "blob:https://legacy.invalid/file"
+      }
+    ],
+    "transfers": [
+      {
+        "id": "transfer-local",
+        "fileBoxItemId": "filebox-local",
+        "entryId": "entry-local",
+        "attachmentId": "att-local",
+        "filename": "viability.csv",
+        "fromDeviceId": "legacy-web-device",
+        "fromDeviceName": "Legacy web app",
+        "provider": "google-drive",
+        "status": "queued",
+        "bytesTotal": 5,
+        "bytesTransferred": 0,
+        "createdAt": "2026-07-16T10:30:00.000Z",
+        "updatedAt": "2026-07-16T11:10:00.000Z"
+      }
+    ],
+    "conflicts": [
+      {
+        "id": "conflict-local",
+        "entityKind": "entry",
+        "entityId": "entry-local",
+        "localUpdatedAt": "2026-07-16T11:00:00.000Z",
+        "remoteUpdatedAt": "2026-07-16T10:55:00.000Z",
+        "detectedAt": "2026-07-16T11:05:00.000Z",
+        "resolution": "pending",
+        "summary": "Local observation has not been reconciled.",
+        "localCopy": {"version": 3},
+        "remoteCopy": {"version": 2}
+      }
+    ],
+    "tombstones": [
+      {
+        "id": "delete-att-deleted",
+        "entityKind": "attachment",
+        "entityId": "att-deleted",
+        "deletedAt": "2026-07-16T11:20:00.000Z",
+        "deletedByDeviceId": "legacy-web-device",
+        "reason": "Removed before migration"
+      }
+    ],
+    "device": {
+      "id": "legacy-web-device",
+      "name": "Legacy web app",
+      "platform": "web",
+      "createdAt": "2026-07-01T08:00:00.000Z",
+      "lastSeenAt": "2026-07-16T12:00:00.000Z",
+      "appVersion": "1.0.0"
+    }
+  },
+  "blobs": [
+    {
+      "id": "attachment-att-local",
+      "sha256": "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824",
+      "size": 5,
+      "mimeType": "text/csv",
+      "updatedAt": "2026-07-16T11:10:00.000Z",
+      "dataBase64": "aGVsbG8="
+    },
+    {
+      "id": "orphan-legacy-blob",
+      "sha256": "88f6811ab5d8fc6d3177f9b7609ae0fcebfda187e5046b62d38bb539e88b74d7",
+      "size": 6,
+      "mimeType": "application/octet-stream",
+      "updatedAt": "2026-07-16T11:15:00.000Z",
+      "dataBase64": "b3JwaGFu"
+    }
+  ]
+}
