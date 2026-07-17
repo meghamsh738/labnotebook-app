@@ -65,6 +65,8 @@ import com.easylab.labnotebook.data.repository.InMemoryAttachmentRepository
 import com.easylab.labnotebook.data.repository.FileHubRepository
 import com.easylab.labnotebook.data.repository.InMemoryFileHubRepository
 import com.easylab.labnotebook.data.repository.InMemoryJournalRepository
+import com.easylab.labnotebook.data.repository.InMemoryProtocolRepository
+import com.easylab.labnotebook.data.repository.ProtocolRepository
 import com.easylab.labnotebook.data.repository.JournalRepository
 import com.easylab.labnotebook.data.repository.PlaceholderAuthRepository
 import com.easylab.labnotebook.IncomingShareRequest
@@ -85,6 +87,7 @@ private enum class Destination(val label: String, val icon: ImageVector, val pri
     Files("Files", Icons.Outlined.Folder, true),
     Sync("Sync", Icons.Outlined.Sync, true),
     Settings("Settings", Icons.Outlined.MoreVert),
+    Protocols("Protocols", Icons.Outlined.CalendarMonth),
     Auth("Account", Icons.Outlined.AccountCircle),
     Entry("Entry", Icons.Outlined.CalendarMonth),
 }
@@ -97,6 +100,7 @@ fun LabNotebookApp(
     deviceId: String? = null,
     attachmentRepository: AttachmentRepository = InMemoryAttachmentRepository(),
     fileHubRepository: FileHubRepository = InMemoryFileHubRepository(),
+    protocolRepository: ProtocolRepository = InMemoryProtocolRepository(),
     captureRepository: CaptureRepository? = null,
     pendingShare: IncomingShareRequest? = null,
     onShareConsumed: (String) -> Unit = {},
@@ -169,6 +173,7 @@ fun LabNotebookApp(
                         session = signedInSession,
                         onAccount = { destination = Destination.Auth },
                         onSettings = { destination = Destination.Settings },
+                        onProtocols = { destination = Destination.Protocols },
                     )
                 },
                 containerColor = Paper,
@@ -212,6 +217,10 @@ fun LabNotebookApp(
                             driveAccess = driveAccess,
                             syncCoordinator = syncCoordinator,
                             onReconnect = onConnect,
+                        )
+                        Destination.Protocols -> ProtocolsScreen(
+                            accountId = signedInSession.accountId,
+                            repository = protocolRepository,
                         )
                         Destination.Auth -> AuthScreen(
                             session = signedInSession,
@@ -343,6 +352,7 @@ private fun AppTopBar(
     session: AuthSession,
     onAccount: () -> Unit,
     onSettings: () -> Unit,
+    onProtocols: () -> Unit,
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
     TopAppBar(
@@ -368,6 +378,13 @@ private fun AppTopBar(
                     expanded = menuExpanded,
                     onDismissRequest = { menuExpanded = false },
                 ) {
+                    DropdownMenuItem(
+                        text = { Text("Protocols") },
+                        onClick = {
+                            menuExpanded = false
+                            onProtocols()
+                        },
+                    )
                     DropdownMenuItem(
                         text = { Text("Settings") },
                         onClick = {

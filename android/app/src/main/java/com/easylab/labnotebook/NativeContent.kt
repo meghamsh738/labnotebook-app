@@ -13,6 +13,7 @@ import com.easylab.labnotebook.data.repository.RoomAttachmentRepository
 import com.easylab.labnotebook.data.repository.RoomFileHubRepository
 import com.easylab.labnotebook.data.repository.RoomJournalRepository
 import com.easylab.labnotebook.data.repository.RoomEntryMutationRepository
+import com.easylab.labnotebook.data.repository.RoomProtocolRepository
 import com.easylab.labnotebook.ui.LabNotebookApp
 
 object NativeContent {
@@ -42,6 +43,7 @@ object NativeContent {
                 deviceId = deviceId,
                 attachmentRepository = RoomAttachmentRepository(dao),
                 fileHubRepository = RoomFileHubRepository(dao),
+                protocolRepository = RoomProtocolRepository(dao),
                 captureRepository = captureRepository,
                 pendingShare = pendingShare,
                 onShareConsumed = shareViewModel::consume,

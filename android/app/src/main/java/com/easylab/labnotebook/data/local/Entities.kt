@@ -112,3 +112,24 @@ data class DriveRawDocumentEntity(
     val driveModifiedAt: String,
     val rawJson: String,
 )
+
+/**
+ * Account-local protocol document. Protocols intentionally remain outside Drive v1 and the sync queue.
+ * contentJson uses the web-compatible block array shape so a later, explicitly reviewed parity milestone
+ * can map these documents without changing the local schema.
+ */
+@Entity(
+    tableName = "protocols",
+    primaryKeys = ["accountId", "id"],
+    indices = [Index(value = ["accountId", "updatedAt"]), Index(value = ["accountId", "title"])],
+)
+data class ProtocolEntity(
+    override val accountId: String,
+    override val id: String,
+    val title: String,
+    val createdAt: String,
+    val updatedAt: String,
+    val contentJson: String = "[]",
+    val tagsJson: String = "[]",
+    val searchTermsJson: String = "[]",
+) : AccountScopedRecord

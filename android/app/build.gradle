@@ -47,6 +47,7 @@ android {
     }
     testOptions {
         unitTests.includeAndroidResources = true
+        unitTests.all { maxHeapSize = "1024m" }
     }
     packagingOptions {
         resources.excludes += '/META-INF/{AL2.0,LGPL2.1}'

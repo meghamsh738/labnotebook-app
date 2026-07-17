@@ -345,7 +345,7 @@ class RoomRepositoriesTest {
     }
 
     @Test
-    fun roomMigrationFromV1PreservesRowsAndAddsV3Schema() = runTest {
+    fun roomMigrationFromV1PreservesRowsAndAddsV4Schema() = runTest {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val databaseName = "migration-${System.nanoTime()}.db"
         context.deleteDatabase(databaseName)
@@ -362,7 +362,11 @@ class RoomRepositoriesTest {
         legacy.close()
 
         val migrated = Room.databaseBuilder(context, LabNotebookDatabase::class.java, databaseName)
-            .addMigrations(LabNotebookDatabase.MIGRATION_1_2, LabNotebookDatabase.MIGRATION_2_3)
+            .addMigrations(
+                LabNotebookDatabase.MIGRATION_1_2,
+                LabNotebookDatabase.MIGRATION_2_3,
+                LabNotebookDatabase.MIGRATION_3_4,
+            )
             .allowMainThreadQueries()
             .build()
         try {
@@ -373,6 +377,7 @@ class RoomRepositoriesTest {
             assertEquals("result.csv", dao.attachment("account-a", "attachment-1")?.filename)
             assertEquals(1, dao.pendingQueue("account-a").size)
             assertEquals(0, dao.observeSyncState("account-a").first()?.queueCount)
+            assertTrue(dao.observeProtocols("account-a").first().isEmpty())
             dao.upsertDevice(device("account-a"))
             assertEquals(1, dao.devices("account-a").size)
             val raw = rawDocument("account-a")

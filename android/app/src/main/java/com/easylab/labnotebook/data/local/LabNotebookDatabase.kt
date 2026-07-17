@@ -12,15 +12,16 @@ import androidx.room.withTransaction
     entities = [
         AccountEntity::class, JournalEntryEntity::class, AttachmentEntity::class, DeviceEntity::class,
         FileBoxItemEntity::class, TransferEntity::class, ConflictEntity::class, TombstoneEntity::class,
-        SyncQueueEntity::class, SyncStateEntity::class, DriveRawDocumentEntity::class,
+        SyncQueueEntity::class, SyncStateEntity::class, DriveRawDocumentEntity::class, ProtocolEntity::class,
     ],
-    version = 3,
+    version = 4,
     exportSchema = true,
 )
 abstract class LabNotebookDatabase : RoomDatabase() {
     abstract fun dao(): LabNotebookDao
 
     suspend fun clearAccount(accountId: AccountId) = withTransaction {
+        dao().clearProtocols(accountId.value)
         dao().clearDriveRawDocuments(accountId.value)
         dao().clearTombstones(accountId.value)
         dao().clearConflicts(accountId.value)
@@ -82,10 +83,27 @@ abstract class LabNotebookDatabase : RoomDatabase() {
                 )
             }
         }
+        val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS protocols (" +
+                        "accountId TEXT NOT NULL, id TEXT NOT NULL, title TEXT NOT NULL, " +
+                        "createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL, contentJson TEXT NOT NULL, " +
+                        "tagsJson TEXT NOT NULL, searchTermsJson TEXT NOT NULL, PRIMARY KEY(accountId, id))",
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_protocols_accountId_updatedAt ON protocols(accountId, updatedAt)",
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_protocols_accountId_title ON protocols(accountId, title)",
+                )
+            }
+        }
+
 
         fun get(context: Context): LabNotebookDatabase = instance ?: synchronized(this) {
             instance ?: Room.databaseBuilder(context.applicationContext, LabNotebookDatabase::class.java, "easylab-native-journal.db")
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
                 .build().also { instance = it }
         }
     }

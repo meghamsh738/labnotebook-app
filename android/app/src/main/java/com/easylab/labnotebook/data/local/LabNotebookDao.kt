@@ -1,6 +1,8 @@
 package com.easylab.labnotebook.data.local
 
 import androidx.room.Dao
+import androidx.room.Insert
+import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import androidx.room.Transaction
 import androidx.room.Upsert
@@ -34,6 +36,42 @@ interface LabNotebookDao {
     ): DriveRawDocumentEntity?
     @Query("SELECT * FROM drive_raw_documents WHERE accountId = :accountId ORDER BY path")
     suspend fun driveRawDocuments(accountId: String): List<DriveRawDocumentEntity>
+
+    @Query("SELECT * FROM protocols WHERE accountId = :accountId ORDER BY updatedAt DESC, title COLLATE NOCASE")
+    fun observeProtocols(accountId: String): Flow<List<ProtocolEntity>>
+    @Query("SELECT * FROM protocols WHERE accountId = :accountId AND id = :protocolId LIMIT 1")
+    suspend fun protocol(accountId: String, protocolId: String): ProtocolEntity?
+    @Insert(onConflict = OnConflictStrategy.ABORT)
+    suspend fun insertProtocolRow(protocol: ProtocolEntity)
+
+    @Transaction
+    suspend fun insertProtocol(protocol: ProtocolEntity) {
+        check(account(protocol.accountId) != null) { "Protocol account is not active." }
+        insertProtocolRow(protocol)
+    }
+    @Query(
+        "UPDATE protocols SET title = :title, updatedAt = :updatedAt, contentJson = :contentJson, " +
+            "tagsJson = :tagsJson, searchTermsJson = :searchTermsJson " +
+            "WHERE accountId = :accountId AND id = :protocolId AND updatedAt = :expectedUpdatedAt " +
+            "AND createdAt = :createdAt AND EXISTS " +
+            "(SELECT 1 FROM accounts WHERE accounts.accountId = :accountId)",
+    )
+    suspend fun compareAndSetProtocol(
+        accountId: String,
+        protocolId: String,
+        expectedUpdatedAt: String,
+        createdAt: String,
+        title: String,
+        updatedAt: String,
+        contentJson: String,
+        tagsJson: String,
+        searchTermsJson: String,
+    ): Int
+    @Query(
+        "DELETE FROM protocols WHERE accountId = :accountId AND id = :protocolId AND EXISTS " +
+            "(SELECT 1 FROM accounts WHERE accounts.accountId = :accountId)",
+    )
+    suspend fun deleteProtocol(accountId: String, protocolId: String): Int
 
     @Query(
         "SELECT * FROM journal_entries AS entry WHERE entry.accountId = :accountId " +
@@ -448,4 +486,5 @@ interface LabNotebookDao {
     @Query("DELETE FROM sync_queue WHERE accountId = :accountId") suspend fun clearQueue(accountId: String)
     @Query("DELETE FROM sync_state WHERE accountId = :accountId") suspend fun clearSyncState(accountId: String)
     @Query("DELETE FROM drive_raw_documents WHERE accountId = :accountId") suspend fun clearDriveRawDocuments(accountId: String)
+    @Query("DELETE FROM protocols WHERE accountId = :accountId") suspend fun clearProtocols(accountId: String)
 }
