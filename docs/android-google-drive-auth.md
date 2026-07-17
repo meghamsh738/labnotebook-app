@@ -1,16 +1,17 @@
 # Android Google Drive Auth Foundation
 
-This app is moving toward an account-first Google Drive workspace across desktop, PWA, and Android. Android starts as a Capacitor wrapper around the shared React app, using package id `com.easylab.labnotebook`.
+Easylab uses an account-first Google Drive workspace across desktop, PWA, and Android. The primary Android application is a native Jetpack Compose app using package id `com.easylab.labnotebook`. A Capacitor activity remains only as a temporary compatibility and migration surface while native feature parity is completed.
 
 ## Current Implementation
 
-The Android project now registers a native Capacitor plugin named `GoogleDriveAuth`.
+The primary Compose activity uses native Android authentication/session handling. The retained Capacitor compatibility activity registers a plugin named `GoogleDriveAuth` for the legacy React bridge.
 
 - Plugin file: `android/app/src/main/java/com/easylab/labnotebook/GoogleDriveAuthPlugin.java`
-- Registration: `android/app/src/main/java/com/easylab/labnotebook/MainActivity.java`
+- Compatibility registration: `android/app/src/main/java/com/easylab/labnotebook/LegacyWebActivity.java`
+- Native entry point: `android/app/src/main/java/com/easylab/labnotebook/MainActivity.java`
 - Google Play Services dependency: `com.google.android.gms:play-services-auth`
 
-The plugin uses Google's native authorization client to request the Drive scope and returns only a short-lived access token plus profile metadata to the React layer. The web app never stores Android access tokens in `localStorage` or IndexedDB; it stores only account/folder metadata through the existing `DriveConnectionState`.
+The compatibility plugin uses Google's native authorization client to request the Drive scope and returns only a short-lived access token plus profile metadata to the React layer. The web app never stores Android access tokens in `localStorage` or IndexedDB; it stores only account/folder metadata through the existing `DriveConnectionState`.
 
 The debug APK build requires a local Java runtime and Android SDK. On this Mac, Java 21 and the Android command-line tools are installed locally, and `npm run android:build:debug` produces `android/app/build/outputs/apk/debug/app-debug.apk`.
 
