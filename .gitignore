@@ -17,6 +17,20 @@ pnpm-debug.log*
 .labnote-smoke/
 .labnote-device-smoke/
 
+# Local review and recovery artifacts
+/output/
+/_codex_runs/
+/test-results/
+/.codex_tmp_*
+
+# Local credentials and signing material
+.env
+.env.*
+!.env.example
+*.jks
+*.keystore
+google-services.json
+
 # Playwright artifacts
 web/test-results/
 web/playwright-report/
