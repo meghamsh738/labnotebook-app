@@ -3698,6 +3698,15 @@ body .app-shell > aside.panel.sidebar .sidebar-content > .connected-mode-toggle 
     grid-template-columns: 64px minmax(0, 1fr) !important;
   }
 
+  body .app-shell.sidebar-collapsed {
+    grid-template-columns: 64px minmax(0, 1fr) !important;
+  }
+
+  body .app-shell > main.panel.editor {
+    grid-column: 2;
+    min-width: 0;
+  }
+
   body .app-shell > .panel.sidebar {
     width: 64px !important;
     min-width: 64px !important;

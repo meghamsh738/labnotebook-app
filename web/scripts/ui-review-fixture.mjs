@@ -492,9 +492,10 @@ export function buildUiReviewFixture(referenceDate = new Date()) {
     folderId: 'review-workspace',
     connectedAccount: {
       provider: 'google',
-      email: '',
+      email: 'researcher@example.invalid',
       name: 'Researcher',
       subject: ACCOUNT_ID,
+      storageScope: ACCOUNT_ID,
     },
     connectedAt: sixDaysAgo.timestamp,
     lastSyncAt: today.timestamp,

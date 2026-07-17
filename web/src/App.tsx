@@ -2860,6 +2860,7 @@ function App() {
       }
       setSelectedEntryId(entryId)
       setActivePane('entries')
+      setMobileSidebarOpen(false)
     },
     [entryDrafts, handleSelectDate, selectedDate]
   )
@@ -5820,7 +5821,10 @@ function Sidebar({
               aria-label="Protocols"
               title="Protocols"
               aria-selected={isProtocolsMode}
-              onClick={() => onModeChange('protocols')}
+              onClick={() => {
+                onModeChange('protocols')
+                onCloseMobile()
+              }}
             >
               <UiIcon name="book" />
               <span>Protocols</span>
@@ -5832,7 +5836,10 @@ function Sidebar({
               aria-label="Files"
               title="Files"
               aria-selected={mode === 'file-hub'}
-              onClick={() => onModeChange('file-hub')}
+              onClick={() => {
+                onModeChange('file-hub')
+                onCloseMobile()
+              }}
             >
               <UiIcon name="paperclip" />
               <span>Files</span>
@@ -5844,7 +5851,10 @@ function Sidebar({
               aria-label="Sync"
               title="Sync"
               aria-selected={mode === 'sync'}
-              onClick={() => onModeChange('sync')}
+              onClick={() => {
+                onModeChange('sync')
+                onCloseMobile()
+              }}
             >
               <UiIcon name="refresh" />
               <span>Sync</span>

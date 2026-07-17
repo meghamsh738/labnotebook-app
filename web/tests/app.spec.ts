@@ -825,8 +825,78 @@ test.describe('Lab note taking app', () => {
     await expect(sidebar.getByTestId('entry-list').getByRole('button')).not.toHaveCount(0)
 
     await sidebar.getByRole('tab', { name: 'Protocols', exact: true }).click()
+    await expect(page.locator('aside[aria-label="Lab navigation"]')).not.toHaveClass(/mobile-open/)
     await expect(page.getByTestId('protocol-view')).toBeVisible()
   })
+
+  test('tablet drawer preserves editor width and closes before entry actions', async ({ page }) => {
+    await page.setViewportSize({ width: 820, height: 1180 })
+    await boot(page, { noFail: '1' })
+
+    await page.getByTestId('mobile-open-sidebar').click()
+    const sidebar = page.getByRole('complementary', { name: 'Lab navigation' })
+    const editor = page.locator('main.panel.editor')
+    await expect(sidebar).toHaveClass(/mobile-open/)
+    await expect.poll(() => editor.evaluate((element) => element.getBoundingClientRect().width)).toBeGreaterThan(700)
+
+    const editorBounds = await editor.boundingBox()
+    expect(editorBounds).not.toBeNull()
+    expect(editorBounds!.x).toBeGreaterThanOrEqual(63)
+    expect(editorBounds!.x + editorBounds!.width).toBeLessThanOrEqual(821)
+
+    await sidebar.getByTestId('entry-list').getByRole('button').last().click()
+    await expect(sidebar).not.toHaveClass(/mobile-open/)
+
+    await page.getByTestId('editor-tab-workbook').click()
+    await expect(page.getByTestId('entry-workbook')).toBeVisible()
+    await page.getByTestId('editor-tab-note').click()
+    await page.getByTestId('edit-note-btn').click()
+    await expect(page.getByTestId('entry-save')).toBeVisible()
+  })
+
+  test('phone drawer does not remain stale after entry selection', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 })
+    await boot(page, { noFail: '1' })
+
+    await page.getByTestId('mobile-open-sidebar').click()
+    const sidebar = page.locator('aside[aria-label="Lab navigation"]')
+    await expect(sidebar).toHaveClass(/mobile-open/)
+    await sidebar.getByTestId('entry-list').getByRole('button').last().click()
+    await expect(sidebar).not.toHaveClass(/mobile-open/)
+
+    await page.getByTestId('editor-tab-files').click()
+    await expect(page.locator('.files-tab-panel')).toBeVisible()
+  })
+
+  test('tablet collapsed rail keeps the editor aligned after resize', async ({ page }) => {
+    await page.setViewportSize({ width: 1212, height: 720 })
+    await boot(page, { noFail: '1' })
+    await page.getByTestId('sidebar-toggle').click()
+    await expect(page.locator('.app-shell')).toHaveClass(/sidebar-collapsed/)
+
+    await page.setViewportSize({ width: 820, height: 1180 })
+    const sidebar = page.locator('aside[aria-label="Lab navigation"]')
+    const editor = page.locator('main.panel.editor')
+    await expect.poll(async () => {
+      const sidebarBounds = await sidebar.boundingBox()
+      const editorBounds = await editor.boundingBox()
+      if (!sidebarBounds || !editorBounds) return -1
+      return editorBounds.x - (sidebarBounds.x + sidebarBounds.width)
+    }).toBeGreaterThanOrEqual(0)
+    await expect.poll(() => editor.evaluate((element) => element.getBoundingClientRect().x)).toBeGreaterThanOrEqual(63)
+  })
+
+  for (const [label, expectedTestId] of [['Files', 'file-hub-pane'], ['Sync', 'sync-pane']] as const) {
+    test(`phone drawer closes when selecting ${label}`, async ({ page }) => {
+      await page.setViewportSize({ width: 390, height: 844 })
+      await boot(page, { noFail: '1' })
+      await page.getByTestId('mobile-open-sidebar').click()
+      const sidebar = page.locator('aside[aria-label="Lab navigation"]')
+      await sidebar.getByRole('tab', { name: label, exact: true }).click()
+      await expect(sidebar).not.toHaveClass(/mobile-open/)
+      await expect(page.getByTestId(expectedTestId)).toBeVisible()
+    })
+  }
 
   test('mobile uses compact image rows while desktop keeps preview images', async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 })

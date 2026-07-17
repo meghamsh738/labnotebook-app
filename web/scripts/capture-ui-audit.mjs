@@ -219,20 +219,18 @@ const states = [
 async function clickIfVisible(page, selector) {
   const locator = page.locator(selector).first()
   if ((await locator.count()) === 0) return false
-  try {
-    await locator.click({ timeout: 1_200 })
-    await page.waitForTimeout(180)
-    return true
-  } catch {
-    return false
-  }
+  if (!(await locator.isVisible())) return false
+  await locator.click({ timeout: 1_200 })
+  await page.waitForTimeout(180)
+  return true
 }
 
 async function selectFixtureEntry(page, entryId) {
   const entry = page.getByTestId(`entry-list-item-${entryId}`)
   if (await entry.isVisible().catch(() => false)) {
     await entry.click()
-    return true
+    await assertNarrowSidebarClosed(page)
+    return
   }
   const mobileMenu = page.getByTestId('mobile-open-sidebar')
   if (await mobileMenu.isVisible().catch(() => false)) {
@@ -240,10 +238,19 @@ async function selectFixtureEntry(page, entryId) {
     await page.waitForTimeout(120)
     if (await entry.isVisible().catch(() => false)) {
       await entry.click()
-      return true
+      await assertNarrowSidebarClosed(page)
+      return
     }
   }
-  return false
+  throw new Error(`Required fixture entry was not reachable: ${entryId}`)
+}
+
+async function assertNarrowSidebarClosed(page) {
+  const viewportWidth = page.viewportSize()?.width ?? Number.POSITIVE_INFINITY
+  if (viewportWidth > 1023) return
+  await page
+    .locator('aside[aria-label="Lab navigation"].mobile-open')
+    .waitFor({ state: 'detached', timeout: 1_200 })
 }
 
 async function ensureEntryViewMode(page) {
@@ -480,7 +487,7 @@ for (const [viewportName, viewport] of viewports) {
       }
     })
     page.on('pageerror', (error) => consoleMessages.push({ type: 'pageerror', text: String(error).slice(0, 500) }))
-    const url = `${baseUrl}${state.url ?? '/?devDrivePreview=1'}`
+    const url = `${baseUrl}${state.url ?? '/'}`
     const captureName = `${viewportName}-${state.name}`
     const filePath = path.join(screenshotDir, `${captureName}.png`)
     try {
