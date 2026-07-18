@@ -1,0 +1,45 @@
+= oO
+
+FILE HUB
+Easylab Entry file boxes and incoming lab files 3 2 2 a 0
+es Open Attached Transfers eve Conflicts
+Entries
+8 Q Search entries or files... BK © Source ~ Tl Sort: Newest ~ ©) Export report
+& Protocols
+Daily entry file boxes
+6 File Hub Each day owns its attachments, pending files, and transfer history.
+May 25, 2026 i) oO = ® Google Drive 5 -
+TY Transfers > B 3026-08-25 = = No transfer © Synced 10m ago we
+ay 24, Mobile uploa Mobile PWA
+O syne > py May24,2026 cL 2 4 Mobile upload le rae
+2026-05-24 New Total Today, 9:28 AM © Synced 9m ago
+CONNECTED WORKSPACE > B Dec 7, 2025 2 5 & Drive sync ® Google Drive View box v
+2025-12-07 Queued Total Dee 7, 2025, 3:14 PM © synced 43m ago
+Entry File Box 3
+Ream teint Showing 3 of 3 entries Rows per page: 25 v 1 92
+Incoming / Unassigned files (Inbox)
+Q Devices 2
+
+Files captured on desktop or mobile will appear here until they are attached to an entry.
+Desktop, mobile PWA, and
+
+Drive identity.
+
+ae No files waiting to be attached
+= )) Attach a photo, document, or file from Today.
+and status. 7 At file. Attach photo from device...
+© Google Drive Sync ‘Setup
+
+Auth, folder layout, and
+
+Recent transfer activity
+storage paths.
+
+View all activity
+Latest file movements and syne events across your lab workspace.
+
+Time Event File Source Status Details
+Today, 9:28 AM 4 Mobile upload IMG_2026-05-24_0928.jpg, Mobile PWA (iPhone) Pending attach Will appear in Inbox
+Today, 9:12 AM 1 Desktop upload Flow Cytometry Results.pdf Desktop (Lab-PC-07) attached Attached to May 24, 2026
+
+& Collapse B Today, 8:47 AM © Drive syne metadata.json Google Drive Synced ‘Synced 10m ago
