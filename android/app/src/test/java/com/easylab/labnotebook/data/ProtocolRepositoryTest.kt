@@ -3,6 +3,8 @@ package com.easylab.labnotebook.data
 import android.content.Context
 import androidx.room.Dao
 import androidx.room.Database
+import androidx.room.Entity
+import androidx.room.Index
 import androidx.room.Insert
 import androidx.room.Room
 import androidx.room.RoomDatabase
@@ -17,7 +19,6 @@ import com.easylab.labnotebook.data.local.FileBoxItemEntity
 import com.easylab.labnotebook.data.local.JournalEntryEntity
 import com.easylab.labnotebook.data.local.LabNotebookDatabase
 import com.easylab.labnotebook.data.local.ProtocolEntity
-import com.easylab.labnotebook.data.local.SyncQueueEntity
 import com.easylab.labnotebook.data.local.SyncStateEntity
 import com.easylab.labnotebook.data.local.TombstoneEntity
 import com.easylab.labnotebook.data.local.TransferEntity
@@ -38,6 +39,25 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
+@Entity(
+    tableName = "sync_queue",
+    primaryKeys = ["accountId", "id"],
+    indices = [Index(value = ["accountId", "status", "queuedAt"])],
+)
+data class LegacyProtocolSyncQueueEntity(
+    val accountId: String,
+    val id: String,
+    val entityKind: String,
+    val entityId: String,
+    val operation: String,
+    val status: String = "queued",
+    val queuedAt: String,
+    val updatedAt: String,
+    val updatedByDeviceId: String,
+    val baseVersion: Int? = null,
+    val lastError: String? = null,
+)
+
 @Dao
 interface LegacyV3ProtocolMigrationDao {
     @Insert suspend fun insertAccount(account: AccountEntity)
@@ -49,7 +69,7 @@ interface LegacyV3ProtocolMigrationDao {
     entities = [
         AccountEntity::class, JournalEntryEntity::class, AttachmentEntity::class, DeviceEntity::class,
         FileBoxItemEntity::class, TransferEntity::class, ConflictEntity::class, TombstoneEntity::class,
-        SyncQueueEntity::class, SyncStateEntity::class, DriveRawDocumentEntity::class,
+        LegacyProtocolSyncQueueEntity::class, SyncStateEntity::class, DriveRawDocumentEntity::class,
     ],
     version = 3,
     exportSchema = false,
@@ -65,9 +85,9 @@ class ProtocolRepositoryTest {
     private val accountB = AccountId("protocol-account-b")
 
     @Test
-    fun migrationV3ToV4PreservesExistingRowsAndAddsProtocolStorage() = runTest {
+    fun migrationV3ToV5PreservesExistingRowsAndAddsProtocolStorage() = runTest {
         val context = ApplicationProvider.getApplicationContext<Context>()
-        val databaseName = "protocol-v3-v4-${System.nanoTime()}.db"
+        val databaseName = "protocol-v3-v5-${System.nanoTime()}.db"
         context.deleteDatabase(databaseName)
         Room.databaseBuilder(context, LegacyProtocolDatabaseV3::class.java, databaseName)
             .allowMainThreadQueries()
@@ -80,7 +100,7 @@ class ProtocolRepositoryTest {
             }
 
         val migrated = Room.databaseBuilder(context, LabNotebookDatabase::class.java, databaseName)
-            .addMigrations(LabNotebookDatabase.MIGRATION_3_4)
+            .addMigrations(LabNotebookDatabase.MIGRATION_3_4, LabNotebookDatabase.MIGRATION_4_5)
             .allowMainThreadQueries()
             .build()
         try {

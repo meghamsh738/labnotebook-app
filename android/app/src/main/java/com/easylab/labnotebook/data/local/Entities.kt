@@ -82,12 +82,20 @@ data class TombstoneEntity(
     val deletedAt: String, val deletedByDeviceId: String, val reason: String? = null,
 ) : AccountScopedRecord
 
-@Entity(tableName = "sync_queue", primaryKeys = ["accountId", "id"], indices = [Index(value = ["accountId", "status", "queuedAt"])])
+@Entity(
+    tableName = "sync_queue",
+    primaryKeys = ["accountId", "id"],
+    indices = [
+        Index(value = ["accountId", "status", "queuedAt"]),
+        Index(value = ["accountId", "status", "leaseExpiresAt", "queuedAt"]),
+    ],
+)
 data class SyncQueueEntity(
     override val accountId: String, override val id: String, val entityKind: String, val entityId: String,
     val operation: String, val status: String = "queued", val queuedAt: String,
     val updatedAt: String, val updatedByDeviceId: String, val baseVersion: Int? = null,
-    val lastError: String? = null,
+    val lastError: String? = null, val claimToken: String? = null, val claimedAt: String? = null,
+    val leaseExpiresAt: String? = null, val attemptCount: Int = 0,
 ) : AccountScopedRecord
 
 @Entity(tableName = "sync_state", primaryKeys = ["accountId"])

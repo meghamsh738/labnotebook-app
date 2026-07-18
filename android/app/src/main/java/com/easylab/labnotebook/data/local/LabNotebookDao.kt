@@ -208,6 +208,75 @@ interface LabNotebookDao {
     suspend fun pendingQueueForEntity(accountId: String, entityKind: String, entityId: String): List<SyncQueueEntity>
     @Query("SELECT COUNT(*) FROM sync_queue WHERE accountId = :accountId AND status IN ('queued', 'syncing', 'failed')") fun observePendingCount(accountId: String): Flow<Int>
     @Query(
+        "SELECT * FROM sync_queue WHERE accountId = :accountId AND " +
+            "(status IN ('queued', 'failed') OR (status = 'syncing' AND " +
+            "(leaseExpiresAt IS NULL OR leaseExpiresAt <= :claimAt))) AND EXISTS " +
+            "(SELECT 1 FROM accounts WHERE accounts.accountId = :accountId) " +
+            "ORDER BY queuedAt, id LIMIT 1",
+    )
+    suspend fun nextClaimableQueueItem(accountId: String, claimAt: String): SyncQueueEntity?
+    @Query(
+        "UPDATE sync_queue SET status = 'syncing', claimToken = :claimToken, claimedAt = :claimAt, " +
+            "leaseExpiresAt = :leaseExpiresAt, attemptCount = attemptCount + 1, lastError = NULL " +
+            "WHERE accountId = :accountId AND id = :recordId AND " +
+            "(status IN ('queued', 'failed') OR (status = 'syncing' AND " +
+            "(leaseExpiresAt IS NULL OR leaseExpiresAt <= :claimAt))) AND EXISTS " +
+            "(SELECT 1 FROM accounts WHERE accounts.accountId = :accountId)",
+    )
+    suspend fun compareAndSetQueueClaim(
+        accountId: String,
+        recordId: String,
+        claimToken: String,
+        claimAt: String,
+        leaseExpiresAt: String,
+    ): Int
+    @Query(
+        "UPDATE sync_queue SET status = 'completed', claimToken = NULL, claimedAt = NULL, " +
+            "leaseExpiresAt = NULL, lastError = NULL WHERE accountId = :accountId AND id = :recordId " +
+            "AND status = 'syncing' AND claimToken = :claimToken AND EXISTS " +
+            "(SELECT 1 FROM accounts WHERE accounts.accountId = :accountId)",
+    )
+    suspend fun completeQueueClaim(accountId: String, recordId: String, claimToken: String): Int
+    @Query(
+        "UPDATE sync_queue SET status = 'failed', claimToken = NULL, claimedAt = NULL, " +
+            "leaseExpiresAt = NULL, lastError = :lastError WHERE accountId = :accountId AND id = :recordId " +
+            "AND status = 'syncing' AND claimToken = :claimToken AND EXISTS " +
+            "(SELECT 1 FROM accounts WHERE accounts.accountId = :accountId)",
+    )
+    suspend fun failQueueClaim(accountId: String, recordId: String, claimToken: String, lastError: String): Int
+    @Query(
+        "UPDATE sync_queue SET status = 'queued', claimToken = NULL, claimedAt = NULL, " +
+            "leaseExpiresAt = NULL WHERE accountId = :accountId AND id = :recordId " +
+            "AND status = 'syncing' AND claimToken = :claimToken AND EXISTS " +
+            "(SELECT 1 FROM accounts WHERE accounts.accountId = :accountId)",
+    )
+    suspend fun requeueQueueClaim(accountId: String, recordId: String, claimToken: String): Int
+    @Query(
+        "UPDATE sync_queue SET status = 'queued', claimToken = NULL, claimedAt = NULL, " +
+            "leaseExpiresAt = NULL WHERE accountId = :accountId AND status = 'syncing' " +
+            "AND (leaseExpiresAt IS NULL OR leaseExpiresAt <= :now) AND EXISTS " +
+            "(SELECT 1 FROM accounts WHERE accounts.accountId = :accountId)",
+    )
+    suspend fun recoverExpiredQueueClaims(accountId: String, now: String): Int
+
+    @Transaction
+    suspend fun claimNextQueueItem(
+        accountId: String,
+        claimToken: String,
+        claimAt: String,
+        leaseExpiresAt: String,
+    ): SyncQueueEntity? {
+        require(accountId.isNotBlank()) { "Queue claim account id must not be blank." }
+        require(claimToken.isNotBlank()) { "Queue claim token must not be blank." }
+        require(claimAt.isNotBlank()) { "Queue claim timestamp must not be blank." }
+        require(leaseExpiresAt > claimAt) { "Queue claim lease must expire after it starts." }
+        val candidate = nextClaimableQueueItem(accountId, claimAt) ?: return null
+        check(
+            compareAndSetQueueClaim(accountId, candidate.id, claimToken, claimAt, leaseExpiresAt) == 1,
+        ) { "Queue claim candidate changed inside its transaction." }
+        return queueItem(accountId, candidate.id)
+    }
+    @Query(
         "DELETE FROM sync_queue WHERE accountId = :accountId AND entityKind = :entityKind " +
             "AND entityId = :entityId AND operation = 'upsert' AND status IN ('queued', 'syncing', 'failed')",
     )
