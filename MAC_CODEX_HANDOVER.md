@@ -3,7 +3,7 @@
 Continue in the existing native recovery checkout:
 
 ```bash
-cd "/Users/meghamsh/Coding Projects/lab-note-taking-app-connected-devices"
+cd "/Volumes/Coding Projects/Active/lab-notebook"
 git status --short --branch
 ```
 

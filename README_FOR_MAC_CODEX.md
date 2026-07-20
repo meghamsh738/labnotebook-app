@@ -3,7 +3,7 @@
 This repository is the authoritative local checkout for continued work:
 
 ```text
-/Users/meghamsh/Coding Projects/lab-note-taking-app-connected-devices
+/Volumes/Coding Projects/Active/lab-notebook
 ```
 
 Do not resume from the old Windows transfer snapshot, a copied PWA folder, or a bundle unless this checkout is lost.
@@ -17,7 +17,7 @@ Do not resume from the old Windows transfer snapshot, a copied PWA folder, or a 
 To return to the preserved baseline without changing the current checkout:
 
 ```bash
-cd "/Users/meghamsh/Coding Projects/lab-note-taking-app-connected-devices"
+cd "/Volumes/Coding Projects/Active/lab-notebook"
 git switch -c codex/native-recovery-check recovery/native-compose-baseline-20260717
 ```
 
@@ -45,7 +45,7 @@ Local Room edits and local capture/blob writes are expected; this gate applies t
 From the authoritative checkout:
 
 ```bash
-cd "/Users/meghamsh/Coding Projects/lab-note-taking-app-connected-devices"
+cd "/Volumes/Coding Projects/Active/lab-notebook"
 npm run android:test
 npm run android:build:debug
 ```

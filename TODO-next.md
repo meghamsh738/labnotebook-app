@@ -1,6 +1,6 @@
 # Native Android recovery: next milestones
 
-Authoritative checkout: `/Users/meghamsh/Coding Projects/lab-note-taking-app-connected-devices`
+Authoritative checkout: `/Volumes/Coding Projects/Active/lab-notebook`
 
 Recovery branch/tag: `codex/native-android-recovery` / `recovery/native-compose-baseline-20260717`
 
