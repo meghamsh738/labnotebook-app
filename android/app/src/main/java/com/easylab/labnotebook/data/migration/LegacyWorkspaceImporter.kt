@@ -116,7 +116,7 @@ class LegacyWorkspaceImporter(
             }
             dao.upsertEntry(entity)
             if (isVerifiedUnsynced(entity.syncStatus)) {
-                dao.upsertQueueItem(
+                dao.insertQueueItemIfAbsent(
                     upsertQueue(
                         accountId = accountId,
                         entityKind = "entry",
@@ -139,7 +139,7 @@ class LegacyWorkspaceImporter(
             )
             dao.upsertAttachment(entity)
             if (isVerifiedUnsynced(entity.syncStatus)) {
-                dao.upsertQueueItem(
+                dao.insertQueueItemIfAbsent(
                     upsertQueue(
                         accountId = accountId,
                         entityKind = "attachment",
@@ -154,7 +154,7 @@ class LegacyWorkspaceImporter(
         plan.fileBoxItems.forEach { item ->
             dao.upsertFileBoxItem(item.toLegacyEntity(accountId))
             if (item.status in LOCAL_FILE_BOX_STATUSES) {
-                dao.upsertQueueItem(
+                dao.insertQueueItemIfAbsent(
                     upsertQueue(accountId, "fileBoxItem", item.id, item.updatedAt, activeDeviceId, failed = item.status == "failed"),
                 )
             }
@@ -162,7 +162,7 @@ class LegacyWorkspaceImporter(
         plan.transfers.forEach { transfer ->
             dao.upsertTransfer(transfer.toLegacyEntity(accountId))
             if (transfer.status in LOCAL_TRANSFER_STATUSES) {
-                dao.upsertQueueItem(
+                dao.insertQueueItemIfAbsent(
                     upsertQueue(accountId, "transfer", transfer.id, transfer.updatedAt, activeDeviceId, failed = transfer.status == "failed"),
                 )
             }
@@ -170,7 +170,7 @@ class LegacyWorkspaceImporter(
         plan.conflicts.forEach { dao.upsertConflict(it.toLegacyEntity(accountId)) }
         plan.tombstones.forEach { tombstone ->
             dao.upsertTombstone(tombstone.toLegacyEntity(accountId))
-            dao.upsertQueueItem(
+            dao.insertQueueItemIfAbsent(
                 SyncQueueEntity(
                     accountId = accountId.value,
                     id = deleteQueueEventId(tombstone.entityKind, tombstone.entityId, tombstone.deletedAt),

@@ -256,7 +256,7 @@ interface SyncRecordRepository {
     suspend fun upsertTransfer(accountId: AccountId, transfer: TransferEntity)
     suspend fun upsertConflict(accountId: AccountId, conflict: ConflictEntity)
     suspend fun upsertTombstone(accountId: AccountId, tombstone: TombstoneEntity)
-    suspend fun upsertQueueItem(accountId: AccountId, item: SyncQueueEntity)
+    suspend fun insertQueueItemIfAbsent(accountId: AccountId, item: SyncQueueEntity)
     suspend fun upsertSyncState(accountId: AccountId, state: SyncStateEntity)
 }
 
@@ -281,9 +281,9 @@ class RoomSyncRecordRepository(private val dao: LabNotebookDao) : SyncRecordRepo
         requireAccount(accountId, tombstone.accountId, "Tombstone")
         dao.upsertTombstone(tombstone)
     }
-    override suspend fun upsertQueueItem(accountId: AccountId, item: SyncQueueEntity) {
+    override suspend fun insertQueueItemIfAbsent(accountId: AccountId, item: SyncQueueEntity) {
         requireAccount(accountId, item.accountId, "Queue item")
-        dao.upsertQueueItem(item)
+        dao.insertQueueItemIfAbsent(item)
     }
     override suspend fun upsertSyncState(accountId: AccountId, state: SyncStateEntity) {
         requireAccount(accountId, state.accountId, "Sync state")

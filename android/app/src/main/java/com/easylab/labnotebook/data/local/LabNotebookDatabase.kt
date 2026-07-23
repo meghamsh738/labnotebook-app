@@ -14,7 +14,7 @@ import androidx.room.withTransaction
         FileBoxItemEntity::class, TransferEntity::class, ConflictEntity::class, TombstoneEntity::class,
         SyncQueueEntity::class, SyncStateEntity::class, DriveRawDocumentEntity::class, ProtocolEntity::class,
     ],
-    version = 4,
+    version = 5,
     exportSchema = true,
 )
 abstract class LabNotebookDatabase : RoomDatabase() {
@@ -99,11 +99,23 @@ abstract class LabNotebookDatabase : RoomDatabase() {
                 )
             }
         }
+        val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE sync_queue ADD COLUMN claimToken TEXT")
+                db.execSQL("ALTER TABLE sync_queue ADD COLUMN claimedAt TEXT")
+                db.execSQL("ALTER TABLE sync_queue ADD COLUMN leaseExpiresAt TEXT")
+                db.execSQL("ALTER TABLE sync_queue ADD COLUMN attemptCount INTEGER NOT NULL DEFAULT 0")
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_sync_queue_accountId_status_leaseExpiresAt_queuedAt " +
+                        "ON sync_queue(accountId, status, leaseExpiresAt, queuedAt)",
+                )
+            }
+        }
 
 
         fun get(context: Context): LabNotebookDatabase = instance ?: synchronized(this) {
             instance ?: Room.databaseBuilder(context.applicationContext, LabNotebookDatabase::class.java, "easylab-native-journal.db")
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
                 .build().also { instance = it }
         }
     }

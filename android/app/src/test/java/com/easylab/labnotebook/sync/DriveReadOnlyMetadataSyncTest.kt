@@ -208,7 +208,7 @@ class DriveReadOnlyMetadataSyncTest {
         val local = entry(accountA.value, id = "entry-contract", title = "unsynced local edit")
         val queueItem = queue(accountA.value, entityKind = "entry", entityId = local.id)
         dao.upsertEntry(local)
-        dao.upsertQueueItem(queueItem)
+        dao.insertQueueItemIfAbsent(queueItem)
         val files = linkedMapOf(
             MANIFEST_PATH to manifestJson(),
             ENTRY_PATH to fixture(ENTRY_PATH),
@@ -358,7 +358,7 @@ class DriveReadOnlyMetadataSyncTest {
         val local = entry(accountA.value, id = "entry-contract", title = "interrupted local edit")
         val syncing = queue(accountA.value, "entry", local.id).copy(status = "syncing")
         dao.upsertEntry(local)
-        dao.upsertQueueItem(syncing)
+        dao.insertQueueItemIfAbsent(syncing)
         val files = linkedMapOf(
             MANIFEST_PATH to manifestJson(),
             ENTRY_PATH to fixture(ENTRY_PATH),
@@ -410,7 +410,7 @@ class DriveReadOnlyMetadataSyncTest {
         val pendingChild = queue(accountA.value, "attachment", child.id).copy(status = "syncing")
         dao.upsertEntry(parent)
         dao.upsertAttachment(child)
-        dao.upsertQueueItem(pendingChild)
+        dao.insertQueueItemIfAbsent(pendingChild)
         val files = linkedMapOf(
             MANIFEST_PATH to manifestJson(),
             "tombstones/entry--entry-contract.json" to tombstoneJson("entry", "entry-contract"),
@@ -782,7 +782,7 @@ class DriveReadOnlyMetadataSyncTest {
         dao.upsertTransfer(rows.transfer)
         dao.upsertConflict(rows.conflict)
         dao.upsertTombstone(rows.tombstone)
-        dao.upsertQueueItem(rows.queueItem)
+        dao.insertQueueItemIfAbsent(rows.queueItem)
         dao.upsertSyncState(rows.syncState)
         return rows
     }

@@ -181,7 +181,7 @@ class RoomRepositoriesTest {
             val original = entry("account-a").copy(version = 4, syncStatus = "synced")
             dao.upsertEntry(original)
             dao.upsertEntry(entry("account-b").copy(title = "Private account B entry"))
-            dao.upsertQueueItem(queue("account-a").copy(id = "stale-upsert", status = "failed"))
+            dao.insertQueueItemIfAbsent(queue("account-a").copy(id = "stale-upsert", status = "failed"))
 
             val saved = RoomEntryMutationRepository(dao).saveEntry(
                 accountId = AccountId("account-a"),
@@ -345,7 +345,7 @@ class RoomRepositoriesTest {
     }
 
     @Test
-    fun roomMigrationFromV1PreservesRowsAndAddsV4Schema() = runTest {
+    fun roomMigrationFromV1PreservesRowsAndAddsV5Schema() = runTest {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val databaseName = "migration-${System.nanoTime()}.db"
         context.deleteDatabase(databaseName)
@@ -366,6 +366,7 @@ class RoomRepositoriesTest {
                 LabNotebookDatabase.MIGRATION_1_2,
                 LabNotebookDatabase.MIGRATION_2_3,
                 LabNotebookDatabase.MIGRATION_3_4,
+                LabNotebookDatabase.MIGRATION_4_5,
             )
             .allowMainThreadQueries()
             .build()
@@ -376,6 +377,9 @@ class RoomRepositoriesTest {
             assertEquals("[]", migratedEntry?.projectTagsJson)
             assertEquals("result.csv", dao.attachment("account-a", "attachment-1")?.filename)
             assertEquals(1, dao.pendingQueue("account-a").size)
+            assertNull(dao.pendingQueue("account-a").single().claimToken)
+            assertNull(dao.pendingQueue("account-a").single().leaseExpiresAt)
+            assertEquals(0, dao.pendingQueue("account-a").single().attemptCount)
             assertEquals(0, dao.observeSyncState("account-a").first()?.queueCount)
             assertTrue(dao.observeProtocols("account-a").first().isEmpty())
             dao.upsertDevice(device("account-a"))
@@ -439,7 +443,7 @@ class RoomRepositoriesTest {
                 dao.upsertTransfer(transfer(accountId))
                 seedPendingGraphUpserts(dao, accountId)
             }
-            dao.upsertQueueItem(
+            dao.insertQueueItemIfAbsent(
                 queue("account-a").copy(
                     id = "delete-entry-entry-1",
                     operation = "delete",
@@ -448,7 +452,7 @@ class RoomRepositoriesTest {
                     updatedAt = "2026-07-14T10:00:00Z",
                 ),
             )
-            dao.upsertQueueItem(
+            dao.insertQueueItemIfAbsent(
                 queue("account-a").copy(
                     id = "pending-entry-delete-history",
                     operation = "delete",
@@ -457,7 +461,7 @@ class RoomRepositoriesTest {
                     updatedAt = "2026-07-14T11:00:00Z",
                 ),
             )
-            dao.upsertQueueItem(
+            dao.insertQueueItemIfAbsent(
                 queue("account-a").copy(
                     id = "unrelated-same-id",
                     entityKind = "conflict",
@@ -877,7 +881,7 @@ class RoomRepositoriesTest {
         dao.upsertTransfer(transfer(accountId))
         dao.upsertConflict(conflict(accountId))
         dao.upsertTombstone(tombstone(accountId))
-        dao.upsertQueueItem(queue(accountId))
+        dao.insertQueueItemIfAbsent(queue(accountId))
         dao.upsertSyncState(SyncStateEntity(accountId, lastSyncedAt = timestamp, updatedAt = timestamp, queueCount = 1))
     }
 
@@ -914,7 +918,7 @@ class RoomRepositoriesTest {
             Triple("fileBoxItem", "filebox-1", "queued"),
             Triple("transfer", "transfer-1", "failed"),
         ).forEach { (entityKind, entityId, status) ->
-            dao.upsertQueueItem(
+            dao.insertQueueItemIfAbsent(
                 queue(accountId).copy(
                     id = "stale-$entityKind-upsert",
                     entityKind = entityKind,

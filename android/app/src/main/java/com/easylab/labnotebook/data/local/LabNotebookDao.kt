@@ -6,7 +6,24 @@ import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import androidx.room.Transaction
 import androidx.room.Upsert
+import java.text.SimpleDateFormat
+import java.util.Locale
+import java.util.TimeZone
 import kotlinx.coroutines.flow.Flow
+
+private const val CANONICAL_QUEUE_TIMESTAMP_PATTERN = "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'"
+
+internal fun requireCanonicalQueueTimestamp(value: String, label: String): String {
+    val formatter = SimpleDateFormat(CANONICAL_QUEUE_TIMESTAMP_PATTERN, Locale.US).apply {
+        isLenient = false
+        timeZone = TimeZone.getTimeZone("UTC")
+    }
+    val parsed = runCatching { formatter.parse(value) }.getOrNull()
+    require(parsed != null && formatter.format(parsed) == value) {
+        "$label must be a canonical UTC timestamp with millisecond precision."
+    }
+    return value
+}
 
 internal fun deleteQueueEventId(entityKind: String, entityId: String, deletedAt: String): String {
     fun frame(value: String) = "${value.length}:$value"
@@ -195,7 +212,27 @@ interface LabNotebookDao {
     suspend fun tombstone(accountId: String, entityKind: String, entityId: String): TombstoneEntity?
     @Query("DELETE FROM tombstones WHERE accountId = :accountId AND id = :tombstoneId") suspend fun physicalDeleteTombstone(accountId: String, tombstoneId: String): Int
 
-    @Upsert suspend fun upsertQueueItem(item: SyncQueueEntity)
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertQueueItemIfAbsentUnchecked(item: SyncQueueEntity): Long
+    @Query(
+        "UPDATE sync_queue SET entityKind = :entityKind, entityId = :entityId, operation = :operation, " +
+            "status = 'queued', queuedAt = :queuedAt, updatedAt = :updatedAt, " +
+            "updatedByDeviceId = :updatedByDeviceId, baseVersion = :baseVersion, lastError = NULL, " +
+            "claimToken = NULL, claimedAt = NULL, leaseExpiresAt = NULL, attemptCount = 0 " +
+            "WHERE accountId = :accountId AND id = :recordId AND status != 'syncing' " +
+            "AND julianday(updatedAt) < julianday(:updatedAt)",
+    )
+    suspend fun updateQueueItemForNewerLocalMutation(
+        accountId: String,
+        recordId: String,
+        entityKind: String,
+        entityId: String,
+        operation: String,
+        queuedAt: String,
+        updatedAt: String,
+        updatedByDeviceId: String,
+        baseVersion: Int?,
+    ): Int
     @Query("SELECT COUNT(*) FROM sync_queue WHERE accountId = :accountId") suspend fun queueCount(accountId: String): Int
     @Query("SELECT * FROM sync_queue WHERE accountId = :accountId ORDER BY queuedAt") suspend fun queueItems(accountId: String): List<SyncQueueEntity>
     @Query("SELECT * FROM sync_queue WHERE accountId = :accountId AND id = :recordId LIMIT 1")
@@ -207,6 +244,124 @@ interface LabNotebookDao {
     )
     suspend fun pendingQueueForEntity(accountId: String, entityKind: String, entityId: String): List<SyncQueueEntity>
     @Query("SELECT COUNT(*) FROM sync_queue WHERE accountId = :accountId AND status IN ('queued', 'syncing', 'failed')") fun observePendingCount(accountId: String): Flow<Int>
+    @Query(
+        "SELECT * FROM sync_queue WHERE accountId = :accountId AND " +
+            "(status IN ('queued', 'failed') OR (status = 'syncing' AND " +
+            "(leaseExpiresAt IS NULL OR (strftime('%Y-%m-%dT%H:%M:%fZ', leaseExpiresAt) = leaseExpiresAt " +
+            "AND leaseExpiresAt <= :claimAt)))) AND " +
+            "strftime('%Y-%m-%dT%H:%M:%fZ', :claimAt) = :claimAt AND EXISTS " +
+            "(SELECT 1 FROM accounts WHERE accounts.accountId = :accountId) " +
+            "ORDER BY queuedAt, id LIMIT 1",
+    )
+    suspend fun nextClaimableQueueItem(accountId: String, claimAt: String): SyncQueueEntity?
+    @Query(
+        "UPDATE sync_queue SET status = 'syncing', claimToken = :claimToken, claimedAt = :claimAt, " +
+            "leaseExpiresAt = :leaseExpiresAt, attemptCount = attemptCount + 1, lastError = NULL " +
+            "WHERE accountId = :accountId AND id = :recordId AND " +
+            "(status IN ('queued', 'failed') OR (status = 'syncing' AND " +
+            "(leaseExpiresAt IS NULL OR (strftime('%Y-%m-%dT%H:%M:%fZ', leaseExpiresAt) = leaseExpiresAt " +
+            "AND leaseExpiresAt <= :claimAt)))) AND " +
+            "strftime('%Y-%m-%dT%H:%M:%fZ', :claimAt) = :claimAt AND " +
+            "strftime('%Y-%m-%dT%H:%M:%fZ', :leaseExpiresAt) = :leaseExpiresAt AND " +
+            ":leaseExpiresAt > :claimAt AND :claimToken <> '' AND EXISTS " +
+            "(SELECT 1 FROM accounts WHERE accounts.accountId = :accountId)",
+    )
+    suspend fun compareAndSetQueueClaim(
+        accountId: String,
+        recordId: String,
+        claimToken: String,
+        claimAt: String,
+        leaseExpiresAt: String,
+    ): Int
+    @Query(
+        "UPDATE sync_queue SET status = 'completed', claimToken = NULL, claimedAt = NULL, " +
+            "leaseExpiresAt = NULL, lastError = NULL WHERE accountId = :accountId AND id = :recordId " +
+            "AND status = 'syncing' AND claimToken = :claimToken AND :claimToken <> '' AND EXISTS " +
+            "(SELECT 1 FROM accounts WHERE accounts.accountId = :accountId)",
+    )
+    suspend fun completeQueueClaim(accountId: String, recordId: String, claimToken: String): Int
+    @Query(
+        "UPDATE sync_queue SET status = 'failed', claimToken = NULL, claimedAt = NULL, " +
+            "leaseExpiresAt = NULL, lastError = :lastError WHERE accountId = :accountId AND id = :recordId " +
+            "AND status = 'syncing' AND claimToken = :claimToken AND :claimToken <> '' AND EXISTS " +
+            "(SELECT 1 FROM accounts WHERE accounts.accountId = :accountId)",
+    )
+    suspend fun failQueueClaim(accountId: String, recordId: String, claimToken: String, lastError: String): Int
+    @Query(
+        "UPDATE sync_queue SET status = 'queued', claimToken = NULL, claimedAt = NULL, " +
+            "leaseExpiresAt = NULL WHERE accountId = :accountId AND id = :recordId " +
+            "AND status = 'syncing' AND claimToken = :claimToken AND :claimToken <> '' AND EXISTS " +
+            "(SELECT 1 FROM accounts WHERE accounts.accountId = :accountId)",
+    )
+    suspend fun requeueQueueClaim(accountId: String, recordId: String, claimToken: String): Int
+    @Query(
+        "UPDATE sync_queue SET status = 'queued', claimToken = NULL, claimedAt = NULL, " +
+            "leaseExpiresAt = NULL WHERE accountId = :accountId AND status = 'syncing' " +
+            "AND (leaseExpiresAt IS NULL OR (strftime('%Y-%m-%dT%H:%M:%fZ', leaseExpiresAt) = leaseExpiresAt " +
+            "AND leaseExpiresAt <= :now)) AND " +
+            "strftime('%Y-%m-%dT%H:%M:%fZ', :now) = :now AND EXISTS " +
+            "(SELECT 1 FROM accounts WHERE accounts.accountId = :accountId)",
+    )
+    suspend fun recoverExpiredQueueClaimsUnchecked(accountId: String, now: String): Int
+
+    @Transaction
+    suspend fun claimNextQueueItem(
+        accountId: String,
+        claimToken: String,
+        claimAt: String,
+        leaseExpiresAt: String,
+    ): SyncQueueEntity? {
+        require(accountId.isNotBlank()) { "Queue claim account id must not be blank." }
+        require(claimToken.isNotBlank()) { "Queue claim token must not be blank." }
+        requireCanonicalQueueTimestamp(claimAt, "Queue claim timestamp")
+        requireCanonicalQueueTimestamp(leaseExpiresAt, "Queue lease expiry")
+        require(leaseExpiresAt > claimAt) { "Queue claim lease must expire after it starts." }
+        val candidate = nextClaimableQueueItem(accountId, claimAt) ?: return null
+        check(
+            compareAndSetQueueClaim(accountId, candidate.id, claimToken, claimAt, leaseExpiresAt) == 1,
+        ) { "Queue claim candidate changed inside its transaction." }
+        return queueItem(accountId, candidate.id)
+    }
+
+    @Transaction
+    suspend fun recoverExpiredQueueClaims(accountId: String, now: String): Int {
+        require(accountId.isNotBlank()) { "Queue recovery account id must not be blank." }
+        requireCanonicalQueueTimestamp(now, "Queue recovery timestamp")
+        return recoverExpiredQueueClaimsUnchecked(accountId, now)
+    }
+
+    @Transaction
+    suspend fun insertQueueItemIfAbsent(item: SyncQueueEntity): Long {
+        item.claimToken?.let { require(it.isNotBlank()) { "Persisted queue claim token must not be blank." } }
+        item.claimedAt?.let { requireCanonicalQueueTimestamp(it, "Persisted queue claim timestamp") }
+        item.leaseExpiresAt?.let { requireCanonicalQueueTimestamp(it, "Persisted queue lease expiry") }
+        return insertQueueItemIfAbsentUnchecked(item)
+    }
+
+    @Transaction
+    suspend fun stageQueueItemForLocalMutation(item: SyncQueueEntity) {
+        require(item.accountId.isNotBlank()) { "Queue account id must not be blank." }
+        require(item.id.isNotBlank()) { "Queue record id must not be blank." }
+        require(item.status == "queued") { "A local mutation must enter the queue in queued state." }
+        require(item.claimToken == null && item.claimedAt == null && item.leaseExpiresAt == null) {
+            "A local mutation cannot supply queue claim state."
+        }
+        require(item.attemptCount == 0) { "A new local mutation cannot inherit queue attempts." }
+        if (insertQueueItemIfAbsent(item) >= 0) return
+        check(
+            updateQueueItemForNewerLocalMutation(
+                accountId = item.accountId,
+                recordId = item.id,
+                entityKind = item.entityKind,
+                entityId = item.entityId,
+                operation = item.operation,
+                queuedAt = item.queuedAt,
+                updatedAt = item.updatedAt,
+                updatedByDeviceId = item.updatedByDeviceId,
+                baseVersion = item.baseVersion,
+            ) == 1,
+        ) { "Queue item already records this mutation or a newer one." }
+    }
     @Query(
         "DELETE FROM sync_queue WHERE accountId = :accountId AND entityKind = :entityKind " +
             "AND entityId = :entityId AND operation = 'upsert' AND status IN ('queued', 'syncing', 'failed')",
@@ -233,7 +388,7 @@ interface LabNotebookDao {
         val queuedEntry = entry.copy(syncStatus = "queued")
         deleteStalePendingUpserts(entry.accountId, "entry", entry.id)
         upsertEntry(queuedEntry)
-        upsertQueueItem(
+        stageQueueItemForLocalMutation(
             SyncQueueEntity(
                 accountId = entry.accountId,
                 id = upsertQueueEventId("entry", entry.id),
@@ -273,7 +428,7 @@ interface LabNotebookDao {
         val queuedAttachment = attachment.copy(syncStatus = "queued")
         deleteStalePendingUpserts(attachment.accountId, "attachment", attachment.id)
         upsertAttachment(queuedAttachment)
-        upsertQueueItem(
+        stageQueueItemForLocalMutation(
             SyncQueueEntity(
                 accountId = attachment.accountId,
                 id = upsertQueueEventId("attachment", attachment.id),
@@ -461,7 +616,7 @@ interface LabNotebookDao {
         ) {
             return
         }
-        upsertQueueItem(
+        stageQueueItemForLocalMutation(
             SyncQueueEntity(
                 accountId = accountId,
                 id = recordId,

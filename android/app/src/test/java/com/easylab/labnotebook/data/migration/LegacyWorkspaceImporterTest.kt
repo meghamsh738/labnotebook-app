@@ -11,6 +11,7 @@ import com.easylab.labnotebook.data.local.LabNotebookDatabase
 import com.easylab.labnotebook.data.local.SyncQueueEntity
 import com.easylab.labnotebook.data.local.SyncStateEntity
 import com.easylab.labnotebook.data.local.TombstoneEntity
+import com.easylab.labnotebook.data.local.deleteQueueEventId
 import com.easylab.labnotebook.data.local.upsertQueueEventId
 import com.easylab.labnotebook.sync.DriveV1LocalSerializer
 import com.easylab.labnotebook.sync.DriveV1Paths
@@ -238,7 +239,7 @@ class LegacyWorkspaceImporterTest {
             val account = AccountId("google-subject-upsert-" + status)
             val dao = database.dao()
             dao.upsertEntry(existingEntry(account.value, id = "entry-local", title = "Pending " + status + " note"))
-            dao.upsertQueueItem(
+            dao.insertQueueItemIfAbsent(
                 SyncQueueEntity(
                     accountId = account.value,
                     id = upsertQueueEventId("entry", "entry-local"),
@@ -266,6 +267,66 @@ class LegacyWorkspaceImporterTest {
             assertEquals(status, 1, dao.pendingQueue(account.value).count {
                 it.operation == "upsert" && it.entityId == "entry-local"
             })
+        }
+    }
+
+    @Test
+    fun mergeImportCannotEraseActiveLeaseOrResurrectCompletedDeleteEvent() = runTest {
+        data class Case(
+            val account: AccountId,
+            val status: String,
+            val claimToken: String?,
+            val claimedAt: String?,
+            val leaseExpiresAt: String?,
+            val attemptCount: Int,
+        )
+        val cases = listOf(
+            Case(
+                account = AccountId("google-subject-active-import"),
+                status = "syncing",
+                claimToken = "active-import-owner",
+                claimedAt = "2026-07-16T10:00:00.000Z",
+                leaseExpiresAt = "2026-07-16T11:00:00.000Z",
+                attemptCount = 3,
+            ),
+            Case(
+                account = AccountId("google-subject-completed-import"),
+                status = "completed",
+                claimToken = null,
+                claimedAt = null,
+                leaseExpiresAt = null,
+                attemptCount = 2,
+            ),
+        )
+
+        cases.forEach { case ->
+            val dao = database.dao()
+            val preserved = SyncQueueEntity(
+                accountId = case.account.value,
+                id = deleteQueueEventId("attachment", "att-deleted", "2026-07-16T12:00:00.000Z"),
+                entityKind = "attachment",
+                entityId = "att-deleted",
+                operation = "delete",
+                status = case.status,
+                queuedAt = "2026-07-16T12:00:00.000Z",
+                updatedAt = "2026-07-16T12:00:00.000Z",
+                updatedByDeviceId = "native-pixel",
+                claimToken = case.claimToken,
+                claimedAt = case.claimedAt,
+                leaseExpiresAt = case.leaseExpiresAt,
+                attemptCount = case.attemptCount,
+            )
+            dao.insertQueueItemIfAbsent(preserved)
+
+            LegacyWorkspaceImporter(database, blobStore).import(
+                case.account,
+                "native-pixel",
+                withoutLocalUpserts(fixture()),
+                LegacyImportPolicy.MergeVerifiedUnsyncedOnly,
+            )
+
+            assertTrue(dao.tombstones(case.account.value).any { it.entityId == "att-deleted" })
+            assertEquals(case.status, preserved, dao.queueItem(case.account.value, preserved.id))
         }
     }
 
@@ -418,7 +479,7 @@ class LegacyWorkspaceImporterTest {
                 updatedAt = "2026-07-16T12:00:00.000Z",
             ),
         )
-        dao.upsertQueueItem(
+        dao.insertQueueItemIfAbsent(
             SyncQueueEntity(
                 accountId = accountA.value,
                 id = upsertQueueEventId("attachment", "native-child"),
