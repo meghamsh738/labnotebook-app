@@ -276,6 +276,8 @@ internal class DriveV1MetadataApplier(
         database.withTransaction {
             val dao = database.dao()
             val pending = dao.pendingQueue(accountId.value)
+            val pendingTargets = pending
+                .mapTo(mutableSetOf()) { it.entityKind to it.entityId }
             val pendingUpserts = pending.asSequence()
                 .filter { it.operation == "upsert" }
                 .map { it.entityKind to it.entityId }
@@ -290,7 +292,7 @@ internal class DriveV1MetadataApplier(
                 pendingUpserts = pendingUpserts,
             )
             validateRemoteGraph(snapshot)
-            cacheRemoteDocuments(dao, accountId, snapshot)
+            cacheRemoteDocuments(dao, accountId, snapshot, pendingTargets)
             var applied = 0
             var skipped = 0
 
@@ -410,6 +412,7 @@ internal class DriveV1MetadataApplier(
         dao: com.easylab.labnotebook.data.local.LabNotebookDao,
         accountId: AccountId,
         snapshot: DriveV1MetadataSnapshot,
+        pendingTargets: Set<Pair<String, String>>,
     ) {
         dao.upsertDriveRawDocument(
             DriveRawDocumentEntity(
@@ -423,25 +426,38 @@ internal class DriveV1MetadataApplier(
             ),
         )
         snapshot.devices.forEach {
-            dao.upsertDriveRawDocument(it.toRawDocument(accountId, "device", it.value.id))
+            if (("device" to it.value.id) !in pendingTargets) {
+                dao.upsertDriveRawDocument(it.toRawDocument(accountId, "device", it.value.id))
+            }
         }
         snapshot.entries.forEach {
-            dao.upsertDriveRawDocument(it.toRawDocument(accountId, "entry", it.value.id))
+            if (("entry" to it.value.id) !in pendingTargets) {
+                dao.upsertDriveRawDocument(it.toRawDocument(accountId, "entry", it.value.id))
+            }
         }
         snapshot.attachments.forEach {
-            dao.upsertDriveRawDocument(it.toRawDocument(accountId, "attachment", it.value.id))
+            if (("attachment" to it.value.id) !in pendingTargets) {
+                dao.upsertDriveRawDocument(it.toRawDocument(accountId, "attachment", it.value.id))
+            }
         }
         snapshot.fileBoxItems.forEach {
-            dao.upsertDriveRawDocument(it.toRawDocument(accountId, "fileBoxItem", it.value.id))
+            if (("fileBoxItem" to it.value.id) !in pendingTargets) {
+                dao.upsertDriveRawDocument(it.toRawDocument(accountId, "fileBoxItem", it.value.id))
+            }
         }
         snapshot.transfers.forEach {
-            dao.upsertDriveRawDocument(it.toRawDocument(accountId, "transfer", it.value.id))
+            if (("transfer" to it.value.id) !in pendingTargets) {
+                dao.upsertDriveRawDocument(it.toRawDocument(accountId, "transfer", it.value.id))
+            }
         }
         snapshot.conflicts.forEach {
             dao.upsertDriveRawDocument(it.toRawDocument(accountId, "conflict", it.value.id))
         }
         snapshot.tombstones.forEach {
-            dao.upsertDriveRawDocument(it.toRawDocument(accountId, "tombstone", it.value.id))
+            val target = it.value.entityKind to it.value.entityId
+            if (target !in pendingTargets) {
+                dao.upsertDriveRawDocument(it.toRawDocument(accountId, "tombstone", it.value.id))
+            }
         }
     }
 

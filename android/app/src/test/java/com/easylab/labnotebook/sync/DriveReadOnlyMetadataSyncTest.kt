@@ -207,8 +207,18 @@ class DriveReadOnlyMetadataSyncTest {
         val dao = database.dao()
         val local = entry(accountA.value, id = "entry-contract", title = "unsynced local edit")
         val queueItem = queue(accountA.value, entityKind = "entry", entityId = local.id)
+        val acceptedBaseline = DriveRawDocumentEntity(
+            accountId = accountA.value,
+            entityKind = "entry",
+            entityId = local.id,
+            path = ENTRY_PATH,
+            driveFileId = "accepted-baseline-file",
+            driveModifiedAt = "2026-05-23T09:00:00.000Z",
+            rawJson = fixture(ENTRY_PATH).replace("Drive v1 contract entry", "accepted baseline"),
+        )
         dao.upsertEntry(local)
         dao.insertQueueItemIfAbsent(queueItem)
+        dao.upsertDriveRawDocument(acceptedBaseline)
         val files = linkedMapOf(
             MANIFEST_PATH to manifestJson(),
             ENTRY_PATH to fixture(ENTRY_PATH),
@@ -221,9 +231,55 @@ class DriveReadOnlyMetadataSyncTest {
         assertEquals(local, dao.entry(accountA.value, local.id))
         assertEquals(local, dao.visibleEntry(accountA.value, local.id))
         assertEquals(queueItem, dao.queueItem(accountA.value, queueItem.id))
+        assertEquals(acceptedBaseline, dao.driveRawDocument(accountA.value, "entry", local.id))
+        assertNull(dao.driveRawDocument(accountA.value, "tombstone", "del-entry-entry-contract"))
         assertNotNull(dao.tombstone(accountA.value, "entry", local.id))
         assertEquals(1, report.skippedLocalChangeCount)
         assertEquals(1, dao.syncState(accountA.value)?.queueCount)
+    }
+
+    @Test
+    fun pendingLocalDeletePreservesLastAcceptedEntityBaseline() = runTest {
+        val dao = database.dao()
+        val local = entry(accountA.value, id = "entry-contract", title = "locally deleted entry")
+        val acceptedBaseline = DriveRawDocumentEntity(
+            accountId = accountA.value,
+            entityKind = "entry",
+            entityId = local.id,
+            path = ENTRY_PATH,
+            driveFileId = "accepted-delete-baseline-file",
+            driveModifiedAt = "2026-05-23T09:00:00.000Z",
+            rawJson = fixture(ENTRY_PATH).replace("Drive v1 contract entry", "accepted delete baseline"),
+        )
+        val localDelete = TombstoneEntity(
+            accountId = accountA.value,
+            id = "local-delete-entry-contract",
+            entityKind = "entry",
+            entityId = local.id,
+            deletedAt = LOCAL_TIME,
+            deletedByDeviceId = "local-device",
+        )
+        val deleteQueue = queue(accountA.value, "entry", local.id).copy(
+            id = "local-delete-queue-entry-contract",
+            operation = "delete",
+        )
+        dao.upsertEntry(local)
+        dao.upsertTombstone(localDelete)
+        dao.insertQueueItemIfAbsent(deleteQueue)
+        dao.upsertDriveRawDocument(acceptedBaseline)
+
+        val files = linkedMapOf(
+            MANIFEST_PATH to manifestJson(entryCount = 1),
+            ENTRY_PATH to fixture(ENTRY_PATH),
+        )
+        val report = DriveV1MetadataApplier(database, now = { SYNCED_AT })
+            .apply(accountA, DriveV1MetadataReader(FakeDriveRepository(files)).read(accountA))
+
+        assertEquals(local, dao.entry(accountA.value, local.id))
+        assertNull(dao.visibleEntry(accountA.value, local.id))
+        assertEquals(deleteQueue, dao.queueItem(accountA.value, deleteQueue.id))
+        assertEquals(acceptedBaseline, dao.driveRawDocument(accountA.value, "entry", local.id))
+        assertEquals(1, report.skippedLocalChangeCount)
     }
 
     @Test
