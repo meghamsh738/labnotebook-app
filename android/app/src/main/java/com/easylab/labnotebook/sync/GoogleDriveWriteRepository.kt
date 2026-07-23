@@ -18,6 +18,7 @@ import java.security.MessageDigest
 import java.util.UUID
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -37,6 +38,34 @@ import kotlinx.serialization.json.put
 
 /** HTTP transport used only by the unwired native writer and its contract tests. */
 internal interface DriveWriteTransport : DriveReadOnlyTransport
+
+internal sealed interface DriveWritePrecondition {
+    data object MustNotExist : DriveWritePrecondition
+
+    data class MustMatch(
+        val fileId: String,
+        val version: Long,
+    ) : DriveWritePrecondition {
+        init {
+            require(fileId.isNotBlank()) { "Drive precondition file id must not be blank." }
+            require(version > 0) { "Drive precondition version must be positive." }
+        }
+    }
+}
+
+internal class DriveWritePreconditionConflictException(
+    message: String,
+    val statusCode: Int? = null,
+) : Exception(message)
+
+internal class DriveWriteAmbiguousCommitException(
+    message: String,
+    cause: Throwable,
+) : Exception(message, cause)
+
+internal class DriveWriteReconciledAfterCancellationException(
+    val file: DriveFileRef,
+) : Exception("Drive conditional update committed and was reconciled before cancellation propagated: ${file.path}")
 
 internal class HttpUrlConnectionDriveWriteTransport(
     private val connectTimeoutMillis: Int = 15_000,
@@ -97,6 +126,7 @@ internal class HttpUrlConnectionDriveWriteTransport(
 /**
  * Tested native Drive writer. Production dependency injection deliberately continues to use
  * [GoogleDriveReadOnlyRepository] until lossless serialization and conflict gates are complete.
+ * Conditional publication must be preflighted and ordered by [DriveV1WriteTransactionExecutor].
  */
 internal class GoogleDriveWriteRepository(
     private val authRepository: AuthRepository,
@@ -106,7 +136,7 @@ internal class GoogleDriveWriteRepository(
     private val maxJsonBytes: Int = GoogleDriveReadOnlyRepository.DEFAULT_MAX_JSON_BYTES,
     private val maxBlobBytes: Int = DEFAULT_MAX_BLOB_BYTES,
     private val boundaryFactory: () -> String = { "easylab-${UUID.randomUUID()}" },
-) : DriveRepository {
+) : DriveRepository, DriveConditionalWriteClient {
     private val writeMutex = Mutex()
     private val reader = GoogleDriveReadOnlyRepository(
         authRepository = authRepository,
@@ -208,6 +238,93 @@ internal class GoogleDriveWriteRepository(
         }
     }
 
+    override suspend fun putJsonConditional(
+        accountId: AccountId,
+        path: String,
+        json: String,
+        precondition: DriveWritePrecondition,
+    ): Result<DriveFileRef> = driveResult {
+        writeMutex.withLock {
+            requireUpdatePrecondition(path, precondition)
+            val segments = requireManagedPath(path, requireJson = true)
+            val bytes = json.toByteArray(StandardCharsets.UTF_8)
+            if (bytes.size > maxJsonBytes) {
+                throw DriveProtocolException("Drive JSON exceeds the safe size limit: $path")
+            }
+            val value = try {
+                JSON.parseToJsonElement(json)
+            } catch (error: Exception) {
+                throw DriveProtocolException("Drive JSON is invalid: $path", error)
+            }
+            if (value !is JsonObject) {
+                throw DriveProtocolException("Drive managed JSON must contain an object: $path")
+            }
+            val token = accessToken(accountId)
+            val rootId = requireExistingRoot(accountId, path)
+            val parentId = requireExistingFolders(token, rootId, segments.dropLast(1), path)
+            conditionalUpsertMedia(
+                token = token,
+                parentId = parentId,
+                path = path,
+                name = segments.last(),
+                mimeType = JSON_MIME_TYPE,
+                content = bytes,
+                appProperties = jsonAppProperties(path, value),
+                precondition = precondition,
+                requireExistingMimeType = ::isJsonMimeType,
+            )
+        }
+    }
+
+    override suspend fun putBlobConditional(
+        accountId: AccountId,
+        path: String,
+        bytes: ByteArray,
+        mimeType: String,
+        sha256: String,
+        precondition: DriveWritePrecondition,
+    ): Result<DriveFileRef> = driveResult {
+        writeMutex.withLock {
+            requireUpdatePrecondition(path, precondition)
+            val segments = requireManagedBlobPath(path)
+            if (bytes.size > maxBlobBytes) {
+                throw DriveProtocolException("Drive blob exceeds the safe size limit: $path")
+            }
+            if (bytes.size > CONDITIONAL_MULTIPART_MAX_BLOB_BYTES) {
+                throw DriveProtocolException(
+                    "Drive conditional blob exceeds the safe multipart size; resumable upload is required: $path",
+                )
+            }
+            val normalizedMimeType = mimeType.substringBefore(';').trim().lowercase()
+            if (normalizedMimeType.isBlank() || '/' !in normalizedMimeType) {
+                throw DriveProtocolException("Drive blob MIME type is invalid: $path")
+            }
+            if (!SHA256_REGEX.matches(sha256)) {
+                throw DriveProtocolException("Drive blob SHA-256 is invalid: $path")
+            }
+            val actualSha256 = sha256(bytes)
+            if (!actualSha256.equals(sha256, ignoreCase = true)) {
+                throw DriveProtocolException("Drive blob SHA-256 does not match its bytes: $path")
+            }
+            val token = accessToken(accountId)
+            val rootId = requireExistingRoot(accountId, path)
+            val parentId = requireExistingFolders(token, rootId, segments.dropLast(1), path)
+            conditionalUpsertMedia(
+                token = token,
+                parentId = parentId,
+                path = path,
+                name = segments.last(),
+                mimeType = normalizedMimeType,
+                content = bytes,
+                appProperties = mapOf(
+                    "entityType" to "attachmentBlob",
+                    "sha256" to actualSha256,
+                ),
+                precondition = precondition,
+            )
+        }
+    }
+
     private suspend fun resolveOrCreateRoot(accountId: AccountId, token: String): String {
         rootFolderIds.get(accountId)?.let { savedId ->
             val cached = try {
@@ -252,6 +369,37 @@ internal class GoogleDriveWriteRepository(
                     existing.id
                 }
             }
+        }
+        return parentId
+    }
+
+    private suspend fun requireExistingRoot(accountId: AccountId, path: String): String =
+        reader.resolveExistingRootFolderId(accountId)
+            ?: throw DriveWritePreconditionConflictException(
+                "Drive workspace no longer exists for conditional update: $path",
+            )
+
+    private suspend fun requireExistingFolders(
+        token: String,
+        rootId: String,
+        pathSegments: List<String>,
+        path: String,
+    ): String {
+        var parentId = rootId
+        for (segment in pathSegments) {
+            val matches = findChildren(token, parentId, segment)
+            if (matches.size != 1) {
+                throw DriveWritePreconditionConflictException(
+                    "Drive managed folder path changed before conditional update: $path",
+                )
+            }
+            val folder = matches.single()
+            if (folder.mimeType != FOLDER_MIME_TYPE) {
+                throw DriveWritePreconditionConflictException(
+                    "Drive managed folder path is no longer a folder: $path",
+                )
+            }
+            parentId = folder.id
         }
         return parentId
     }
@@ -334,6 +482,295 @@ internal class GoogleDriveWriteRepository(
         return item.toFileRef(path)
     }
 
+    private suspend fun conditionalUpsertMedia(
+        token: String,
+        parentId: String,
+        path: String,
+        name: String,
+        mimeType: String,
+        content: ByteArray,
+        appProperties: Map<String, String>,
+        precondition: DriveWritePrecondition,
+        requireExistingMimeType: ((String?) -> Boolean)? = null,
+    ): DriveFileRef {
+        val expected = precondition as? DriveWritePrecondition.MustMatch
+            ?: throw DriveProtocolException(
+                "Drive conditional creation is disabled until idempotent creation is implemented: $path",
+            )
+        val matches = findChildren(token, parentId, name)
+        if (matches.size > 1) {
+            throw DriveWritePreconditionConflictException(
+                "Drive workspace contains duplicate managed path: $path",
+            )
+        }
+        val existing = matches.singleOrNull()
+            ?: throw DriveWritePreconditionConflictException(
+                "Drive managed path no longer exists: $path",
+            )
+        if (existing.mimeType == FOLDER_MIME_TYPE) {
+            throw DriveProtocolException("Drive managed file path resolves to a folder: $path")
+        }
+        if (requireExistingMimeType != null && !requireExistingMimeType(existing.mimeType)) {
+            throw DriveProtocolException("Drive managed JSON path is occupied by a non-JSON file: $path")
+        }
+        if (existing.id != expected.fileId) {
+            throw DriveWritePreconditionConflictException(
+                "Drive managed path no longer matches the expected file id: $path",
+            )
+        }
+
+        val (current, response) = try {
+            getMetadataResponse(token, expected.fileId)
+        } catch (error: DriveHttpException) {
+            if (error.statusCode == 404) {
+                throw DriveWritePreconditionConflictException(
+                    "Drive managed path disappeared before its conditional update: $path",
+                    statusCode = 404,
+                )
+            }
+            throw error
+        }
+        if (!isExpectedManagedFile(current, expected.fileId, parentId, name, mimeType, requireExistingMimeType)) {
+            throw DriveWritePreconditionConflictException(
+                "Drive file changed before its conditional update: $path",
+            )
+        }
+
+        val replacedPropertyKeys = buildSet {
+            addAll(appProperties.keys)
+            if (isJsonMimeType(mimeType)) add("contentHash")
+        }
+        val mergedAppProperties = (current.appProperties - replacedPropertyKeys) + appProperties
+        if (current.version != expected.version) {
+            return reconcileAppliedWrite(
+                token = token,
+                parentId = parentId,
+                path = path,
+                name = name,
+                mimeType = mimeType,
+                content = content,
+                expectedId = expected.fileId,
+                requiredAppProperties = appProperties,
+            ) ?: throw DriveWritePreconditionConflictException(
+                "Drive managed path no longer matches the expected file version: $path",
+            )
+        }
+        val ifMatch = response.header("ETag")
+            ?.trim()
+            ?.takeIf(String::isNotBlank)
+            ?: throw DriveProtocolException(
+                "Drive metadata omitted the ETag required for a conditional update: $path",
+            )
+        val metadata = buildJsonObject {
+            put("name", name)
+            put("mimeType", mimeType)
+            if (mergedAppProperties.isNotEmpty()) {
+                put("appProperties", buildJsonObject {
+                    mergedAppProperties.forEach { (key, value) -> put(key, value) }
+                })
+            }
+        }.toString()
+        val boundary = boundaryFactory().also { value ->
+            require(value.isNotBlank() && '\r' !in value && '\n' !in value) {
+                "Multipart boundary must be a non-empty single line."
+            }
+        }
+        val body = multipartBody(boundary, metadata, mimeType, content)
+        var mutationAcknowledged = false
+        return try {
+            val mutation = request(
+                token = token,
+                method = "PATCH",
+                url = uploadUrl(
+                    "files/${encodePathSegment(expected.fileId)}",
+                    mapOf("uploadType" to "multipart", "fields" to FILE_FIELDS),
+                ),
+                headers = mapOf(
+                    "Content-Type" to "multipart/related; boundary=$boundary",
+                    "If-Match" to ifMatch,
+                ),
+                body = body,
+                mapPreconditionConflict = true,
+            ).toDriveItem("Drive conditional file upload")
+            mutationAcknowledged = true
+            verifyCommittedWrite(
+                token = token,
+                parentId = parentId,
+                path = path,
+                name = name,
+                mimeType = mimeType,
+                content = content,
+                expected = expected,
+                expectedAppProperties = mergedAppProperties,
+                mutation = mutation,
+            )
+        } catch (error: DriveWritePreconditionConflictException) {
+            if (!mutationAcknowledged) throw error
+            val reconciled = reconcileAfterMutation(
+                token,
+                parentId,
+                path,
+                name,
+                mimeType,
+                content,
+                expected.fileId,
+                appProperties,
+            )
+            reconciled ?: throw DriveWriteAmbiguousCommitException(
+                "Drive conditional update committed before a concurrent verification conflict: $path",
+                error,
+            )
+        } catch (error: CancellationException) {
+            reconcileAfterMutation(
+                token,
+                parentId,
+                path,
+                name,
+                mimeType,
+                content,
+                expected.fileId,
+                appProperties,
+            )?.let { file ->
+                error.addSuppressed(DriveWriteReconciledAfterCancellationException(file))
+            }
+            throw error
+        } catch (error: Throwable) {
+            val reconciled = reconcileAfterMutation(
+                token,
+                parentId,
+                path,
+                name,
+                mimeType,
+                content,
+                expected.fileId,
+                appProperties,
+            )
+            reconciled ?: throw DriveWriteAmbiguousCommitException(
+                "Drive conditional update may have committed but could not be reconciled: $path",
+                error,
+            )
+        }
+    }
+
+    private suspend fun reconcileAfterMutation(
+        token: String,
+        parentId: String,
+        path: String,
+        name: String,
+        mimeType: String,
+        content: ByteArray,
+        expectedId: String,
+        requiredAppProperties: Map<String, String>,
+    ): DriveFileRef? = withContext(NonCancellable) {
+        runCatching {
+            reconcileAppliedWrite(
+                token,
+                parentId,
+                path,
+                name,
+                mimeType,
+                content,
+                expectedId,
+                requiredAppProperties,
+            )
+        }.getOrNull()
+    }
+
+    private suspend fun verifyCommittedWrite(
+        token: String,
+        parentId: String,
+        path: String,
+        name: String,
+        mimeType: String,
+        content: ByteArray,
+        expected: DriveWritePrecondition.MustMatch,
+        expectedAppProperties: Map<String, String>,
+        mutation: DriveItem,
+    ): DriveFileRef {
+        if (
+            mutation.id != expected.fileId ||
+            mutation.name != name ||
+            mutation.mimeType != mimeType
+        ) {
+            throw DriveProtocolException("Drive conditional upload returned unexpected metadata for: $path")
+        }
+        val refreshed = findChildren(token, parentId, name)
+        if (refreshed.size != 1 || refreshed.single().id != expected.fileId) {
+            throw DriveWritePreconditionConflictException(
+                "Drive managed path changed concurrently during its conditional write: $path",
+            )
+        }
+        val verified = getMetadata(token, expected.fileId)
+        if (
+            !isExpectedManagedFile(verified, expected.fileId, parentId, name, mimeType, null) ||
+            verified.appProperties != expectedAppProperties
+        ) {
+            throw DriveProtocolException("Drive conditional upload failed metadata verification: $path")
+        }
+        val verifiedVersion = verified.version
+            ?: throw DriveProtocolException("Drive conditional upload omitted its verified version: $path")
+        if (verifiedVersion <= expected.version || mutation.version != verifiedVersion) {
+            throw DriveProtocolException("Drive conditional upload did not advance its version: $path")
+        }
+        val readBack = readMedia(token, expected.fileId)
+        if (sha256(readBack) != sha256(content)) {
+            throw DriveProtocolException("Drive conditional upload failed content verification: $path")
+        }
+        val finalMetadata = getMetadata(token, expected.fileId)
+        if (finalMetadata != verified) {
+            throw DriveWritePreconditionConflictException(
+                "Drive file changed during conditional post-write verification: $path",
+            )
+        }
+        return finalMetadata.toFileRef(path)
+    }
+
+    private suspend fun reconcileAppliedWrite(
+        token: String,
+        parentId: String,
+        path: String,
+        name: String,
+        mimeType: String,
+        content: ByteArray,
+        expectedId: String,
+        requiredAppProperties: Map<String, String>,
+    ): DriveFileRef? {
+        val matches = findChildren(token, parentId, name)
+        if (matches.size != 1 || matches.single().id != expectedId) return null
+        val metadata = getMetadata(token, expectedId)
+        if (!isExpectedManagedFile(metadata, expectedId, parentId, name, mimeType, null)) return null
+        if (metadata.version == null || metadata.version <= 0) return null
+        if (requiredAppProperties.any { (key, value) -> metadata.appProperties[key] != value }) return null
+        if (sha256(readMedia(token, expectedId)) != sha256(content)) return null
+        val finalMetadata = getMetadata(token, expectedId)
+        if (finalMetadata != metadata) return null
+        return finalMetadata.toFileRef(path)
+    }
+
+    private fun isExpectedManagedFile(
+        item: DriveItem,
+        expectedId: String,
+        parentId: String,
+        name: String,
+        mimeType: String,
+        requireExistingMimeType: ((String?) -> Boolean)?,
+    ): Boolean =
+        item.id == expectedId &&
+            item.name == name &&
+            !item.trashed &&
+            item.mimeType == mimeType &&
+            item.parentIds == setOf(parentId) &&
+            (requireExistingMimeType == null || requireExistingMimeType(item.mimeType))
+
+    private suspend fun readMedia(token: String, fileId: String): ByteArray = request(
+        token = token,
+        method = "GET",
+        url = apiUrl(
+            "files/${encodePathSegment(fileId)}",
+            mapOf("alt" to "media"),
+        ),
+    ).body
+
     private fun multipartBody(
         boundary: String,
         metadata: String,
@@ -381,11 +818,20 @@ internal class GoogleDriveWriteRepository(
         return output
     }
 
-    private suspend fun getMetadata(token: String, fileId: String): DriveItem = request(
-        token,
-        "GET",
-        apiUrl("files/${encodePathSegment(fileId)}", mapOf("fields" to FILE_FIELDS)),
-    ).toDriveItem("Drive file metadata")
+    private suspend fun getMetadata(token: String, fileId: String): DriveItem =
+        getMetadataResponse(token, fileId).first
+
+    private suspend fun getMetadataResponse(
+        token: String,
+        fileId: String,
+    ): Pair<DriveItem, DriveHttpResponse> {
+        val response = request(
+            token,
+            "GET",
+            apiUrl("files/${encodePathSegment(fileId)}", mapOf("fields" to FILE_FIELDS)),
+        )
+        return response.toDriveItem("Drive file metadata") to response
+    }
 
     private suspend fun request(
         token: String,
@@ -393,6 +839,7 @@ internal class GoogleDriveWriteRepository(
         url: String,
         headers: Map<String, String> = emptyMap(),
         body: ByteArray? = null,
+        mapPreconditionConflict: Boolean = false,
     ): DriveHttpResponse {
         val response = transport.execute(
             DriveHttpRequest(
@@ -406,6 +853,12 @@ internal class GoogleDriveWriteRepository(
             ),
         )
         if (response.statusCode !in 200..299) {
+            if (mapPreconditionConflict && response.statusCode in setOf(404, 409, 412)) {
+                throw DriveWritePreconditionConflictException(
+                    message = "Google Drive rejected the conditional write with HTTP ${response.statusCode}.",
+                    statusCode = response.statusCode,
+                )
+            }
             val responseBody = response.body
                 .copyOf(minOf(response.body.size, MAX_RETAINED_ERROR_BODY_BYTES))
                 .toString(StandardCharsets.UTF_8)
@@ -418,6 +871,9 @@ internal class GoogleDriveWriteRepository(
         }
         return response
     }
+
+    private fun DriveHttpResponse.header(name: String): String? =
+        headers.entries.firstOrNull { (key, _) -> key.equals(name, ignoreCase = true) }?.value
 
     private fun DriveHttpResponse.toDriveItem(label: String): DriveItem =
         toJsonObject(label).toDriveItem()
@@ -449,6 +905,10 @@ internal class GoogleDriveWriteRepository(
             trashed = value["trashed"]?.jsonPrimitive?.booleanOrNull == true,
             appProperties = (value["appProperties"] as? JsonObject)
                 ?.mapValues { (_, property) -> property.jsonPrimitive.content }
+                .orEmpty(),
+            parentIds = (value["parents"] as? JsonArray)
+                ?.map { parent -> parent.jsonPrimitive.content }
+                ?.toSet()
                 .orEmpty(),
         )
     }
@@ -486,9 +946,29 @@ internal class GoogleDriveWriteRepository(
             "conflict", "tombstone" -> root["entityId"]?.jsonPrimitive?.contentOrNull
             else -> payload?.get("id")?.jsonPrimitive?.contentOrNull
         }
+        val contentHash = payload?.let { payloadValue ->
+            runCatching {
+                when (entityType) {
+                    "entry" -> DriveV1Hashing.entryContentHash(
+                        JSON.decodeFromString(DriveV1Entry.serializer(), payloadValue.toString()),
+                    )
+                    "attachment" -> DriveV1Hashing.attachmentMetadataHash(
+                        JSON.decodeFromString(DriveV1Attachment.serializer(), payloadValue.toString()),
+                    )
+                    "fileBoxItem" -> DriveV1Hashing.fileBoxMetadataHash(
+                        JSON.decodeFromString(DriveV1FileBoxItem.serializer(), payloadValue.toString()),
+                    )
+                    "transfer" -> DriveV1Hashing.transferMetadataHash(
+                        JSON.decodeFromString(DriveV1Transfer.serializer(), payloadValue.toString()),
+                    )
+                    else -> null
+                }
+            }.getOrNull()
+        }
         return buildMap {
             put("entityType", entityType)
             entityId?.takeIf(String::isNotBlank)?.let { put("entityId", it) }
+            contentHash?.let { put("contentHash", it) }
         }
     }
 
@@ -518,6 +998,17 @@ internal class GoogleDriveWriteRepository(
             throw DriveProtocolException("Drive blob path must be attachment content: $path")
         }
         return segments
+    }
+
+    private fun requireUpdatePrecondition(
+        path: String,
+        precondition: DriveWritePrecondition,
+    ) {
+        if (precondition !is DriveWritePrecondition.MustMatch) {
+            throw DriveProtocolException(
+                "Drive conditional creation is disabled until idempotent creation is implemented: $path",
+            )
+        }
     }
 
     private fun isJsonMimeType(mimeType: String?): Boolean {
@@ -573,10 +1064,12 @@ internal class GoogleDriveWriteRepository(
         val version: Long?,
         val trashed: Boolean,
         val appProperties: Map<String, String>,
+        val parentIds: Set<String>,
     )
 
     private companion object {
         const val DEFAULT_MAX_BLOB_BYTES = 256 * 1024 * 1024
+        const val CONDITIONAL_MULTIPART_MAX_BLOB_BYTES = 5 * 1024 * 1024
         const val MAX_MANAGED_PATH_LENGTH = 1024
         const val MAX_PATH_SEGMENT_LENGTH = 255
         const val MAX_RETAINED_ERROR_BODY_BYTES = 16 * 1024
@@ -586,7 +1079,7 @@ internal class GoogleDriveWriteRepository(
         const val JSON_MIME_TYPE = "application/json"
         const val MANIFEST_PATH = "manifest.json"
         const val UNKNOWN_MODIFIED_TIME = "1970-01-01T00:00:00Z"
-        const val FILE_FIELDS = "id,name,mimeType,modifiedTime,size,version,trashed,appProperties"
+        const val FILE_FIELDS = "id,name,mimeType,modifiedTime,size,version,trashed,appProperties,parents"
         val SHA256_REGEX = Regex("^[0-9a-fA-F]{64}$")
         val JSON = Json { ignoreUnknownKeys = true }
         val MANAGED_PREFIXES = listOf(

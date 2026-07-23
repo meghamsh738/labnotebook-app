@@ -7,10 +7,12 @@ import com.easylab.labnotebook.data.repository.DriveAccessState
 import com.easylab.labnotebook.data.repository.DriveHttpException
 import com.easylab.labnotebook.data.repository.DriveProtocolException
 import com.easylab.labnotebook.data.repository.DriveWriteCapability
+import java.io.IOException
 import java.net.URI
 import java.net.URLDecoder
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -20,6 +22,7 @@ import kotlinx.coroutines.yield
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
@@ -188,6 +191,302 @@ class GoogleDriveWriteRepositoryTest {
         assertFalse(error.retryable)
     }
 
+    @Test
+    fun conditionalPatchUsesFreshEtagAndVerifiesMetadataAndMedia() = runTest {
+        val fixture = Fixture()
+        fixture.addExistingTree(
+            fileCopies = 1,
+            existingAppProperties = mapOf("futureProperty" to "keep-me"),
+        )
+
+        val result = fixture.repository.putJsonConditional(
+            ACCOUNT_A,
+            ENTRY_PATH,
+            ENTRY_JSON,
+            DriveWritePrecondition.MustMatch("entry-file-1", 1),
+        ).getOrThrow()
+
+        assertEquals("entry-file-1", result.id)
+        assertEquals(2L, result.version)
+        val patch = fixture.transport.requests.single { it.method == "PATCH" }
+        assertEquals("\"etag-entry-file-1-v1\"", patch.headers["If-Match"])
+        assertTrue(
+            fixture.transport.requests.any {
+                it.method == "GET" && queryParameter(it.url, "alt") == "media"
+            },
+        )
+    }
+
+    @Test
+    fun conditionalJsonRefreshesWebCompatibleSemanticContentHash() = runTest {
+        val fixture = Fixture()
+        fixture.addExistingTree(
+            fileCopies = 1,
+            existingAppProperties = mapOf("contentHash" to "stale", "futureProperty" to "keep-me"),
+        )
+        val rawJson = resource("drive-v1/entries/2026-05-23.json")
+        val envelope = DriveV1Json.decodeLossless<DriveV1Envelope<DriveV1Entry>>(rawJson)
+            .value
+            .requireV1("entry")
+
+        val result = fixture.repository.putJsonConditional(
+            ACCOUNT_A,
+            ENTRY_PATH,
+            rawJson,
+            DriveWritePrecondition.MustMatch("entry-file-1", 1),
+        ).getOrThrow()
+
+        assertEquals(DriveV1Hashing.entryContentHash(envelope.payload), result.appProperties["contentHash"])
+        assertEquals("entry-contract", result.appProperties["entityId"])
+        assertEquals("keep-me", result.appProperties["futureProperty"])
+    }
+
+    @Test
+    fun staleMetadataFailsBeforeConditionalPatch() = runTest {
+        val fixture = Fixture()
+        fixture.addExistingTree(fileCopies = 1)
+        fixture.transport.changeVersionOnNextMetadataGet = true
+
+        val error = fixture.repository.putJsonConditional(
+            ACCOUNT_A,
+            ENTRY_PATH,
+            ENTRY_JSON,
+            DriveWritePrecondition.MustMatch("entry-file-1", 1),
+        ).exceptionOrNull()
+
+        assertTrue(error is DriveWritePreconditionConflictException)
+        assertFalse(fixture.transport.requests.any { it.method == "PATCH" })
+    }
+
+    @Test
+    fun missingEtagFailsClosedBeforeConditionalPatch() = runTest {
+        val fixture = Fixture()
+        fixture.addExistingTree(fileCopies = 1)
+        fixture.transport.omitMetadataEtag = true
+
+        val error = fixture.repository.putJsonConditional(
+            ACCOUNT_A,
+            ENTRY_PATH,
+            ENTRY_JSON,
+            DriveWritePrecondition.MustMatch("entry-file-1", 1),
+        ).exceptionOrNull()
+
+        assertTrue(error is DriveProtocolException)
+        assertTrue(error?.message.orEmpty().contains("ETag"))
+        assertFalse(fixture.transport.requests.any { it.method == "PATCH" })
+    }
+
+    @Test
+    fun movedFileFailsBeforeConditionalPatch() = runTest {
+        val fixture = Fixture()
+        fixture.addExistingTree(fileCopies = 1)
+        fixture.transport.moveFileOnNextMetadataGet = true
+
+        val error = fixture.repository.putJsonConditional(
+            ACCOUNT_A,
+            ENTRY_PATH,
+            ENTRY_JSON,
+            DriveWritePrecondition.MustMatch("entry-file-1", 1),
+        ).exceptionOrNull()
+
+        assertTrue(error is DriveWritePreconditionConflictException)
+        assertFalse(fixture.transport.requests.any { it.method == "PATCH" })
+    }
+
+    @Test
+    fun conditionalPatchMapsHttp412ToTypedConflict() = runTest {
+        val fixture = Fixture()
+        fixture.addExistingTree(fileCopies = 1)
+        fixture.transport.changeVersionBeforePatch = true
+
+        val error = fixture.repository.putJsonConditional(
+            ACCOUNT_A,
+            ENTRY_PATH,
+            ENTRY_JSON,
+            DriveWritePrecondition.MustMatch("entry-file-1", 1),
+        ).exceptionOrNull()
+
+        assertTrue(error is DriveWritePreconditionConflictException)
+        assertEquals(412, (error as DriveWritePreconditionConflictException).statusCode)
+    }
+
+    @Test
+    fun conditionalPatchMapsHttp409ToTypedConflict() = runTest {
+        val fixture = Fixture()
+        fixture.addExistingTree(fileCopies = 1)
+        fixture.transport.rejectPatchStatus = 409
+
+        val error = fixture.repository.putJsonConditional(
+            ACCOUNT_A,
+            ENTRY_PATH,
+            ENTRY_JSON,
+            DriveWritePrecondition.MustMatch("entry-file-1", 1),
+        ).exceptionOrNull()
+
+        assertTrue(error is DriveWritePreconditionConflictException)
+        assertEquals(409, (error as DriveWritePreconditionConflictException).statusCode)
+    }
+
+    @Test
+    fun conditionalCreateFailsBeforeAnyNetworkUntilIdempotentCreationExists() = runTest {
+        val fixture = Fixture()
+
+        val error = fixture.repository.putJsonConditional(
+            ACCOUNT_A,
+            ENTRY_PATH,
+            ENTRY_JSON,
+            DriveWritePrecondition.MustNotExist,
+        ).exceptionOrNull()
+
+        assertTrue(error is DriveProtocolException)
+        assertTrue(error?.message.orEmpty().contains("idempotent creation"))
+        assertTrue(fixture.transport.requests.isEmpty())
+    }
+
+    @Test
+    fun conditionalUpdateNeverCreatesAMissingWorkspaceOrFolders() = runTest {
+        val missingWorkspace = Fixture()
+
+        val workspaceError = missingWorkspace.repository.putJsonConditional(
+            ACCOUNT_A,
+            ENTRY_PATH,
+            ENTRY_JSON,
+            DriveWritePrecondition.MustMatch("entry-file-1", 1),
+        ).exceptionOrNull()
+
+        assertTrue(workspaceError is DriveWritePreconditionConflictException)
+        assertTrue(missingWorkspace.transport.requests.isNotEmpty())
+        assertTrue(missingWorkspace.transport.requests.all { it.method == "GET" })
+
+        val missingFolders = Fixture()
+        missingFolders.addExistingRoot()
+
+        val folderError = missingFolders.repository.putJsonConditional(
+            ACCOUNT_A,
+            ENTRY_PATH,
+            ENTRY_JSON,
+            DriveWritePrecondition.MustMatch("entry-file-1", 1),
+        ).exceptionOrNull()
+
+        assertTrue(folderError is DriveWritePreconditionConflictException)
+        assertTrue(missingFolders.transport.requests.isNotEmpty())
+        assertTrue(missingFolders.transport.requests.all { it.method == "GET" })
+    }
+
+    @Test
+    fun conditionalWriteFailsWhenMediaReadBackIsCorrupt() = runTest {
+        val fixture = Fixture()
+        fixture.addExistingTree(fileCopies = 1)
+        fixture.transport.corruptMediaReadBack = true
+
+        val error = fixture.repository.putJsonConditional(
+            ACCOUNT_A,
+            ENTRY_PATH,
+            ENTRY_JSON,
+            DriveWritePrecondition.MustMatch("entry-file-1", 1),
+        ).exceptionOrNull()
+
+        assertTrue(error is DriveWriteAmbiguousCommitException)
+        assertTrue(error?.cause is DriveProtocolException)
+        assertTrue(error?.cause?.message.orEmpty().contains("content verification"))
+    }
+
+    @Test
+    fun lostPatchResponseReconcilesAndOldPreconditionRetryIsIdempotent() = runTest {
+        val fixture = Fixture()
+        fixture.addExistingTree(fileCopies = 1)
+        fixture.transport.losePatchResponseAfterCommit = true
+        val precondition = DriveWritePrecondition.MustMatch("entry-file-1", 1)
+
+        val first = fixture.repository.putJsonConditional(
+            ACCOUNT_A,
+            ENTRY_PATH,
+            ENTRY_JSON,
+            precondition,
+        ).getOrThrow()
+        val retry = fixture.repository.putJsonConditional(
+            ACCOUNT_A,
+            ENTRY_PATH,
+            ENTRY_JSON,
+            precondition,
+        ).getOrThrow()
+
+        assertEquals(2L, first.version)
+        assertEquals(first, retry)
+        assertEquals(1, fixture.transport.requests.count { it.method == "PATCH" })
+    }
+
+    @Test
+    fun cancellationAfterCommitIsReconciledButAlwaysPropagatesAndRetryIsSafe() = runTest {
+        val fixture = Fixture()
+        fixture.addExistingTree(fileCopies = 1)
+        fixture.transport.cancelPatchAfterCommit = true
+        val precondition = DriveWritePrecondition.MustMatch("entry-file-1", 1)
+        var cancellation: CancellationException? = null
+
+        try {
+            fixture.repository.putJsonConditional(
+                ACCOUNT_A,
+                ENTRY_PATH,
+                ENTRY_JSON,
+                precondition,
+            )
+        } catch (error: CancellationException) {
+            cancellation = error
+        }
+
+        val diagnostic = cancellation?.suppressed
+            ?.singleOrNull() as? DriveWriteReconciledAfterCancellationException
+        assertEquals(ENTRY_PATH, diagnostic?.file?.path)
+        assertEquals(2L, diagnostic?.file?.version)
+
+        val retry = fixture.repository.putJsonConditional(
+            ACCOUNT_A,
+            ENTRY_PATH,
+            ENTRY_JSON,
+            precondition,
+        ).getOrThrow()
+
+        assertEquals(2L, retry.version)
+        assertEquals(1, fixture.transport.requests.count { it.method == "PATCH" })
+    }
+
+    @Test
+    fun conditionalPatchMapsHttp404ToTypedConflict() = runTest {
+        val fixture = Fixture()
+        fixture.addExistingTree(fileCopies = 1)
+        fixture.transport.rejectPatchStatus = 404
+
+        val error = fixture.repository.putJsonConditional(
+            ACCOUNT_A,
+            ENTRY_PATH,
+            ENTRY_JSON,
+            DriveWritePrecondition.MustMatch("entry-file-1", 1),
+        ).exceptionOrNull()
+
+        assertTrue(error is DriveWritePreconditionConflictException)
+        assertEquals(404, (error as DriveWritePreconditionConflictException).statusCode)
+    }
+
+    @Test
+    fun conditionalBlobAboveMultipartLimitRequiresResumableUploadWithoutNetwork() = runTest {
+        val fixture = Fixture()
+        val bytes = ByteArray(5 * 1024 * 1024 + 1)
+
+        val error = fixture.repository.putBlobConditional(
+            ACCOUNT_A,
+            "attachments/2026-07-16/large.bin",
+            bytes,
+            "application/octet-stream",
+            "0".repeat(64),
+            DriveWritePrecondition.MustMatch("large-file", 1),
+        ).exceptionOrNull()
+
+        assertTrue(error is DriveProtocolException)
+        assertTrue(error?.message.orEmpty().contains("resumable upload is required"))
+        assertTrue(fixture.transport.requests.isEmpty())
+    }
+
     private class Fixture {
         val auth = FakeAuthRepository(mapOf(ACCOUNT_A to "exact-token-a"))
         val store = InMemoryDriveRootFolderIdStore()
@@ -203,8 +502,7 @@ class GoogleDriveWriteRepositoryTest {
             fileCopies: Int,
             existingAppProperties: Map<String, String> = emptyMap(),
         ) {
-            store.set(ACCOUNT_A, "root-a")
-            transport.add(FakeNode.folder("root-a", "Easylab Lab Notebook", parentId = "root"))
+            addExistingRoot()
             transport.add(FakeNode.folder("entries", "entries", parentId = "root-a"))
             transport.add(FakeNode.folder("day", "2026-07-16", parentId = "entries"))
             repeat(fileCopies) { index ->
@@ -219,6 +517,20 @@ class GoogleDriveWriteRepositoryTest {
                     ),
                 )
             }
+        }
+
+        fun addExistingRoot() {
+            store.set(ACCOUNT_A, "root-a")
+            transport.add(FakeNode.folder("root-a", "Easylab Lab Notebook", parentId = "root"))
+            transport.add(
+                FakeNode.file(
+                    id = "manifest",
+                    name = "manifest.json",
+                    parentId = "root-a",
+                    mimeType = "application/json",
+                    body = MANIFEST_JSON.toByteArray(),
+                ),
+            )
         }
     }
 
@@ -235,12 +547,13 @@ class GoogleDriveWriteRepositoryTest {
     private data class FakeNode(
         val id: String,
         val name: String,
-        val parentId: String,
+        var parentId: String,
         val mimeType: String,
         var body: ByteArray = byteArrayOf(),
         var version: Long = 1,
         var appProperties: Map<String, String> = emptyMap(),
         val trashed: Boolean = false,
+        var etag: String = "\"etag-$id-v$version\"",
     ) {
         companion object {
             fun folder(id: String, name: String, parentId: String) = FakeNode(
@@ -266,6 +579,14 @@ class GoogleDriveWriteRepositoryTest {
         val createdFolders = mutableListOf<String>()
         var lastUploadedContent: ByteArray? = null
         var forcedStatus: Int? = null
+        var changeVersionOnNextMetadataGet = false
+        var moveFileOnNextMetadataGet = false
+        var omitMetadataEtag = false
+        var rejectPatchStatus: Int? = null
+        var changeVersionBeforePatch = false
+        var corruptMediaReadBack = false
+        var losePatchResponseAfterCommit = false
+        var cancelPatchAfterCommit = false
         private val nodes = linkedMapOf<String, FakeNode>()
         private var nextId = 1
 
@@ -291,9 +612,29 @@ class GoogleDriveWriteRepositoryTest {
             val id = uri.path.substringAfterLast("/files/")
             val node = nodes[id] ?: return DriveHttpResponse(404)
             return if (queryParameter(request.url, "alt") == "media") {
-                DriveHttpResponse(200, body = node.body)
+                DriveHttpResponse(
+                    200,
+                    body = if (corruptMediaReadBack && node.id.startsWith("entry-file-")) {
+                        "corrupt".toByteArray()
+                    } else {
+                        node.body
+                    },
+                )
             } else {
-                DriveHttpResponse(200, body = nodeJson(node).toByteArray())
+                if (changeVersionOnNextMetadataGet && node.mimeType != FOLDER_MIME_TYPE) {
+                    changeVersionOnNextMetadataGet = false
+                    node.version += 1
+                    node.etag = "\"etag-${node.id}-v${node.version}\""
+                }
+                if (moveFileOnNextMetadataGet && node.mimeType != FOLDER_MIME_TYPE) {
+                    moveFileOnNextMetadataGet = false
+                    node.parentId = "other-parent"
+                }
+                DriveHttpResponse(
+                    200,
+                    headers = if (omitMetadataEtag) emptyMap() else mapOf("eTaG" to node.etag),
+                    body = nodeJson(node).toByteArray(),
+                )
             }
         }
 
@@ -334,16 +675,34 @@ class GoogleDriveWriteRepositoryTest {
                     parentId = metadata.getValue("parents").jsonArray.single().jsonPrimitive.content,
                     mimeType = metadata.getValue("mimeType").jsonPrimitive.content,
                     body = content,
-                ).also { nodes[it.id] = it }
+                ).also { created -> nodes[created.id] = created }
             } else {
                 nodes.getValue(existingId).also { existing ->
+                    rejectPatchStatus?.let { return DriveHttpResponse(it) }
+                    if (changeVersionBeforePatch) {
+                        changeVersionBeforePatch = false
+                        existing.version += 1
+                        existing.etag = "\"etag-${existing.id}-v${existing.version}\""
+                    }
+                    if (request.headers["If-Match"] != null && request.headers["If-Match"] != existing.etag) {
+                        return DriveHttpResponse(412)
+                    }
                     existing.body = content
                     existing.version += 1
+                    existing.etag = "\"etag-${existing.id}-v${existing.version}\""
                 }
             }
             node.appProperties = (metadata["appProperties"] as? JsonObject)
                 ?.mapValues { (_, value) -> value.jsonPrimitive.content }
                 .orEmpty()
+            if (request.method == "PATCH" && losePatchResponseAfterCommit) {
+                losePatchResponseAfterCommit = false
+                throw IOException("simulated lost patch response")
+            }
+            if (request.method == "PATCH" && cancelPatchAfterCommit) {
+                cancelPatchAfterCommit = false
+                throw CancellationException("simulated cancellation after patch commit")
+            }
             return DriveHttpResponse(200, body = nodeJson(node).toByteArray())
         }
 
@@ -368,6 +727,7 @@ class GoogleDriveWriteRepositoryTest {
             put("size", node.body.size.toString())
             put("version", node.version.toString())
             put("trashed", node.trashed)
+            put("parents", buildJsonArray { add(JsonPrimitive(node.parentId)) })
             if (node.appProperties.isNotEmpty()) {
                 put("appProperties", buildJsonObject {
                     node.appProperties.forEach { (key, value) -> put(key, value) }
@@ -402,6 +762,8 @@ class GoogleDriveWriteRepositoryTest {
         val ACCOUNT_A = AccountId("account-a")
         const val ENTRY_PATH = "entries/2026-07-16/entry-a.json"
         const val ENTRY_JSON = "{\"schemaVersion\":1,\"entityType\":\"entry\",\"payload\":{\"id\":\"entry-a\"}}"
+        const val MANIFEST_JSON =
+            "{\"version\":1,\"provider\":\"google-drive\",\"rootFolderName\":\"Easylab Lab Notebook\"}"
         const val FOLDER_MIME_TYPE = "application/vnd.google-apps.folder"
 
         fun queryParameter(url: String, name: String): String? {
@@ -420,4 +782,7 @@ class GoogleDriveWriteRepositoryTest {
             .digest(bytes)
             .joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
     }
+
+    private fun resource(path: String): String =
+        checkNotNull(javaClass.classLoader?.getResource(path)) { "Missing test resource: $path" }.readText()
 }
