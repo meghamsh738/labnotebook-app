@@ -73,8 +73,8 @@ internal class HttpUrlConnectionDriveWriteTransport(
     private val maxResponseBytes: Int = 8 * 1024 * 1024,
 ) : DriveWriteTransport {
     override suspend fun execute(request: DriveHttpRequest): DriveHttpResponse = withContext(Dispatchers.IO) {
-        require(request.method in setOf("GET", "POST", "PATCH")) {
-            "Drive write transport accepts GET, POST, and PATCH requests only."
+        require(request.method in setOf("GET", "POST", "PATCH", "PUT")) {
+            "Drive write transport accepts GET, POST, PATCH, and PUT requests only."
         }
         val connection = URI(request.url).toURL().openConnection() as HttpURLConnection
         try {
@@ -130,11 +130,13 @@ internal class HttpUrlConnectionDriveWriteTransport(
  */
 internal class GoogleDriveWriteRepository(
     private val authRepository: AuthRepository,
+    private val resumableOperations: DriveResumableOperationStore,
     private val rootFolderIds: DriveRootFolderIdStore = InMemoryDriveRootFolderIdStore(),
     private val transport: DriveWriteTransport = HttpUrlConnectionDriveWriteTransport(),
     private val folderName: String = GoogleDriveReadOnlyRepository.DEFAULT_ROOT_FOLDER_NAME,
     private val maxJsonBytes: Int = GoogleDriveReadOnlyRepository.DEFAULT_MAX_JSON_BYTES,
     private val maxBlobBytes: Int = DEFAULT_MAX_BLOB_BYTES,
+    private val resumableChunkBytes: Int = DEFAULT_RESUMABLE_CHUNK_BYTES,
     private val boundaryFactory: () -> String = { "easylab-${UUID.randomUUID()}" },
 ) : DriveRepository, DriveConditionalWriteClient {
     private val writeMutex = Mutex()
@@ -144,6 +146,10 @@ internal class GoogleDriveWriteRepository(
         transport = transport,
         folderName = folderName,
         maxJsonBytes = maxJsonBytes,
+    )
+    private val resumableUploader = DriveResumableUploader(
+        transport = transport,
+        chunkBytes = resumableChunkBytes,
     )
 
     init {
@@ -283,17 +289,55 @@ internal class GoogleDriveWriteRepository(
         mimeType: String,
         sha256: String,
         precondition: DriveWritePrecondition,
+    ): Result<DriveFileRef> = putBlobConditionalInternal(
+        accountId = accountId,
+        path = path,
+        bytes = bytes,
+        mimeType = mimeType,
+        sha256 = sha256,
+        precondition = precondition,
+        operationId = null,
+    )
+
+    /**
+     * Unwired capability for resumable updates to existing attachment blobs.
+     *
+     * The transaction executor intentionally remains multipart-only until
+     * manifest-last publication can persist and propagate this operation id.
+     */
+    internal suspend fun putBlobConditionalResumable(
+        accountId: AccountId,
+        path: String,
+        bytes: ByteArray,
+        mimeType: String,
+        sha256: String,
+        precondition: DriveWritePrecondition,
+        operationId: String,
+    ): Result<DriveFileRef> = putBlobConditionalInternal(
+        accountId = accountId,
+        path = path,
+        bytes = bytes,
+        mimeType = mimeType,
+        sha256 = sha256,
+        precondition = precondition,
+        operationId = operationId,
+    )
+
+    private suspend fun putBlobConditionalInternal(
+        accountId: AccountId,
+        path: String,
+        bytes: ByteArray,
+        mimeType: String,
+        sha256: String,
+        precondition: DriveWritePrecondition,
+        operationId: String?,
     ): Result<DriveFileRef> = driveResult {
+        val frozenBytes = bytes.copyOf()
         writeMutex.withLock {
             requireUpdatePrecondition(path, precondition)
             val segments = requireManagedBlobPath(path)
-            if (bytes.size > maxBlobBytes) {
+            if (frozenBytes.size > maxBlobBytes) {
                 throw DriveProtocolException("Drive blob exceeds the safe size limit: $path")
-            }
-            if (bytes.size > CONDITIONAL_MULTIPART_MAX_BLOB_BYTES) {
-                throw DriveProtocolException(
-                    "Drive conditional blob exceeds the safe multipart size; resumable upload is required: $path",
-                )
             }
             val normalizedMimeType = mimeType.substringBefore(';').trim().lowercase()
             if (normalizedMimeType.isBlank() || '/' !in normalizedMimeType) {
@@ -302,9 +346,30 @@ internal class GoogleDriveWriteRepository(
             if (!SHA256_REGEX.matches(sha256)) {
                 throw DriveProtocolException("Drive blob SHA-256 is invalid: $path")
             }
-            val actualSha256 = sha256(bytes)
+            val actualSha256 = sha256(frozenBytes)
             if (!actualSha256.equals(sha256, ignoreCase = true)) {
                 throw DriveProtocolException("Drive blob SHA-256 does not match its bytes: $path")
+            }
+            val useResumable = frozenBytes.size >= CONDITIONAL_RESUMABLE_MIN_BLOB_BYTES
+            val expected = precondition as DriveWritePrecondition.MustMatch
+            val operationIdentity = if (useResumable) {
+                val stableOperationId = operationId
+                    ?.takeIf(String::isNotBlank)
+                    ?: throw DriveProtocolException(
+                        "Drive resumable blob update requires a persisted operation id: $path",
+                    )
+                DriveResumableOperationIdentity(
+                    accountId = accountId,
+                    operationId = stableOperationId,
+                    path = path,
+                    fileId = expected.fileId,
+                    expectedVersion = expected.version,
+                    sha256 = actualSha256,
+                    byteSize = frozenBytes.size.toLong(),
+                    mimeType = normalizedMimeType,
+                ).also { resumableOperations.begin(it) }
+            } else {
+                null
             }
             val token = accessToken(accountId)
             val rootId = requireExistingRoot(accountId, path)
@@ -315,12 +380,14 @@ internal class GoogleDriveWriteRepository(
                 path = path,
                 name = segments.last(),
                 mimeType = normalizedMimeType,
-                content = bytes,
+                content = frozenBytes,
                 appProperties = mapOf(
                     "entityType" to "attachmentBlob",
                     "sha256" to actualSha256,
                 ),
                 precondition = precondition,
+                useResumable = useResumable,
+                operationIdentity = operationIdentity,
             )
         }
     }
@@ -492,6 +559,8 @@ internal class GoogleDriveWriteRepository(
         appProperties: Map<String, String>,
         precondition: DriveWritePrecondition,
         requireExistingMimeType: ((String?) -> Boolean)? = null,
+        useResumable: Boolean = false,
+        operationIdentity: DriveResumableOperationIdentity? = null,
     ): DriveFileRef {
         val expected = precondition as? DriveWritePrecondition.MustMatch
             ?: throw DriveProtocolException(
@@ -542,7 +611,7 @@ internal class GoogleDriveWriteRepository(
         }
         val mergedAppProperties = (current.appProperties - replacedPropertyKeys) + appProperties
         if (current.version != expected.version) {
-            return reconcileAppliedWrite(
+            val reconciled = reconcileAppliedWrite(
                 token = token,
                 parentId = parentId,
                 path = path,
@@ -551,9 +620,11 @@ internal class GoogleDriveWriteRepository(
                 content = content,
                 expectedId = expected.fileId,
                 requiredAppProperties = appProperties,
+                minimumExclusiveVersion = expected.version,
             ) ?: throw DriveWritePreconditionConflictException(
                 "Drive managed path no longer matches the expected file version: $path",
             )
+            return completeResumableOperation(operationIdentity, reconciled)
         }
         val ifMatch = response.header("ETag")
             ?.trim()
@@ -570,30 +641,75 @@ internal class GoogleDriveWriteRepository(
                 })
             }
         }.toString()
-        val boundary = boundaryFactory().also { value ->
-            require(value.isNotBlank() && '\r' !in value && '\n' !in value) {
-                "Multipart boundary must be a non-empty single line."
-            }
+        if (useResumable && operationIdentity == null) {
+            throw DriveProtocolException("Drive resumable update omitted its persisted operation identity: $path")
         }
-        val body = multipartBody(boundary, metadata, mimeType, content)
-        var mutationAcknowledged = false
+        if (!useResumable && operationIdentity != null) {
+            throw DriveProtocolException("Drive multipart update unexpectedly included a resumable identity: $path")
+        }
+        var contentTransferStarted = false
+        var mutationResponseAcknowledged = false
         return try {
-            val mutation = request(
-                token = token,
-                method = "PATCH",
-                url = uploadUrl(
-                    "files/${encodePathSegment(expected.fileId)}",
-                    mapOf("uploadType" to "multipart", "fields" to FILE_FIELDS),
-                ),
-                headers = mapOf(
-                    "Content-Type" to "multipart/related; boundary=$boundary",
-                    "If-Match" to ifMatch,
-                ),
-                body = body,
-                mapPreconditionConflict = true,
-            ).toDriveItem("Drive conditional file upload")
-            mutationAcknowledged = true
-            verifyCommittedWrite(
+            val mutation = if (useResumable) {
+                val initiation = request(
+                    token = token,
+                    method = "PATCH",
+                    url = uploadUrl(
+                        "files/${encodePathSegment(expected.fileId)}",
+                        mapOf("uploadType" to "resumable", "fields" to FILE_FIELDS),
+                    ),
+                    headers = mapOf(
+                        "Content-Type" to "application/json; charset=UTF-8",
+                        "If-Match" to ifMatch,
+                        "X-Upload-Content-Type" to mimeType,
+                        "X-Upload-Content-Length" to content.size.toString(),
+                    ),
+                    body = metadata.toByteArray(StandardCharsets.UTF_8),
+                    mapPreconditionConflict = true,
+                )
+                val sessionUrl = initiation.header("Location")
+                    ?.trim()
+                    ?.takeIf(String::isNotBlank)
+                    ?: throw DriveProtocolException(
+                        "Drive resumable initiation omitted its session URL: $path",
+                    )
+                contentTransferStarted = true
+                val completion = resumableUploader.upload(
+                    token = token,
+                    sessionUrl = sessionUrl,
+                    content = content,
+                    mimeType = mimeType,
+                )
+                if (completion.body.isEmpty()) {
+                    getMetadata(token, expected.fileId)
+                } else {
+                    completion.toDriveItem("Drive resumable file upload")
+                }.also { mutationResponseAcknowledged = true }
+            } else {
+                val boundary = boundaryFactory().also { value ->
+                    require(value.isNotBlank() && '\r' !in value && '\n' !in value) {
+                        "Multipart boundary must be a non-empty single line."
+                    }
+                }
+                val body = multipartBody(boundary, metadata, mimeType, content)
+                contentTransferStarted = true
+                request(
+                    token = token,
+                    method = "PATCH",
+                    url = uploadUrl(
+                        "files/${encodePathSegment(expected.fileId)}",
+                        mapOf("uploadType" to "multipart", "fields" to FILE_FIELDS),
+                    ),
+                    headers = mapOf(
+                        "Content-Type" to "multipart/related; boundary=$boundary",
+                        "If-Match" to ifMatch,
+                    ),
+                    body = body,
+                    mapPreconditionConflict = true,
+                ).toDriveItem("Drive conditional file upload")
+                    .also { mutationResponseAcknowledged = true }
+            }
+            val verified = verifyCommittedWrite(
                 token = token,
                 parentId = parentId,
                 path = path,
@@ -604,8 +720,9 @@ internal class GoogleDriveWriteRepository(
                 expectedAppProperties = mergedAppProperties,
                 mutation = mutation,
             )
+            completeResumableOperation(operationIdentity, verified)
         } catch (error: DriveWritePreconditionConflictException) {
-            if (!mutationAcknowledged) throw error
+            if (!mutationResponseAcknowledged) throw error
             val reconciled = reconcileAfterMutation(
                 token,
                 parentId,
@@ -615,26 +732,44 @@ internal class GoogleDriveWriteRepository(
                 content,
                 expected.fileId,
                 appProperties,
+                expected.version,
             )
-            reconciled ?: throw DriveWriteAmbiguousCommitException(
-                "Drive conditional update committed before a concurrent verification conflict: $path",
-                error,
-            )
+            if (reconciled != null) {
+                completeResumableOperation(operationIdentity, reconciled)
+            } else {
+                markResumableAmbiguous(operationIdentity)
+                throw DriveWriteAmbiguousCommitException(
+                    "Drive conditional update committed before a concurrent verification conflict: $path",
+                    error,
+                )
+            }
         } catch (error: CancellationException) {
-            reconcileAfterMutation(
-                token,
-                parentId,
-                path,
-                name,
-                mimeType,
-                content,
-                expected.fileId,
-                appProperties,
-            )?.let { file ->
-                error.addSuppressed(DriveWriteReconciledAfterCancellationException(file))
+            if (contentTransferStarted) {
+                val reconciled = reconcileAfterMutation(
+                    token,
+                    parentId,
+                    path,
+                    name,
+                    mimeType,
+                    content,
+                    expected.fileId,
+                    appProperties,
+                    expected.version,
+                )
+                if (reconciled != null) {
+                    runCatching {
+                        completeResumableOperation(operationIdentity, reconciled)
+                    }.onFailure(error::addSuppressed)
+                    error.addSuppressed(DriveWriteReconciledAfterCancellationException(reconciled))
+                } else {
+                    runCatching {
+                        markResumableAmbiguous(operationIdentity)
+                    }.onFailure(error::addSuppressed)
+                }
             }
             throw error
         } catch (error: Throwable) {
+            if (!contentTransferStarted) throw error
             val reconciled = reconcileAfterMutation(
                 token,
                 parentId,
@@ -644,11 +779,19 @@ internal class GoogleDriveWriteRepository(
                 content,
                 expected.fileId,
                 appProperties,
+                expected.version,
             )
-            reconciled ?: throw DriveWriteAmbiguousCommitException(
-                "Drive conditional update may have committed but could not be reconciled: $path",
-                error,
-            )
+            if (reconciled != null) {
+                completeResumableOperation(operationIdentity, reconciled)
+            } else {
+                runCatching {
+                    markResumableAmbiguous(operationIdentity)
+                }.onFailure(error::addSuppressed)
+                throw DriveWriteAmbiguousCommitException(
+                    "Drive conditional update may have committed but could not be reconciled: $path",
+                    error,
+                )
+            }
         }
     }
 
@@ -661,6 +804,7 @@ internal class GoogleDriveWriteRepository(
         content: ByteArray,
         expectedId: String,
         requiredAppProperties: Map<String, String>,
+        minimumExclusiveVersion: Long,
     ): DriveFileRef? = withContext(NonCancellable) {
         runCatching {
             reconcileAppliedWrite(
@@ -672,8 +816,25 @@ internal class GoogleDriveWriteRepository(
                 content,
                 expectedId,
                 requiredAppProperties,
+                minimumExclusiveVersion,
             )
         }.getOrNull()
+    }
+
+    private suspend fun completeResumableOperation(
+        identity: DriveResumableOperationIdentity?,
+        file: DriveFileRef,
+    ): DriveFileRef = withContext(NonCancellable) {
+        identity?.let { resumableOperations.markCompleted(it, file) }
+        file
+    }
+
+    private suspend fun markResumableAmbiguous(identity: DriveResumableOperationIdentity?) {
+        if (identity != null) {
+            withContext(NonCancellable) {
+                resumableOperations.markAmbiguous(identity)
+            }
+        }
     }
 
     private suspend fun verifyCommittedWrite(
@@ -712,8 +873,15 @@ internal class GoogleDriveWriteRepository(
         if (verifiedVersion <= expected.version || mutation.version != verifiedVersion) {
             throw DriveProtocolException("Drive conditional upload did not advance its version: $path")
         }
-        val readBack = readMedia(token, expected.fileId)
-        if (sha256(readBack) != sha256(content)) {
+        val remoteSha256 = try {
+            sha256RemoteMedia(token, expected.fileId, content.size.toLong())
+        } catch (error: Throwable) {
+            throw DriveProtocolException(
+                "Drive conditional upload failed content verification: $path",
+                error,
+            )
+        }
+        if (verified.size != content.size.toLong() || remoteSha256 != sha256(content)) {
             throw DriveProtocolException("Drive conditional upload failed content verification: $path")
         }
         val finalMetadata = getMetadata(token, expected.fileId)
@@ -734,14 +902,16 @@ internal class GoogleDriveWriteRepository(
         content: ByteArray,
         expectedId: String,
         requiredAppProperties: Map<String, String>,
+        minimumExclusiveVersion: Long,
     ): DriveFileRef? {
         val matches = findChildren(token, parentId, name)
         if (matches.size != 1 || matches.single().id != expectedId) return null
         val metadata = getMetadata(token, expectedId)
         if (!isExpectedManagedFile(metadata, expectedId, parentId, name, mimeType, null)) return null
-        if (metadata.version == null || metadata.version <= 0) return null
+        if (metadata.version == null || metadata.version <= minimumExclusiveVersion) return null
+        if (metadata.size != content.size.toLong()) return null
         if (requiredAppProperties.any { (key, value) -> metadata.appProperties[key] != value }) return null
-        if (sha256(readMedia(token, expectedId)) != sha256(content)) return null
+        if (sha256RemoteMedia(token, expectedId, content.size.toLong()) != sha256(content)) return null
         val finalMetadata = getMetadata(token, expectedId)
         if (finalMetadata != metadata) return null
         return finalMetadata.toFileRef(path)
@@ -762,14 +932,80 @@ internal class GoogleDriveWriteRepository(
             item.parentIds == setOf(parentId) &&
             (requireExistingMimeType == null || requireExistingMimeType(item.mimeType))
 
-    private suspend fun readMedia(token: String, fileId: String): ByteArray = request(
-        token = token,
-        method = "GET",
-        url = apiUrl(
+    private suspend fun sha256RemoteMedia(
+        token: String,
+        fileId: String,
+        expectedSize: Long,
+    ): String {
+        require(expectedSize >= 0) { "Drive media size must not be negative." }
+        val digest = MessageDigest.getInstance("SHA-256")
+        val mediaUrl = apiUrl(
             "files/${encodePathSegment(fileId)}",
             mapOf("alt" to "media"),
-        ),
-    ).body
+        )
+        if (expectedSize == 0L) {
+            val response = request(token = token, method = "GET", url = mediaUrl)
+            if (response.body.isNotEmpty()) {
+                throw DriveProtocolException("Drive empty media readback returned unexpected bytes.")
+            }
+            return digest.digest().toHex()
+        }
+
+        var offset = 0L
+        while (offset < expectedSize) {
+            val endInclusive = minOf(
+                expectedSize - 1,
+                offset + REMOTE_HASH_CHUNK_BYTES - 1,
+            )
+            val response = request(
+                token = token,
+                method = "GET",
+                url = mediaUrl,
+                headers = mapOf("Range" to "bytes=$offset-$endInclusive"),
+            )
+            val expectedChunkSize = (endInclusive - offset + 1).toInt()
+            when (response.statusCode) {
+                206 -> {
+                    val contentRange = response.header("Content-Range")
+                        ?.trim()
+                        ?.let(CONTENT_RANGE_REGEX::matchEntire)
+                        ?: throw DriveProtocolException(
+                            "Drive ranged media readback omitted a valid Content-Range.",
+                        )
+                    val returnedStart = contentRange.groupValues[1].toLongOrNull()
+                    val returnedEnd = contentRange.groupValues[2].toLongOrNull()
+                    val returnedTotal = contentRange.groupValues[3].toLongOrNull()
+                    if (
+                        returnedStart != offset ||
+                        returnedEnd != endInclusive ||
+                        returnedTotal != expectedSize ||
+                        response.body.size != expectedChunkSize
+                    ) {
+                        throw DriveProtocolException(
+                            "Drive ranged media readback returned an unexpected byte range.",
+                        )
+                    }
+                }
+                200 -> {
+                    if (
+                        offset != 0L ||
+                        expectedSize > REMOTE_HASH_CHUNK_BYTES ||
+                        response.body.size.toLong() != expectedSize
+                    ) {
+                        throw DriveProtocolException(
+                            "Drive media readback ignored a required byte range.",
+                        )
+                    }
+                }
+                else -> throw DriveProtocolException(
+                    "Drive ranged media readback returned HTTP ${response.statusCode}.",
+                )
+            }
+            digest.update(response.body)
+            offset += response.body.size
+        }
+        return digest.digest().toHex()
+    }
 
     private fun multipartBody(
         boundary: String,
@@ -1045,7 +1281,10 @@ internal class GoogleDriveWriteRepository(
 
     private fun sha256(bytes: ByteArray): String = MessageDigest.getInstance("SHA-256")
         .digest(bytes)
-        .joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
+        .toHex()
+
+    private fun ByteArray.toHex(): String =
+        joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
 
     private suspend fun <T> driveResult(block: suspend () -> T): Result<T> = try {
         Result.success(block())
@@ -1069,7 +1308,9 @@ internal class GoogleDriveWriteRepository(
 
     private companion object {
         const val DEFAULT_MAX_BLOB_BYTES = 256 * 1024 * 1024
-        const val CONDITIONAL_MULTIPART_MAX_BLOB_BYTES = 5 * 1024 * 1024
+        const val CONDITIONAL_RESUMABLE_MIN_BLOB_BYTES = 5 * 1024 * 1024
+        const val DEFAULT_RESUMABLE_CHUNK_BYTES = 8 * 1024 * 1024
+        const val REMOTE_HASH_CHUNK_BYTES = 4L * 1024 * 1024
         const val MAX_MANAGED_PATH_LENGTH = 1024
         const val MAX_PATH_SEGMENT_LENGTH = 255
         const val MAX_RETAINED_ERROR_BODY_BYTES = 16 * 1024
@@ -1081,6 +1322,7 @@ internal class GoogleDriveWriteRepository(
         const val UNKNOWN_MODIFIED_TIME = "1970-01-01T00:00:00Z"
         const val FILE_FIELDS = "id,name,mimeType,modifiedTime,size,version,trashed,appProperties,parents"
         val SHA256_REGEX = Regex("^[0-9a-fA-F]{64}$")
+        val CONTENT_RANGE_REGEX = Regex("^bytes (\\d+)-(\\d+)/(\\d+)$")
         val JSON = Json { ignoreUnknownKeys = true }
         val MANAGED_PREFIXES = listOf(
             "devices/",

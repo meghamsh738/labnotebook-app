@@ -469,7 +469,7 @@ class GoogleDriveWriteRepositoryTest {
     }
 
     @Test
-    fun conditionalBlobAboveMultipartLimitRequiresResumableUploadWithoutNetwork() = runTest {
+    fun conditionalBlobAboveMultipartLimitRequiresStableOperationIdentityWithoutNetwork() = runTest {
         val fixture = Fixture()
         val bytes = ByteArray(5 * 1024 * 1024 + 1)
 
@@ -478,23 +478,166 @@ class GoogleDriveWriteRepositoryTest {
             "attachments/2026-07-16/large.bin",
             bytes,
             "application/octet-stream",
-            "0".repeat(64),
+            sha256(bytes),
             DriveWritePrecondition.MustMatch("large-file", 1),
         ).exceptionOrNull()
 
         assertTrue(error is DriveProtocolException)
-        assertTrue(error?.message.orEmpty().contains("resumable upload is required"))
+        assertTrue(error?.message.orEmpty().contains("persisted operation id"))
         assertTrue(fixture.transport.requests.isEmpty())
+    }
+
+    @Test
+    fun resumableBlobInterruptionRetryAndStaleIdentityAreSafe() = runTest {
+        val fixture = Fixture()
+        val bytes = ByteArray(5 * 1024 * 1024 + 1) { (it % 251).toByte() }
+        fixture.addExistingBlobTree()
+        fixture.transport.loseFirstResumableChunkResponseAfterAccept = true
+        val precondition = DriveWritePrecondition.MustMatch("large-file", 1)
+
+        val first = fixture.repository.putBlobConditionalResumable(
+            ACCOUNT_A,
+            LARGE_BLOB_PATH,
+            bytes,
+            "application/octet-stream",
+            sha256(bytes),
+            precondition,
+            "operation-large-1",
+        ).getOrThrow()
+        val retry = fixture.repository.putBlobConditionalResumable(
+            ACCOUNT_A,
+            LARGE_BLOB_PATH,
+            bytes,
+            "application/octet-stream",
+            sha256(bytes),
+            precondition,
+            "operation-large-1",
+        ).getOrThrow()
+        val requestsBeforeConflict = fixture.transport.requests.size
+        val changed = bytes.copyOf().also { it[0] = (it[0] + 1).toByte() }
+        val staleIdentity = fixture.repository.putBlobConditionalResumable(
+            ACCOUNT_A,
+            LARGE_BLOB_PATH,
+            changed,
+            "application/octet-stream",
+            sha256(changed),
+            precondition,
+            "operation-large-1",
+        ).exceptionOrNull()
+
+        assertEquals(2L, first.version)
+        assertEquals(first, retry)
+        assertTrue(staleIdentity is DriveResumableOperationIdentityConflictException)
+        assertEquals(requestsBeforeConflict, fixture.transport.requests.size)
+        assertEquals(
+            1,
+            fixture.transport.requests.count {
+                it.method == "PATCH" && queryParameter(it.url, "uploadType") == "resumable"
+            },
+        )
+        assertTrue(fixture.transport.requests.any { it.headers["Content-Range"]?.startsWith("bytes */") == true })
+        assertEquals(
+            DriveResumableOperationState.Completed,
+            fixture.operationStore.record(ACCOUNT_A, "operation-large-1")?.state,
+        )
+    }
+
+    @Test
+    fun resumableBlobCancellationAfterCommitPropagatesAndPersistsCompletion() = runTest {
+        val fixture = Fixture()
+        val bytes = ByteArray(5 * 1024 * 1024 + 1) { (it % 241).toByte() }
+        fixture.addExistingBlobTree()
+        fixture.transport.cancelFinalResumableResponseAfterCommit = true
+        var cancellation: CancellationException? = null
+
+        try {
+            fixture.repository.putBlobConditionalResumable(
+                ACCOUNT_A,
+                LARGE_BLOB_PATH,
+                bytes,
+                "application/octet-stream",
+                sha256(bytes),
+                DriveWritePrecondition.MustMatch("large-file", 1),
+                "operation-cancelled",
+            )
+        } catch (error: CancellationException) {
+            cancellation = error
+        }
+
+        assertEquals("simulated resumable cancellation after commit", cancellation?.message)
+        assertTrue(
+            cancellation?.suppressed?.any {
+                it is DriveWriteReconciledAfterCancellationException && it.file.version == 2L
+            } == true,
+        )
+        assertEquals(
+            DriveResumableOperationState.Completed,
+            fixture.operationStore.record(ACCOUNT_A, "operation-cancelled")?.state,
+        )
+    }
+
+    @Test
+    fun unreconciledResumableOutcomePersistsAmbiguousState() = runTest {
+        val fixture = Fixture()
+        val bytes = ByteArray(5 * 1024 * 1024 + 1) { (it % 239).toByte() }
+        fixture.addExistingBlobTree()
+        fixture.transport.failFirstResumableChunkBeforeAccept = true
+        fixture.transport.failResumableStatusQueries = true
+
+        val error = fixture.repository.putBlobConditionalResumable(
+            ACCOUNT_A,
+            LARGE_BLOB_PATH,
+            bytes,
+            "application/octet-stream",
+            sha256(bytes),
+            DriveWritePrecondition.MustMatch("large-file", 1),
+            "operation-ambiguous",
+        ).exceptionOrNull()
+
+        assertTrue(error is DriveWriteAmbiguousCommitException)
+        assertEquals(
+            DriveResumableOperationState.Ambiguous,
+            fixture.operationStore.record(ACCOUNT_A, "operation-ambiguous")?.state,
+        )
+    }
+
+    @Test
+    fun resumableUploadUsesFrozenCallerBytesForIdentityAndContent() = runTest {
+        val fixture = Fixture()
+        val bytes = ByteArray(5 * 1024 * 1024 + 1) { (it % 233).toByte() }
+        val frozen = bytes.copyOf()
+        fixture.addExistingBlobTree()
+        fixture.transport.onResumableInitiated = { bytes.fill(0x5a) }
+
+        fixture.repository.putBlobConditionalResumable(
+            ACCOUNT_A,
+            LARGE_BLOB_PATH,
+            bytes,
+            "application/octet-stream",
+            sha256(frozen),
+            DriveWritePrecondition.MustMatch("large-file", 1),
+            "operation-frozen",
+        ).getOrThrow()
+
+        assertTrue(fixture.transport.lastUploadedContent?.contentEquals(frozen) == true)
+        assertEquals(
+            sha256(frozen),
+            fixture.operationStore.record(ACCOUNT_A, "operation-frozen")?.identity?.sha256,
+        )
     }
 
     private class Fixture {
         val auth = FakeAuthRepository(mapOf(ACCOUNT_A to "exact-token-a"))
         val store = InMemoryDriveRootFolderIdStore()
+        val operationPersistence = FakeResumableOperationPersistence()
+        val operationStore = DriveResumableOperationStore(operationPersistence)
         val transport = FakeDriveWriteTransport()
         val repository = GoogleDriveWriteRepository(
             authRepository = auth,
+            resumableOperations = operationStore,
             rootFolderIds = store,
             transport = transport,
+            resumableChunkBytes = 256 * 1024,
             boundaryFactory = { "easylab-test-boundary" },
         )
 
@@ -532,6 +675,21 @@ class GoogleDriveWriteRepositoryTest {
                 ),
             )
         }
+
+        fun addExistingBlobTree() {
+            addExistingRoot()
+            transport.add(FakeNode.folder("attachments", "attachments", parentId = "root-a"))
+            transport.add(FakeNode.folder("attachment-day", "2026-07-16", parentId = "attachments"))
+            transport.add(
+                FakeNode.file(
+                    id = "large-file",
+                    name = "large.bin",
+                    parentId = "attachment-day",
+                    mimeType = "application/octet-stream",
+                    body = byteArrayOf(1),
+                ),
+            )
+        }
     }
 
     private class FakeAuthRepository(private val tokens: Map<AccountId, String>) : AuthRepository {
@@ -542,6 +700,29 @@ class GoogleDriveWriteRepositoryTest {
         override suspend fun disconnect() = Unit
         override suspend fun invalidateAccessToken(accountId: AccountId) = Unit
         override fun accessToken(accountId: AccountId): String? = tokens[accountId]
+    }
+
+    private class FakeResumableOperationPersistence : DriveResumableOperationPersistence {
+        private val values = mutableMapOf<String, String>()
+
+        override suspend fun read(key: String): String? = synchronized(values) { values[key] }
+
+        override suspend fun bindIfAbsent(key: String, value: String): String = synchronized(values) {
+            values.getOrPut(key) { value }
+        }
+
+        override suspend fun compareAndSet(
+            key: String,
+            expected: String,
+            value: String,
+        ): Boolean = synchronized(values) {
+            if (values[key] != expected) {
+                false
+            } else {
+                values[key] = value
+                true
+            }
+        }
     }
 
     private data class FakeNode(
@@ -587,8 +768,14 @@ class GoogleDriveWriteRepositoryTest {
         var corruptMediaReadBack = false
         var losePatchResponseAfterCommit = false
         var cancelPatchAfterCommit = false
+        var loseFirstResumableChunkResponseAfterAccept = false
+        var cancelFinalResumableResponseAfterCommit = false
+        var failFirstResumableChunkBeforeAccept = false
+        var failResumableStatusQueries = false
+        var onResumableInitiated: (() -> Unit)? = null
         private val nodes = linkedMapOf<String, FakeNode>()
         private var nextId = 1
+        private var resumableSession: FakeResumableSession? = null
 
         fun add(node: FakeNode) {
             nodes[node.id] = node
@@ -603,7 +790,11 @@ class GoogleDriveWriteRepositoryTest {
                 request.method == "GET" && uri.path.contains("/files/") -> getById(request, uri)
                 request.method == "GET" -> list(request)
                 request.method == "POST" && !uri.path.contains("/upload/") -> createFolder(request)
-                request.method in setOf("POST", "PATCH") && uri.path.contains("/upload/") -> upload(request, uri)
+                request.method == "PATCH" &&
+                    queryParameter(request.url, "uploadType") == "resumable" -> initiateResumable(request, uri)
+                request.method == "PUT" && uri.path.contains("/upload/drive/v3/files/") -> resumeUpload(request)
+                request.method in setOf("POST", "PATCH") && uri.path.contains("/upload/") ->
+                    multipartUpload(request, uri)
                 else -> error("Unexpected request: ${request.method} ${request.url}")
             }
         }
@@ -612,13 +803,26 @@ class GoogleDriveWriteRepositoryTest {
             val id = uri.path.substringAfterLast("/files/")
             val node = nodes[id] ?: return DriveHttpResponse(404)
             return if (queryParameter(request.url, "alt") == "media") {
+                val media = if (corruptMediaReadBack && node.id.startsWith("entry-file-")) {
+                    "corrupt".toByteArray()
+                } else {
+                    node.body
+                }
+                val range = request.headers["Range"]
+                if (range != null) {
+                    val match = Regex("^bytes=(\\d+)-(\\d+)$").matchEntire(range)
+                        ?: error("Invalid test range: $range")
+                    val start = match.groupValues[1].toInt()
+                    val end = match.groupValues[2].toInt()
+                    return DriveHttpResponse(
+                        206,
+                        headers = mapOf("Content-Range" to "bytes $start-$end/${media.size}"),
+                        body = media.copyOfRange(start, end + 1),
+                    )
+                }
                 DriveHttpResponse(
                     200,
-                    body = if (corruptMediaReadBack && node.id.startsWith("entry-file-")) {
-                        "corrupt".toByteArray()
-                    } else {
-                        node.body
-                    },
+                    body = media,
                 )
             } else {
                 if (changeVersionOnNextMetadataGet && node.mimeType != FOLDER_MIME_TYPE) {
@@ -663,7 +867,7 @@ class GoogleDriveWriteRepositoryTest {
             return DriveHttpResponse(200, body = nodeJson(node).toByteArray())
         }
 
-        private fun upload(request: DriveHttpRequest, uri: URI): DriveHttpResponse {
+        private fun multipartUpload(request: DriveHttpRequest, uri: URI): DriveHttpResponse {
             val boundary = request.headers.getValue("Content-Type").substringAfter("boundary=")
             val (metadata, content) = parseMultipart(request.body!!, boundary)
             lastUploadedContent = content
@@ -705,6 +909,101 @@ class GoogleDriveWriteRepositoryTest {
             }
             return DriveHttpResponse(200, body = nodeJson(node).toByteArray())
         }
+
+        private fun initiateResumable(
+            request: DriveHttpRequest,
+            uri: URI,
+        ): DriveHttpResponse {
+            val id = uri.path.substringAfterLast("/files/")
+            val node = nodes.getValue(id)
+            rejectPatchStatus?.let { return DriveHttpResponse(it) }
+            if (request.headers["If-Match"] != node.etag) return DriveHttpResponse(412)
+            val metadata = Json.parseToJsonElement(
+                request.body!!.toString(StandardCharsets.UTF_8),
+            ).jsonObject
+            val totalBytes = request.headers.getValue("X-Upload-Content-Length").toInt()
+            resumableSession = FakeResumableSession(
+                fileId = id,
+                metadata = metadata,
+                totalBytes = totalBytes,
+                bytes = ByteArray(totalBytes),
+            )
+            onResumableInitiated?.invoke()
+            return DriveHttpResponse(
+                200,
+                headers = mapOf(
+                    "Location" to
+                        "https://www.googleapis.com/upload/drive/v3/files/$id?upload_id=test-session",
+                ),
+            )
+        }
+
+        private fun resumeUpload(request: DriveHttpRequest): DriveHttpResponse {
+            val session = checkNotNull(resumableSession)
+            val contentRange = request.headers.getValue("Content-Range")
+            if (contentRange.startsWith("bytes */")) {
+                if (failResumableStatusQueries) return DriveHttpResponse(503)
+                val node = nodes.getValue(session.fileId)
+                if (session.committed) {
+                    return DriveHttpResponse(200, body = nodeJson(node).toByteArray())
+                }
+                return DriveHttpResponse(
+                    308,
+                    headers = if (session.receivedBytes == 0) {
+                        emptyMap()
+                    } else {
+                        mapOf("Range" to "bytes=0-${session.receivedBytes - 1}")
+                    },
+                )
+            }
+            if (failFirstResumableChunkBeforeAccept) {
+                failFirstResumableChunkBeforeAccept = false
+                throw IOException("simulated resumable interruption before accept")
+            }
+            val match = Regex("^bytes (\\d+)-(\\d+)/(\\d+)$").matchEntire(contentRange)
+                ?: error("Invalid resumable test range: $contentRange")
+            val start = match.groupValues[1].toInt()
+            val end = match.groupValues[2].toInt()
+            val total = match.groupValues[3].toInt()
+            check(start == session.receivedBytes && total == session.totalBytes)
+            val body = checkNotNull(request.body)
+            check(body.size == end - start + 1)
+            body.copyInto(session.bytes, destinationOffset = start)
+            session.receivedBytes = end + 1
+            if (loseFirstResumableChunkResponseAfterAccept) {
+                loseFirstResumableChunkResponseAfterAccept = false
+                throw IOException("simulated lost resumable chunk response")
+            }
+            if (session.receivedBytes < session.totalBytes) {
+                return DriveHttpResponse(
+                    308,
+                    headers = mapOf("Range" to "bytes=0-${session.receivedBytes - 1}"),
+                )
+            }
+            val node = nodes.getValue(session.fileId)
+            node.body = session.bytes.copyOf()
+            node.version += 1
+            node.etag = "\"etag-${node.id}-v${node.version}\""
+            node.appProperties = (session.metadata["appProperties"] as? JsonObject)
+                ?.mapValues { (_, value) -> value.jsonPrimitive.content }
+                .orEmpty()
+            session.committed = true
+            lastUploadedContent = node.body.copyOf()
+            if (cancelFinalResumableResponseAfterCommit) {
+                cancelFinalResumableResponseAfterCommit = false
+                throw CancellationException("simulated resumable cancellation after commit")
+            }
+            return DriveHttpResponse(200, body = nodeJson(node).toByteArray())
+        }
+
+        private data class FakeResumableSession(
+            val fileId: String,
+            val metadata: JsonObject,
+            val totalBytes: Int,
+            val bytes: ByteArray,
+            var receivedBytes: Int = 0,
+            var committed: Boolean = false,
+        )
 
         private fun parseMultipart(bytes: ByteArray, boundary: String): Pair<JsonObject, ByteArray> {
             val marker = "--$boundary"
@@ -761,6 +1060,7 @@ class GoogleDriveWriteRepositoryTest {
     private companion object {
         val ACCOUNT_A = AccountId("account-a")
         const val ENTRY_PATH = "entries/2026-07-16/entry-a.json"
+        const val LARGE_BLOB_PATH = "attachments/2026-07-16/large.bin"
         const val ENTRY_JSON = "{\"schemaVersion\":1,\"entityType\":\"entry\",\"payload\":{\"id\":\"entry-a\"}}"
         const val MANIFEST_JSON =
             "{\"version\":1,\"provider\":\"google-drive\",\"rootFolderName\":\"Easylab Lab Notebook\"}"
