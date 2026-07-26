@@ -1,0 +1,58 @@
+{
+  "caseId": "remote-attachment-delete-versus-local-edit",
+  "entityKind": "attachment",
+  "entityId": "att-contract",
+  "baseHash": "542946b85a5eb6cd2188eed3af31fe43578787f52919a1c06273cef2cd50bb05",
+  "localHash": "34a2fc6023428f4ea9ce11220ee841ebfb386b2531a6549bbc748a4deafd9e52",
+  "localUpdatedAt": "2026-05-23T11:05:00.000Z",
+  "detectedAt": "2026-05-23T11:10:00.000Z",
+  "deviceId": "dev-local",
+  "localValue": {
+    "id": "att-contract",
+    "entryId": "entry-contract",
+    "filename": "locally-edited.csv",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "remoteTombstone": {
+    "id": "del-attachment-att-contract",
+    "entityKind": "attachment",
+    "entityId": "att-contract",
+    "deletedAt": "2026-05-23T11:00:00.000Z",
+    "deletedByDeviceId": "dev-remote",
+    "reason": "Removed remotely"
+  },
+  "expectedConflict": {
+    "id": "conf-attachment-att-contract",
+    "entityKind": "attachment",
+    "entityId": "att-contract",
+    "localUpdatedAt": "2026-05-23T11:05:00.000Z",
+    "remoteUpdatedAt": "2026-05-23T11:00:00.000Z",
+    "detectedAt": "2026-05-23T11:10:00.000Z",
+    "resolution": "pending",
+    "summary": "Remote attachment delete conflicts with local changes; the local copy is kept until resolved.",
+    "localCopy": {
+      "hash": "34a2fc6023428f4ea9ce11220ee841ebfb386b2531a6549bbc748a4deafd9e52",
+      "deviceId": "dev-local",
+      "value": {
+        "id": "att-contract",
+        "entryId": "entry-contract",
+        "filename": "locally-edited.csv",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    },
+    "remoteCopy": {
+      "tombstone": {
+        "id": "del-attachment-att-contract",
+        "entityKind": "attachment",
+        "entityId": "att-contract",
+        "deletedAt": "2026-05-23T11:00:00.000Z",
+        "deletedByDeviceId": "dev-remote",
+        "reason": "Removed remotely"
+      }
+    }
+  },
+  "expected": {
+    "decision": "conflict",
+    "remoteWriteAllowed": false
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "caseId": "malformed-entry-is-quarantined",
+  "entityKind": "entry",
+  "remotePath": "entries/2026-05-24.json",
+  "deviceId": "dev-parity",
+  "remoteDocumentText": "{\"id\":\"entry-malformed\",\"kind\":\"entry\",\"payload\":",
+  "expected": {
+    "decision": "quarantine-conflict",
+    "conflictId": "conf-invalid-entry-entries/2026-05-24.json",
+    "resolution": "pending",
+    "remoteWriteAllowed": false,
+    "runtimeParity": "blocked",
+    "blockingIssueId": "malformed-json-quarantine"
+  }
+}

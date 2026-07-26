@@ -1,0 +1,22 @@
+{
+  "caseId": "missing-record-with-baseline-blocks",
+  "entityKind": "entry",
+  "entityId": "entry-contract",
+  "baseline": {
+    "path": "entries/2026-05-23.json",
+    "fileId": "drive-entry-contract",
+    "version": 7
+  },
+  "localState": "unchanged-from-baseline",
+  "remoteState": "missing-without-tombstone",
+  "expected": {
+    "decision": "blocked",
+    "reason": "Remote entry is missing without a tombstone despite a prior merge base.",
+    "precondition": {
+      "kind": "must-match",
+      "fileId": "drive-entry-contract",
+      "version": 7
+    },
+    "remoteWriteAllowed": false
+  }
+}

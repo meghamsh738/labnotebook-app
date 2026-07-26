@@ -1,0 +1,66 @@
+{
+  "caseId": "parent-tombstone-transitively-prevents-resurrection",
+  "tombstones": [
+    {
+      "id": "del-entry-entry-parent",
+      "entityKind": "entry",
+      "entityId": "entry-parent",
+      "deletedAt": "2026-05-23T12:00:00.000Z",
+      "deletedByDeviceId": "dev-delete"
+    },
+    {
+      "id": "delete-attachment-att-child",
+      "entityKind": "attachment",
+      "entityId": "att-child",
+      "deletedAt": "2026-05-23T12:01:00.000Z",
+      "deletedByDeviceId": "dev-native"
+    },
+    {
+      "id": "delete-fileBoxItem-filebox-orphan",
+      "entityKind": "fileBoxItem",
+      "entityId": "filebox-orphan",
+      "deletedAt": "2026-05-23T12:02:00.000Z",
+      "deletedByDeviceId": "dev-native"
+    }
+  ],
+  "liveGraph": {
+    "entries": [
+      { "id": "entry-parent" }
+    ],
+    "attachments": [
+      { "id": "att-child", "entryId": "entry-parent" }
+    ],
+    "fileBoxItems": [
+      { "id": "filebox-child", "entryId": "entry-parent", "attachmentId": "att-child" },
+      { "id": "filebox-orphan" }
+    ],
+    "transfers": [
+      {
+        "id": "transfer-child",
+        "entryId": "entry-parent",
+        "attachmentId": "att-child",
+        "fileBoxItemId": "filebox-child"
+      },
+      {
+        "id": "transfer-filebox-only",
+        "fileBoxItemId": "filebox-orphan"
+      }
+    ]
+  },
+  "expected": {
+    "effectiveDeletedTargets": [
+      "attachment:att-child",
+      "entry:entry-parent",
+      "fileBoxItem:filebox-child",
+      "fileBoxItem:filebox-orphan",
+      "transfer:transfer-child",
+      "transfer:transfer-filebox-only"
+    ],
+    "remainingLiveTargets": [],
+    "explicitChildTombstonesRequired": false,
+    "legacyChildTombstonesAccepted": true,
+    "staleRemoteRecordsIgnored": true,
+    "runtimeParity": "blocked",
+    "blockingIssueId": "web-filebox-transfer-cascade"
+  }
+}

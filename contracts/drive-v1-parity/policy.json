@@ -1,0 +1,57 @@
+{
+  "gateVersion": 1,
+  "driveContractVersion": 1,
+  "writeGate": "disabled-until-runtime-parity",
+  "runtimeParity": {
+    "status": "blocked",
+    "nativeDriveWritesAllowed": false,
+    "blockingIssueIds": [
+      "android-unique-entry-path",
+      "android-data-thumbnail",
+      "tombstone-target-normalization",
+      "web-filebox-transfer-cascade",
+      "malformed-json-quarantine",
+      "web-versioned-cas",
+      "web-payload-projection"
+    ]
+  },
+  "remoteVersion": {
+    "existingRequires": ["fileId", "version"],
+    "minimumVersion": 1,
+    "freshEtagBeforeMutation": true,
+    "missingWithBase": "blocked-without-tombstone",
+    "conditionalCreate": "blocked-until-idempotent"
+  },
+  "canonicalPaths": {
+    "uniqueEntry": "entries/{dateBucket}.json",
+    "sameDayCollision": "entries/{dateBucket}-{safeEntityId}.json",
+    "verifiedExisting": "preserve",
+    "conflict": "conflicts/{safeConflictId}.json",
+    "tombstone": "tombstones/{safeEntityKind}--{safeEntityId}.json"
+  },
+  "canonicalPayloads": {
+    "preserveUnknownRemoteFields": true,
+    "stripLocalOnly": {
+      "entry": ["syncPath"],
+      "attachment": ["cachedPath", "cacheKey", "thumbnail"],
+      "fileBoxItem": ["localObjectUrl"],
+      "transfer": []
+    }
+  },
+  "conflicts": {
+    "entityId": "conf-{entityKind}-{entityId}",
+    "invalidJsonId": "conf-invalid-{entityKind}-{remotePath}",
+    "resolution": "pending",
+    "copyShape": "{hash,deviceId?,value}|{tombstone}"
+  },
+  "deletions": {
+    "canonicalId": "del-{entityKind}-{entityId}",
+    "targetIdentity": ["entityKind", "entityId"],
+    "cascade": "parent-transitively-suppresses-descendants",
+    "explicitChildTombstones": "accepted-not-required",
+    "equalTarget": "later-deletedAt-wins",
+    "equalInstantDivergence": "blocked",
+    "physicalDriveDeletion": false,
+    "nonResurrection": true
+  }
+}

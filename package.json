@@ -27,6 +27,7 @@
     "smoke:real-drive-sync-loop": "node scripts/smoke-real-drive-sync-loop.mjs",
     "smoke:packaged-oauth": "node scripts/smoke-packaged-oauth.mjs",
     "test:desktop-oauth": "node --test desktop/oauthScopes.test.cjs",
+    "test:drive-v1-parity": "node scripts/verify-drive-v1-parity.mjs",
     "smoke:pixel-pwa": "node scripts/smoke-pixel-pwa.mjs",
     "smoke:pixel-capture": "node scripts/smoke-pixel-pwa-capture.mjs",
     "smoke:pixel-drive-roundtrip": "node scripts/smoke-pixel-drive-roundtrip.mjs"

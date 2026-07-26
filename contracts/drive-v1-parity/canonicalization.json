@@ -1,0 +1,66 @@
+{
+  "caseId": "canonical-path-and-payload-projection",
+  "uniqueEntry": {
+    "dateBucket": "2026-05-24",
+    "entityId": "entry-unique",
+    "expectedPath": "entries/2026-05-24.json",
+    "observedAndroidPath": "entries/2026-05-24-entry-unique.json",
+    "runtimeParity": "blocked",
+    "blockingIssueId": "android-unique-entry-path"
+  },
+  "sameDayCollision": {
+    "dateBucket": "2026-05-24",
+    "entityId": "entry-second",
+    "expectedPath": "entries/2026-05-24-entry-second.json"
+  },
+  "existingAttachmentRename": {
+    "verifiedPath": "attachments/2026-05-23/att-contract-result.csv.json",
+    "renamedFilename": "renamed-result.csv",
+    "expectedPath": "attachments/2026-05-23/att-contract-result.csv.json",
+    "runtimeWriteAllowedUntilPathParity": false
+  },
+  "entryPayload": {
+    "input": {
+      "id": "entry-canonical",
+      "syncPath": "/private/native/entry-canonical.json"
+    },
+    "expected": {
+      "id": "entry-canonical"
+    }
+  },
+  "attachmentPayload": {
+    "input": {
+      "id": "att-canonical",
+      "entryId": "entry-contract",
+      "filename": "canonical.csv",
+      "cachedPath": "idb://private-cache",
+      "cacheKey": "private-cache-key",
+      "thumbnail": "data:image/png;base64,private",
+      "futureRemoteField": {
+        "preserve": true
+      }
+    },
+    "expected": {
+      "id": "att-canonical",
+      "entryId": "entry-contract",
+      "filename": "canonical.csv",
+      "futureRemoteField": {
+        "preserve": true
+      }
+    },
+    "observedAndroidThumbnail": "data:image/png;base64,private",
+    "runtimeParity": "blocked",
+    "blockingIssueId": "android-data-thumbnail"
+  },
+  "fileBoxPayload": {
+    "input": {
+      "id": "filebox-canonical",
+      "localObjectUrl": "blob:private-filebox"
+    },
+    "expected": {
+      "id": "filebox-canonical"
+    },
+    "webRuntimeParity": "blocked",
+    "blockingIssueId": "web-payload-projection"
+  }
+}

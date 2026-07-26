@@ -1,0 +1,54 @@
+{
+  "caseId": "equal-tombstone-targets-normalize-deterministically",
+  "entityKind": "attachment",
+  "entityId": "att-equal",
+  "candidates": [
+    {
+      "id": "legacy-delete-id",
+      "entityKind": "attachment",
+      "entityId": "att-equal",
+      "deletedAt": "2026-05-23T10:00:00.000Z",
+      "deletedByDeviceId": "dev-a",
+      "reason": "Older delete"
+    },
+    {
+      "id": "another-delete-id",
+      "entityKind": "attachment",
+      "entityId": "att-equal",
+      "deletedAt": "2026-05-23T11:00:00.000Z",
+      "deletedByDeviceId": "dev-b",
+      "reason": "Newer delete"
+    }
+  ],
+  "equalInstantDivergence": [
+    {
+      "id": "equal-a",
+      "entityKind": "attachment",
+      "entityId": "att-equal",
+      "deletedAt": "2026-05-23T12:00:00.000Z",
+      "deletedByDeviceId": "dev-a"
+    },
+    {
+      "id": "equal-b",
+      "entityKind": "attachment",
+      "entityId": "att-equal",
+      "deletedAt": "2026-05-23T12:00:00.000Z",
+      "deletedByDeviceId": "dev-b"
+    }
+  ],
+  "expected": {
+    "canonical": {
+      "id": "del-attachment-att-equal",
+      "entityKind": "attachment",
+      "entityId": "att-equal",
+      "deletedAt": "2026-05-23T11:00:00.000Z",
+      "deletedByDeviceId": "dev-b",
+      "reason": "Newer delete"
+    },
+    "drivePath": "tombstones/attachment--att-equal.json",
+    "equalInstantDecision": "blocked",
+    "runtimeParity": "blocked",
+    "blockingIssueId": "tombstone-target-normalization",
+    "observedNativeCreatedId": "delete-attachment-att-equal"
+  }
+}
