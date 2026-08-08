@@ -50,6 +50,7 @@ class DriveV1CrossClientParityGateTest {
                 "web-filebox-transfer-cascade",
                 "malformed-json-quarantine",
                 "web-payload-projection",
+                "native-idempotent-create-only",
             ),
             runtimeParity.arrayValue("resolvedIssueIds").mapTo(hashSetOf()) {
                 it.jsonPrimitive.content
@@ -62,7 +63,7 @@ class DriveV1CrossClientParityGateTest {
         assertEquals(1L, remoteVersion.longValue("minimumVersion"))
         assertTrue(remoteVersion.booleanValue("freshEtagBeforeMutation"))
         assertEquals("blocked-without-tombstone", remoteVersion.text("missingWithBase"))
-        assertEquals("blocked-until-idempotent", remoteVersion.text("conditionalCreate"))
+        assertEquals("idempotent-create-only-offline", remoteVersion.text("conditionalCreate"))
         assertEquals("parent-transitively-suppresses-descendants", deletions.text("cascade"))
         assertEquals("accepted-not-required", deletions.text("explicitChildTombstones"))
         assertFalse(deletions.booleanValue("physicalDriveDeletion"))

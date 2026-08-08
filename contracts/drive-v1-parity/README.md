@@ -24,7 +24,10 @@ unwired pending a separately reviewed, live-write-safe milestone.
 - Existing remote files require an exact Drive file ID and positive Drive
   version. A fresh ETag is fetched immediately before mutation.
 - Missing records with a prior baseline are blocked unless a tombstone proves
-  deletion. Conditional creation remains blocked until it is idempotent.
+  deletion. The unwired native transaction path supports create-only writes for
+  genuinely new records: it never overwrites an occupant and accepts a retry
+  only after deterministic identity, metadata, and downloaded bytes all match.
+  This offline-tested capability does not authorize production writes.
 - Verified existing paths are preserved. New unique daily entries use
   `entries/{date}.json`; same-day collisions add the encoded entity ID.
 - Unsafe local paths, cache keys, object URLs, and local-only thumbnails are

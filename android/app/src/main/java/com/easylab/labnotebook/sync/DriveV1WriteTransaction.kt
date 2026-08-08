@@ -89,9 +89,10 @@ internal data class DriveV1WriteTransaction(
     }
 
     private fun validateWrite(write: DriveV1TransactionWrite) {
-        require(write.precondition is DriveWritePrecondition.MustMatch) {
-            "Drive v1 conditional creation is disabled until idempotent creation is implemented: ${write.path}"
-        }
+        require(
+            write.precondition is DriveWritePrecondition.MustMatch ||
+                write.precondition is DriveWritePrecondition.MustNotExist,
+        ) { "Drive v1 transaction write has an unsupported precondition: ${write.path}" }
         validateManagedPath(write.path, requireJson = write is DriveV1TransactionWrite.Json)
         when (write) {
             is DriveV1TransactionWrite.Json -> {
@@ -111,6 +112,12 @@ internal data class DriveV1WriteTransaction(
                 }
                 require(write.bytes.size <= MAX_MULTIPART_BYTES) {
                     "Drive v1 transaction blob requires resumable upload: ${write.path}"
+                }
+                require(
+                    write.precondition !is DriveWritePrecondition.MustNotExist ||
+                        write.bytes.size < MAX_MULTIPART_BYTES,
+                ) {
+                    "Drive v1 create-only blob requires a bounded multipart upload: ${write.path}"
                 }
                 val normalizedMimeType = write.mimeType.substringBefore(';').trim()
                 require(normalizedMimeType.isNotBlank() && '/' in normalizedMimeType) {

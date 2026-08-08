@@ -14,7 +14,8 @@
       "tombstone-target-normalization",
       "web-filebox-transfer-cascade",
       "malformed-json-quarantine",
-      "web-payload-projection"
+      "web-payload-projection",
+      "native-idempotent-create-only"
     ]
   },
   "remoteVersion": {
@@ -22,7 +23,7 @@
     "minimumVersion": 1,
     "freshEtagBeforeMutation": true,
     "missingWithBase": "blocked-without-tombstone",
-    "conditionalCreate": "blocked-until-idempotent"
+    "conditionalCreate": "idempotent-create-only-offline"
   },
   "canonicalPaths": {
     "uniqueEntry": "entries/{dateBucket}.json",

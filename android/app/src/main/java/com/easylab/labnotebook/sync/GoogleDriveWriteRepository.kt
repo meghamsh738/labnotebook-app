@@ -251,7 +251,7 @@ internal class GoogleDriveWriteRepository(
         precondition: DriveWritePrecondition,
     ): Result<DriveFileRef> = driveResult {
         writeMutex.withLock {
-            requireUpdatePrecondition(path, precondition)
+            requireConditionalPrecondition(path, precondition)
             val segments = requireManagedPath(path, requireJson = true)
             val bytes = json.toByteArray(StandardCharsets.UTF_8)
             if (bytes.size > maxJsonBytes) {
@@ -334,7 +334,7 @@ internal class GoogleDriveWriteRepository(
     ): Result<DriveFileRef> = driveResult {
         val frozenBytes = bytes.copyOf()
         writeMutex.withLock {
-            requireUpdatePrecondition(path, precondition)
+            requireConditionalPrecondition(path, precondition)
             val segments = requireManagedBlobPath(path)
             if (frozenBytes.size > maxBlobBytes) {
                 throw DriveProtocolException("Drive blob exceeds the safe size limit: $path")
@@ -351,7 +351,12 @@ internal class GoogleDriveWriteRepository(
                 throw DriveProtocolException("Drive blob SHA-256 does not match its bytes: $path")
             }
             val useResumable = frozenBytes.size >= CONDITIONAL_RESUMABLE_MIN_BLOB_BYTES
-            val expected = precondition as DriveWritePrecondition.MustMatch
+            if (useResumable && precondition is DriveWritePrecondition.MustNotExist) {
+                throw DriveProtocolException(
+                    "Drive create-only blob requires a bounded multipart upload: $path",
+                )
+            }
+            val expected = precondition as? DriveWritePrecondition.MustMatch
             val operationIdentity = if (useResumable) {
                 val stableOperationId = operationId
                     ?.takeIf(String::isNotBlank)
@@ -362,7 +367,7 @@ internal class GoogleDriveWriteRepository(
                     accountId = accountId,
                     operationId = stableOperationId,
                     path = path,
-                    fileId = expected.fileId,
+                    fileId = checkNotNull(expected).fileId,
                     expectedVersion = expected.version,
                     sha256 = actualSha256,
                     byteSize = frozenBytes.size.toLong(),
@@ -562,10 +567,25 @@ internal class GoogleDriveWriteRepository(
         useResumable: Boolean = false,
         operationIdentity: DriveResumableOperationIdentity? = null,
     ): DriveFileRef {
-        val expected = precondition as? DriveWritePrecondition.MustMatch
-            ?: throw DriveProtocolException(
-                "Drive conditional creation is disabled until idempotent creation is implemented: $path",
+        if (precondition is DriveWritePrecondition.MustNotExist) {
+            if (useResumable || operationIdentity != null) {
+                throw DriveProtocolException(
+                    "Drive conditional creation only supports bounded multipart content: $path",
+                )
+            }
+            return conditionalCreateMedia(
+                token = token,
+                parentId = parentId,
+                path = path,
+                name = name,
+                mimeType = mimeType,
+                content = content,
+                appProperties = appProperties,
+                requireExistingMimeType = requireExistingMimeType,
             )
+        }
+        val expected = precondition as? DriveWritePrecondition.MustMatch
+            ?: throw DriveProtocolException("Drive conditional write has an unsupported precondition: $path")
         val matches = findChildren(token, parentId, name)
         if (matches.size > 1) {
             throw DriveWritePreconditionConflictException(
@@ -793,6 +813,181 @@ internal class GoogleDriveWriteRepository(
                 )
             }
         }
+    }
+
+    /**
+     * Creates a missing managed file without ever updating an occupant of the path.
+     *
+     * Google Drive does not provide path uniqueness, so the deterministic creation
+     * fingerprint is stored with the file. A lost-response retry is accepted only
+     * when exactly one file at the path has that fingerprint and its complete
+     * metadata and downloaded bytes match the original intention. Concurrent
+     * duplicates or any different occupant fail closed.
+     */
+    private suspend fun conditionalCreateMedia(
+        token: String,
+        parentId: String,
+        path: String,
+        name: String,
+        mimeType: String,
+        content: ByteArray,
+        appProperties: Map<String, String>,
+        requireExistingMimeType: ((String?) -> Boolean)?,
+    ): DriveFileRef {
+        val creationFingerprint = creationFingerprint(path, mimeType, content, appProperties)
+        val intendedAppProperties = appProperties + (CREATE_FINGERPRINT_PROPERTY to creationFingerprint)
+        val matches = findChildren(token, parentId, name)
+        if (matches.size > 1) {
+            throw DriveWritePreconditionConflictException(
+                "Drive workspace contains duplicate managed path: $path",
+            )
+        }
+        matches.singleOrNull()?.let { existing ->
+            return reconcileCreatedWrite(
+                token = token,
+                parentId = parentId,
+                path = path,
+                name = name,
+                mimeType = mimeType,
+                content = content,
+                expectedAppProperties = intendedAppProperties,
+                expectedId = existing.id,
+                requireExistingMimeType = requireExistingMimeType,
+            ) ?: throw DriveWritePreconditionConflictException(
+                "Drive create-only path is already occupied by different content: $path",
+            )
+        }
+
+        val metadata = buildJsonObject {
+            put("name", name)
+            put("mimeType", mimeType)
+            put("parents", buildJsonArray { add(JsonPrimitive(parentId)) })
+            put("appProperties", buildJsonObject {
+                intendedAppProperties.forEach { (key, value) -> put(key, value) }
+            })
+        }.toString()
+        val boundary = boundaryFactory().also { value ->
+            require(value.isNotBlank() && '\r' !in value && '\n' !in value) {
+                "Multipart boundary must be a non-empty single line."
+            }
+        }
+        val body = multipartBody(boundary, metadata, mimeType, content)
+        var uploadStarted = false
+        var createdId: String? = null
+        return try {
+            uploadStarted = true
+            val mutation = request(
+                token = token,
+                method = "POST",
+                url = uploadUrl("files", mapOf("uploadType" to "multipart", "fields" to FILE_FIELDS)),
+                headers = mapOf("Content-Type" to "multipart/related; boundary=$boundary"),
+                body = body,
+            ).toDriveItem("Drive create-only file upload")
+            createdId = mutation.id
+            verifyCreatedWrite(
+                token = token,
+                parentId = parentId,
+                path = path,
+                name = name,
+                mimeType = mimeType,
+                content = content,
+                expectedAppProperties = intendedAppProperties,
+                mutation = mutation,
+                requireExistingMimeType = requireExistingMimeType,
+            )
+        } catch (error: CancellationException) {
+            if (uploadStarted) {
+                val reconciled = reconcileCreatedAfterMutation(
+                    token, parentId, path, name, mimeType, content,
+                    intendedAppProperties, createdId, requireExistingMimeType,
+                )
+                if (reconciled != null) {
+                    error.addSuppressed(DriveWriteReconciledAfterCancellationException(reconciled))
+                }
+            }
+            throw error
+        } catch (error: Throwable) {
+            if (!uploadStarted) throw error
+            reconcileCreatedAfterMutation(
+                token, parentId, path, name, mimeType, content,
+                intendedAppProperties, createdId, requireExistingMimeType,
+            ) ?: throw DriveWriteAmbiguousCommitException(
+                "Drive create-only write may have committed but could not be reconciled: $path",
+                error,
+            )
+        }
+    }
+
+    private suspend fun verifyCreatedWrite(
+        token: String,
+        parentId: String,
+        path: String,
+        name: String,
+        mimeType: String,
+        content: ByteArray,
+        expectedAppProperties: Map<String, String>,
+        mutation: DriveItem,
+        requireExistingMimeType: ((String?) -> Boolean)?,
+    ): DriveFileRef = reconcileCreatedWrite(
+        token, parentId, path, name, mimeType, content,
+        expectedAppProperties, mutation.id, requireExistingMimeType,
+    ) ?: throw DriveProtocolException("Drive create-only upload failed post-write verification: $path")
+
+    private suspend fun reconcileCreatedAfterMutation(
+        token: String,
+        parentId: String,
+        path: String,
+        name: String,
+        mimeType: String,
+        content: ByteArray,
+        expectedAppProperties: Map<String, String>,
+        expectedId: String?,
+        requireExistingMimeType: ((String?) -> Boolean)?,
+    ): DriveFileRef? = withContext(NonCancellable) {
+        runCatching {
+            val matches = findChildren(token, parentId, name)
+            if (matches.size != 1) return@runCatching null
+            val only = matches.single()
+            if (expectedId != null && only.id != expectedId) return@runCatching null
+            reconcileCreatedWrite(
+                token, parentId, path, name, mimeType, content,
+                expectedAppProperties, only.id, requireExistingMimeType,
+            )
+        }.getOrNull()
+    }
+
+    private suspend fun reconcileCreatedWrite(
+        token: String,
+        parentId: String,
+        path: String,
+        name: String,
+        mimeType: String,
+        content: ByteArray,
+        expectedAppProperties: Map<String, String>,
+        expectedId: String,
+        requireExistingMimeType: ((String?) -> Boolean)?,
+    ): DriveFileRef? {
+        val matches = findChildren(token, parentId, name)
+        if (matches.size != 1 || matches.single().id != expectedId) return null
+        val metadata = getMetadata(token, expectedId)
+        if (!isExpectedManagedFile(
+                metadata, expectedId, parentId, name, mimeType, requireExistingMimeType,
+            ) || metadata.appProperties != expectedAppProperties || metadata.size != content.size.toLong()
+        ) return null
+        if (sha256RemoteMedia(token, expectedId, content.size.toLong()) != sha256(content)) return null
+        val finalMetadata = getMetadata(token, expectedId)
+        if (finalMetadata != metadata) return null
+        return finalMetadata.toFileRef(path)
+    }
+
+    private fun creationFingerprint(
+        path: String,
+        mimeType: String,
+        content: ByteArray,
+        appProperties: Map<String, String>,
+    ): String {
+        val properties = appProperties.toSortedMap().entries.joinToString("\n") { (key, value) -> "$key=$value" }
+        return sha256("$path\n$mimeType\n${sha256(content)}\n$properties".toByteArray(StandardCharsets.UTF_8))
     }
 
     private suspend fun reconcileAfterMutation(
@@ -1236,13 +1431,16 @@ internal class GoogleDriveWriteRepository(
         return segments
     }
 
-    private fun requireUpdatePrecondition(
+    private fun requireConditionalPrecondition(
         path: String,
         precondition: DriveWritePrecondition,
     ) {
-        if (precondition !is DriveWritePrecondition.MustMatch) {
+        if (
+            precondition !is DriveWritePrecondition.MustMatch &&
+            precondition !is DriveWritePrecondition.MustNotExist
+        ) {
             throw DriveProtocolException(
-                "Drive conditional creation is disabled until idempotent creation is implemented: $path",
+                "Drive conditional write has an unsupported precondition: $path",
             )
         }
     }
@@ -1309,6 +1507,7 @@ internal class GoogleDriveWriteRepository(
     private companion object {
         const val DEFAULT_MAX_BLOB_BYTES = 256 * 1024 * 1024
         const val CONDITIONAL_RESUMABLE_MIN_BLOB_BYTES = 5 * 1024 * 1024
+        const val CREATE_FINGERPRINT_PROPERTY = "easylabCreateFingerprint"
         const val DEFAULT_RESUMABLE_CHUNK_BYTES = 8 * 1024 * 1024
         const val REMOTE_HASH_CHUNK_BYTES = 4L * 1024 * 1024
         const val MAX_MANAGED_PATH_LENGTH = 1024

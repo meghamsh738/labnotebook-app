@@ -328,19 +328,98 @@ class GoogleDriveWriteRepositoryTest {
     }
 
     @Test
-    fun conditionalCreateFailsBeforeAnyNetworkUntilIdempotentCreationExists() = runTest {
+    fun conditionalCreateWritesOnlyAMissingPathAndCarriesDeterministicIdentity() = runTest {
         val fixture = Fixture()
+        fixture.addEmptyEntryTree()
 
-        val error = fixture.repository.putJsonConditional(
+        val result = fixture.repository.putJsonConditional(
             ACCOUNT_A,
             ENTRY_PATH,
             ENTRY_JSON,
             DriveWritePrecondition.MustNotExist,
+        ).getOrThrow()
+
+        assertEquals(ENTRY_PATH, result.path)
+        assertEquals(1L, result.version)
+        assertTrue(result.appProperties.getValue("easylabCreateFingerprint").matches(Regex("[0-9a-f]{64}")))
+        assertEquals(1, fixture.transport.requests.count { it.method == "POST" && it.url.contains("/upload/") })
+        assertFalse(fixture.transport.requests.any { it.method == "PATCH" })
+    }
+
+    @Test
+    fun lostCreateResponseReconcilesAndRetryDoesNotCreateADuplicate() = runTest {
+        val fixture = Fixture()
+        fixture.addEmptyEntryTree()
+        fixture.transport.losePostResponseAfterCommit = true
+
+        val first = fixture.repository.putJsonConditional(
+            ACCOUNT_A, ENTRY_PATH, ENTRY_JSON, DriveWritePrecondition.MustNotExist,
+        ).getOrThrow()
+        val retry = fixture.repository.putJsonConditional(
+            ACCOUNT_A, ENTRY_PATH, ENTRY_JSON, DriveWritePrecondition.MustNotExist,
+        ).getOrThrow()
+
+        assertEquals(first, retry)
+        assertEquals(1, fixture.transport.requests.count { it.method == "POST" && it.url.contains("/upload/") })
+    }
+
+    @Test
+    fun createOnlyRetryFailsClosedWhenPathContentDoesNotMatch() = runTest {
+        val fixture = Fixture()
+        fixture.addEmptyEntryTree()
+        fixture.repository.putJsonConditional(
+            ACCOUNT_A, ENTRY_PATH, ENTRY_JSON, DriveWritePrecondition.MustNotExist,
+        ).getOrThrow()
+        val writesBeforeMismatch = fixture.transport.requests.count { it.method in setOf("POST", "PATCH") }
+
+        val error = fixture.repository.putJsonConditional(
+            ACCOUNT_A,
+            ENTRY_PATH,
+            ENTRY_JSON.replace("entry-a", "entry-b"),
+            DriveWritePrecondition.MustNotExist,
         ).exceptionOrNull()
 
-        assertTrue(error is DriveProtocolException)
-        assertTrue(error?.message.orEmpty().contains("idempotent creation"))
-        assertTrue(fixture.transport.requests.isEmpty())
+        assertTrue(error is DriveWritePreconditionConflictException)
+        assertEquals(writesBeforeMismatch, fixture.transport.requests.count { it.method in setOf("POST", "PATCH") })
+    }
+
+    @Test
+    fun createOnlyFailsClosedOnDuplicatePathWithoutAnotherUpload() = runTest {
+        val fixture = Fixture()
+        fixture.addExistingTree(fileCopies = 2)
+
+        val error = fixture.repository.putJsonConditional(
+            ACCOUNT_A, ENTRY_PATH, ENTRY_JSON, DriveWritePrecondition.MustNotExist,
+        ).exceptionOrNull()
+
+        assertTrue(error is DriveWritePreconditionConflictException)
+        assertFalse(fixture.transport.requests.any { it.method in setOf("POST", "PATCH") })
+    }
+
+    @Test
+    fun cancellationAfterCreateIsReconciledButStillPropagatesAndRetryIsSafe() = runTest {
+        val fixture = Fixture()
+        fixture.addEmptyEntryTree()
+        fixture.transport.cancelPostAfterCommit = true
+        var cancellation: CancellationException? = null
+
+        try {
+            fixture.repository.putJsonConditional(
+                ACCOUNT_A, ENTRY_PATH, ENTRY_JSON, DriveWritePrecondition.MustNotExist,
+            )
+        } catch (error: CancellationException) {
+            cancellation = error
+        }
+
+        assertTrue(
+            cancellation?.suppressed?.singleOrNull() is
+                DriveWriteReconciledAfterCancellationException,
+        )
+        val retry = fixture.repository.putJsonConditional(
+            ACCOUNT_A, ENTRY_PATH, ENTRY_JSON, DriveWritePrecondition.MustNotExist,
+        ).getOrThrow()
+        assertEquals(ENTRY_PATH, retry.path)
+        assertEquals(1, fixture.transport.requests.count { it.method == "POST" && it.url.contains("/upload/") })
     }
 
     @Test
@@ -662,6 +741,12 @@ class GoogleDriveWriteRepositoryTest {
             }
         }
 
+        fun addEmptyEntryTree() {
+            addExistingRoot()
+            transport.add(FakeNode.folder("entries", "entries", parentId = "root-a"))
+            transport.add(FakeNode.folder("day", "2026-07-16", parentId = "entries"))
+        }
+
         fun addExistingRoot() {
             store.set(ACCOUNT_A, "root-a")
             transport.add(FakeNode.folder("root-a", "Easylab Lab Notebook", parentId = "root"))
@@ -767,6 +852,8 @@ class GoogleDriveWriteRepositoryTest {
         var changeVersionBeforePatch = false
         var corruptMediaReadBack = false
         var losePatchResponseAfterCommit = false
+        var losePostResponseAfterCommit = false
+        var cancelPostAfterCommit = false
         var cancelPatchAfterCommit = false
         var loseFirstResumableChunkResponseAfterAccept = false
         var cancelFinalResumableResponseAfterCommit = false
@@ -899,6 +986,14 @@ class GoogleDriveWriteRepositoryTest {
             node.appProperties = (metadata["appProperties"] as? JsonObject)
                 ?.mapValues { (_, value) -> value.jsonPrimitive.content }
                 .orEmpty()
+            if (request.method == "POST" && losePostResponseAfterCommit) {
+                losePostResponseAfterCommit = false
+                throw IOException("simulated lost create response")
+            }
+            if (request.method == "POST" && cancelPostAfterCommit) {
+                cancelPostAfterCommit = false
+                throw CancellationException("simulated cancellation after create commit")
+            }
             if (request.method == "PATCH" && losePatchResponseAfterCommit) {
                 losePatchResponseAfterCommit = false
                 throw IOException("simulated lost patch response")

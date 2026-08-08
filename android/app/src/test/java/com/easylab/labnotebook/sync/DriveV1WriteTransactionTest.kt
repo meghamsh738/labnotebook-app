@@ -130,17 +130,22 @@ class DriveV1WriteTransactionTest {
                 )
             }.exceptionOrNull() is IllegalArgumentException,
         )
-        assertTrue(
-            runCatching {
-                transaction(
-                    prerequisites = listOf(
-                        json(
-                            ENTRY_PATH,
-                            DriveWritePrecondition.MustNotExist,
-                        ),
-                    ),
-                )
-            }.exceptionOrNull() is IllegalArgumentException,
+    }
+
+    @Test
+    fun acceptsAndForwardsCreateOnlyPreconditionsWithoutWeakeningThem() = runTest {
+        val writer = RecordingWriter()
+        val transaction = DriveV1WriteTransaction(
+            accountId = ACCOUNT,
+            prerequisites = listOf(json(ENTRY_PATH, DriveWritePrecondition.MustNotExist)),
+            manifest = json(DriveV1Paths.manifest, DriveWritePrecondition.MustNotExist),
+        )
+
+        DriveV1WriteTransactionExecutor(writer).execute(transaction).getOrThrow()
+
+        assertEquals(
+            listOf(DriveWritePrecondition.MustNotExist, DriveWritePrecondition.MustNotExist),
+            writer.preconditions,
         )
     }
 

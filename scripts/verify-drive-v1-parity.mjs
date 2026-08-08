@@ -7,6 +7,7 @@ const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url))
 const fixtureRoot = path.join(repositoryRoot, 'contracts', 'drive-v1-parity')
 const expectedJsonFiles = [
   'canonicalization.json',
+  'conditional-create.json',
   'delete-edit-race.json',
   'equal-targets.json',
   'malformed-json.json',
@@ -94,6 +95,7 @@ assert.deepEqual([...resolved].sort(), [
   'android-data-thumbnail',
   'android-unique-entry-path',
   'malformed-json-quarantine',
+  'native-idempotent-create-only',
   'tombstone-target-normalization',
   'web-filebox-transfer-cascade',
   'web-payload-projection',
@@ -101,10 +103,25 @@ assert.deepEqual([...resolved].sort(), [
 assert.deepEqual(policy.remoteVersion.existingRequires, ['fileId', 'version'])
 assert.equal(policy.remoteVersion.minimumVersion, 1)
 assert.equal(policy.remoteVersion.freshEtagBeforeMutation, true)
+assert.equal(policy.remoteVersion.conditionalCreate, 'idempotent-create-only-offline')
 assert.equal(policy.deletions.cascade, 'parent-transitively-suppresses-descendants')
 assert.equal(policy.deletions.explicitChildTombstones, 'accepted-not-required')
 assert.equal(policy.deletions.physicalDriveDeletion, false)
 assert.equal(policy.deletions.nonResurrection, true)
+
+const conditionalCreate = await fixture('conditional-create.json')
+assert.equal(conditionalCreate.precondition, 'must-not-exist')
+assert.equal(conditionalCreate.scope, 'offline-native-transaction-only')
+assert.equal(conditionalCreate.identity.property, 'easylabCreateFingerprint')
+assert.equal(conditionalCreate.identity.deterministic, true)
+assert.equal(conditionalCreate.missingPath.overwriteAllowed, false)
+assert.equal(conditionalCreate.existingPath.exactIdentityAndContent, 'reconcile-as-success')
+assert.equal(conditionalCreate.existingPath.mismatch, 'precondition-conflict')
+assert.equal(conditionalCreate.existingPath.duplicates, 'precondition-conflict')
+assert.equal(conditionalCreate.ambiguousOutcome.otherwise, 'ambiguous-commit')
+assert.equal(conditionalCreate.runtime.productionWired, false)
+assert.equal(conditionalCreate.runtime.nativeDriveWritesAllowed, false)
+assert.equal(conditionalCreate.runtime.liveDriveValidationPerformed, false)
 
 const malformed = await fixture('malformed-json.json')
 assert.throws(() => JSON.parse(malformed.remoteDocumentText), SyntaxError)
@@ -218,6 +235,9 @@ const androidDao = await source(
 const androidReader = await source(
   'android/app/src/main/java/com/easylab/labnotebook/sync/DriveReadOnlyMetadataSync.kt',
 )
+const androidWriter = await source(
+  'android/app/src/main/java/com/easylab/labnotebook/sync/GoogleDriveWriteRepository.kt',
+)
 const webSyncEngine = await source('web/src/sync/syncEngine.ts')
 const webDataCore = await source('web/src/sync/dataCore.ts')
 const webProvider = await source('web/src/sync/syncProvider.ts')
@@ -228,6 +248,9 @@ assert.match(androidSerializer, /startsWith\("data:"\)/)
 assert.match(androidDao, /val baseRecordId = "del-\$entityKind-\$entityId"/)
 assert.match(androidReader, /conf-invalid-\$entityKind-\$\{ref\.path\}/)
 assert.match(androidReader, /cacheAsBaseline = false/)
+assert.match(androidWriter, /CREATE_FINGERPRINT_PROPERTY = "easylabCreateFingerprint"/)
+assert.match(androidWriter, /private suspend fun conditionalCreateMedia/)
+assert.match(androidWriter, /private suspend fun reconcileCreatedWrite/)
 assert.match(webSyncEngine, /normalizeTombstonesByTarget\(\[\.\.\.snapshot\.tombstones, tombstone\]\)/)
 const readRemoteEntries = webSyncEngine.slice(
   webSyncEngine.indexOf('async function readRemoteEntries'),

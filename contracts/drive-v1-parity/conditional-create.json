@@ -1,0 +1,34 @@
+{
+  "precondition": "must-not-exist",
+  "scope": "offline-native-transaction-only",
+  "identity": {
+    "property": "easylabCreateFingerprint",
+    "inputs": ["verifiedPath", "mimeType", "contentSha256", "canonicalAppProperties"],
+    "deterministic": true
+  },
+  "missingPath": {
+    "decision": "create-once",
+    "method": "multipart-post",
+    "overwriteAllowed": false
+  },
+  "existingPath": {
+    "exactIdentityAndContent": "reconcile-as-success",
+    "mismatch": "precondition-conflict",
+    "duplicates": "precondition-conflict"
+  },
+  "ambiguousOutcome": {
+    "reconcileRequires": [
+      "one-path-match",
+      "creation-fingerprint-match",
+      "metadata-match",
+      "downloaded-content-sha256-match",
+      "stable-second-metadata-read"
+    ],
+    "otherwise": "ambiguous-commit"
+  },
+  "runtime": {
+    "productionWired": false,
+    "nativeDriveWritesAllowed": false,
+    "liveDriveValidationPerformed": false
+  }
+}
