@@ -11,6 +11,22 @@
     "method": "multipart-post",
     "overwriteAllowed": false
   },
+  "uploadModes": {
+    "boundedMultipart": {
+      "maximumExclusiveBytes": 5242880,
+      "method": "multipart-post",
+      "generatedFileIdRequired": false
+    },
+    "resumable": {
+      "minimumInclusiveBytes": 5242880,
+      "method": "resumable-post",
+      "generatedFileIdRequired": true,
+      "persistBeforeContentTransfer": true,
+      "pathReservation": "parent-folder-etag-cas",
+      "reservationScope": "canonical-path-hash",
+      "independentRecovery": "adopt-exact-generated-id-and-fingerprint"
+    }
+  },
   "existingPath": {
     "exactIdentityAndContent": "reconcile-as-success",
     "mismatch": "precondition-conflict",

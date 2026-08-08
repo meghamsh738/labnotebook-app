@@ -71,6 +71,28 @@ class DriveV1CrossClientParityGateTest {
     }
 
     @Test
+    fun conditionalCreateFixtureSeparatesMultipartAndRecoverableResumableModes() {
+        val fixture = fixture("conditional-create.json")
+        val modes = fixture.objectValue("uploadModes")
+        val multipart = modes.objectValue("boundedMultipart")
+        val resumable = modes.objectValue("resumable")
+
+        assertEquals(5L * 1024 * 1024, multipart.longValue("maximumExclusiveBytes"))
+        assertEquals("multipart-post", multipart.text("method"))
+        assertFalse(multipart.booleanValue("generatedFileIdRequired"))
+        assertEquals(5L * 1024 * 1024, resumable.longValue("minimumInclusiveBytes"))
+        assertEquals("resumable-post", resumable.text("method"))
+        assertTrue(resumable.booleanValue("generatedFileIdRequired"))
+        assertTrue(resumable.booleanValue("persistBeforeContentTransfer"))
+        assertEquals("parent-folder-etag-cas", resumable.text("pathReservation"))
+        assertEquals("canonical-path-hash", resumable.text("reservationScope"))
+        assertEquals(
+            "adopt-exact-generated-id-and-fingerprint",
+            resumable.text("independentRecovery"),
+        )
+    }
+
+    @Test
     fun malformedRemoteJsonHasOneDeterministicQuarantineIdentity() {
         val case = fixture("malformed-json.json")
         val expected = case.objectValue("expected")

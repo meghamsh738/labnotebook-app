@@ -16,16 +16,37 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
 
+internal sealed interface DriveResumableOperationTarget {
+    val fileId: String
+
+    data class Existing(
+        override val fileId: String,
+        val expectedVersion: Long,
+    ) : DriveResumableOperationTarget
+
+    data class New(
+        override val fileId: String,
+        val creationFingerprint: String,
+    ) : DriveResumableOperationTarget
+}
+
 internal data class DriveResumableOperationIdentity(
     val accountId: AccountId,
     val operationId: String,
     val path: String,
     val fileId: String,
-    val expectedVersion: Long,
+    val expectedVersion: Long = 0,
     val sha256: String,
     val byteSize: Long,
     val mimeType: String,
+    val creationFingerprint: String? = null,
 ) {
+    val target: DriveResumableOperationTarget = if (creationFingerprint == null) {
+        DriveResumableOperationTarget.Existing(fileId, expectedVersion)
+    } else {
+        DriveResumableOperationTarget.New(fileId, creationFingerprint)
+    }
+
     init {
         require(operationId.isNotBlank() && operationId.length <= MAX_OPERATION_ID_LENGTH) {
             "Drive resumable operation id is invalid."
@@ -35,7 +56,16 @@ internal data class DriveResumableOperationIdentity(
         }
         require(path.isNotBlank()) { "Drive resumable operation path must not be blank." }
         require(fileId.isNotBlank()) { "Drive resumable operation file id must not be blank." }
-        require(expectedVersion > 0) { "Drive resumable operation version must be positive." }
+        when (target) {
+            is DriveResumableOperationTarget.Existing -> require(target.expectedVersion > 0) {
+                "Drive resumable operation version must be positive."
+            }
+            is DriveResumableOperationTarget.New -> require(
+                expectedVersion == 0L && SHA256_REGEX.matches(target.creationFingerprint),
+            ) {
+                "Drive resumable creation target must use version zero and a canonical fingerprint."
+            }
+        }
         require(SHA256_REGEX.matches(sha256)) {
             "Drive resumable operation SHA-256 must be canonical lowercase hexadecimal."
         }
@@ -126,8 +156,14 @@ internal class DriveResumableOperationStore(
         }
         val version = file.version
             ?: throw DriveProtocolException("Drive resumable completion omitted its file version.")
-        require(version > identity.expectedVersion) {
-            "Drive resumable completion did not advance its expected file version."
+        val target = identity.target
+        require(
+            version > when (target) {
+                is DriveResumableOperationTarget.Existing -> target.expectedVersion
+                is DriveResumableOperationTarget.New -> 0
+            },
+        ) {
+            "Drive resumable completion did not advance its target version."
         }
         update(identity) { current ->
             current.copy(
@@ -169,10 +205,19 @@ internal class DriveResumableOperationStore(
         put("operationId", record.identity.operationId)
         put("path", record.identity.path)
         put("fileId", record.identity.fileId)
-        put("expectedVersion", record.identity.expectedVersion)
         put("sha256", record.identity.sha256.lowercase())
         put("byteSize", record.identity.byteSize)
         put("mimeType", record.identity.mimeType)
+        when (val target = record.identity.target) {
+            is DriveResumableOperationTarget.Existing -> {
+                put("targetKind", "existing")
+                put("expectedVersion", target.expectedVersion)
+            }
+            is DriveResumableOperationTarget.New -> {
+                put("targetKind", "new")
+                put("creationFingerprint", target.creationFingerprint)
+            }
+        }
         put("state", record.state.name)
         record.completedVersion?.let { put("completedVersion", it) }
     }.toString()
@@ -186,27 +231,41 @@ internal class DriveResumableOperationStore(
         fun text(name: String): String = value[name]?.jsonPrimitive?.contentOrNull
             ?.takeIf(String::isNotBlank)
             ?: throw DriveProtocolException("Persisted Drive resumable operation omitted $name.")
-        if (value["version"]?.jsonPrimitive?.longOrNull != FORMAT_VERSION.toLong()) {
+        val formatVersion = value["version"]?.jsonPrimitive?.longOrNull
+        if (formatVersion !in setOf(1L, FORMAT_VERSION.toLong())) {
             throw DriveProtocolException("Persisted Drive resumable operation version is unsupported.")
+        }
+        val targetKind = when (formatVersion) {
+            1L -> "existing"
+            else -> text("targetKind")
+        }
+        val expectedVersion = when (targetKind) {
+            "existing" -> value["expectedVersion"]?.jsonPrimitive?.longOrNull
+                ?: throw DriveProtocolException("Persisted Drive resumable operation omitted expectedVersion.")
+            "new" -> 0
+            else -> throw DriveProtocolException("Persisted Drive resumable operation target is invalid.")
         }
         val identity = DriveResumableOperationIdentity(
             accountId = AccountId(text("accountId")),
             operationId = text("operationId"),
             path = text("path"),
             fileId = text("fileId"),
-            expectedVersion = value["expectedVersion"]?.jsonPrimitive?.longOrNull
-                ?: throw DriveProtocolException("Persisted Drive resumable operation omitted expectedVersion."),
+            expectedVersion = expectedVersion,
             sha256 = text("sha256"),
             byteSize = value["byteSize"]?.jsonPrimitive?.longOrNull
                 ?: throw DriveProtocolException("Persisted Drive resumable operation omitted byteSize."),
             mimeType = text("mimeType"),
+            creationFingerprint = if (targetKind == "new") text("creationFingerprint") else null,
         )
         val state = runCatching { DriveResumableOperationState.valueOf(text("state")) }
             .getOrElse { throw DriveProtocolException("Persisted Drive resumable operation state is invalid.", it) }
         val completedVersion = value["completedVersion"]?.jsonPrimitive?.longOrNull
         if (
             state == DriveResumableOperationState.Completed &&
-            (completedVersion == null || completedVersion <= identity.expectedVersion)
+            (completedVersion == null || completedVersion <= when (val target = identity.target) {
+                is DriveResumableOperationTarget.Existing -> target.expectedVersion
+                is DriveResumableOperationTarget.New -> 0
+            })
         ) {
             throw DriveProtocolException("Persisted Drive resumable completion version is invalid.")
         }
@@ -224,7 +283,7 @@ internal class DriveResumableOperationStore(
         .joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
 
     private companion object {
-        const val FORMAT_VERSION = 1
+        const val FORMAT_VERSION = 2
         const val MAX_UPDATE_ATTEMPTS = 8
         val JSON = Json { ignoreUnknownKeys = false }
     }

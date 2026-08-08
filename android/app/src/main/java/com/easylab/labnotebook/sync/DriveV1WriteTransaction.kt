@@ -33,11 +33,21 @@ internal interface DriveConditionalWriteClient {
     /**
      * Resumes a guarded update to an existing attachment blob.
      *
-     * This is intentionally an existing-file-only operation. Create-only
-     * resumable uploads need a persisted generated Drive file id and are kept
-     * out of this transaction boundary until that protocol is available.
+     * This operation always receives an immutable persisted identity. For an
+     * existing target that identity binds a file id and version; for a new
+     * target it binds one pre-generated Drive id and creation fingerprint.
      */
     suspend fun putBlobConditionalResumable(
+        accountId: AccountId,
+        path: String,
+        bytes: ByteArray,
+        mimeType: String,
+        sha256: String,
+        precondition: DriveWritePrecondition,
+        operationId: String,
+    ): Result<DriveFileRef>
+
+    suspend fun putBlobConditionalResumableCreate(
         accountId: AccountId,
         path: String,
         bytes: ByteArray,
@@ -132,9 +142,6 @@ internal data class DriveV1WriteTransaction(
                 }
                 val requiresResumable = write.bytes.size >= MAX_MULTIPART_BYTES
                 if (requiresResumable) {
-                    require(write.precondition is DriveWritePrecondition.MustMatch) {
-                        "Drive v1 create-only blob requires a bounded multipart upload: ${write.path}"
-                    }
                     requireValidResumableOperationId(write.resumableOperationId, write.path)
                 } else {
                     require(write.resumableOperationId == null) {
@@ -399,8 +406,18 @@ internal class DriveV1WriteTransactionExecutor(
                 sha256 = write.sha256,
                 precondition = write.precondition,
             )
-        } else {
+        } else if (write.precondition is DriveWritePrecondition.MustMatch) {
             putBlobConditionalResumable(
+                accountId = accountId,
+                path = write.path,
+                bytes = write.bytes,
+                mimeType = write.mimeType,
+                sha256 = write.sha256,
+                precondition = write.precondition,
+                operationId = write.resumableOperationId,
+            )
+        } else {
+            putBlobConditionalResumableCreate(
                 accountId = accountId,
                 path = write.path,
                 bytes = write.bytes,

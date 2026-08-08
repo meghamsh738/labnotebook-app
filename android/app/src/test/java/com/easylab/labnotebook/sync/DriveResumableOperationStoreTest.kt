@@ -139,6 +139,59 @@ class DriveResumableOperationStoreTest {
         assertEquals(identity.expectedVersion + 1, record?.completedVersion)
     }
 
+    @Test
+    fun generatedIdCreationTargetIsImmutableAndCompletesAtFirstPositiveVersion() = runTest {
+        val persistence = FakePersistence()
+        val identity = DriveResumableOperationIdentity(
+            accountId = AccountId("account-a"),
+            operationId = "create-operation-1",
+            path = "attachments/2026-07-26/new-large.bin",
+            fileId = "generated-file-id",
+            sha256 = "c".repeat(64),
+            byteSize = 6L * 1024 * 1024,
+            mimeType = "application/octet-stream",
+            creationFingerprint = "d".repeat(64),
+        )
+        val store = DriveResumableOperationStore(persistence)
+
+        store.begin(identity)
+        val stale = runCatching {
+            store.begin(identity.copy(creationFingerprint = "e".repeat(64)))
+        }.exceptionOrNull()
+        store.markCompleted(
+            identity,
+            DriveFileRef(
+                id = identity.fileId,
+                path = identity.path,
+                name = "new-large.bin",
+                mimeType = identity.mimeType,
+                size = identity.byteSize,
+                updatedAt = "2026-07-26T12:00:00Z",
+                version = 1,
+            ),
+        )
+
+        val record = store.record(identity.accountId, identity.operationId)
+        assertTrue(stale is DriveResumableOperationIdentityConflictException)
+        assertTrue(record?.identity?.target is DriveResumableOperationTarget.New)
+        assertEquals(1L, record?.completedVersion)
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun generatedIdCreationTargetRejectsNonzeroExpectedVersion() {
+        DriveResumableOperationIdentity(
+            accountId = AccountId("account-a"),
+            operationId = "create-operation-invalid",
+            path = "attachments/2026-07-26/new-large.bin",
+            fileId = "generated-file-id",
+            expectedVersion = 1,
+            sha256 = "c".repeat(64),
+            byteSize = 6L * 1024 * 1024,
+            mimeType = "application/octet-stream",
+            creationFingerprint = "d".repeat(64),
+        )
+    }
+
     @Test(expected = IllegalArgumentException::class)
     fun operationIdentityRejectsNonCanonicalSha256() {
         identity(sha256 = "A".repeat(64))

@@ -26,6 +26,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonArray
@@ -219,6 +220,9 @@ internal class GoogleDriveWriteRepository(
             if (normalizedMimeType.isBlank() || '/' !in normalizedMimeType) {
                 throw DriveProtocolException("Drive blob MIME type is invalid: $path")
             }
+            if (normalizedMimeType.startsWith("application/vnd.google-apps.")) {
+                throw DriveProtocolException("Drive blob MIME type cannot request Google Workspace conversion: $path")
+            }
             if (!SHA256_REGEX.matches(sha256)) {
                 throw DriveProtocolException("Drive blob SHA-256 is invalid: $path")
             }
@@ -319,6 +323,26 @@ internal class GoogleDriveWriteRepository(
         sha256 = sha256,
         precondition = precondition,
         operationId = operationId,
+        allowResumableCreate = false,
+    )
+
+    override suspend fun putBlobConditionalResumableCreate(
+        accountId: AccountId,
+        path: String,
+        bytes: ByteArray,
+        mimeType: String,
+        sha256: String,
+        precondition: DriveWritePrecondition,
+        operationId: String,
+    ): Result<DriveFileRef> = putBlobConditionalInternal(
+        accountId = accountId,
+        path = path,
+        bytes = bytes,
+        mimeType = mimeType,
+        sha256 = sha256,
+        precondition = precondition,
+        operationId = operationId,
+        allowResumableCreate = true,
     )
 
     private suspend fun putBlobConditionalInternal(
@@ -329,6 +353,7 @@ internal class GoogleDriveWriteRepository(
         sha256: String,
         precondition: DriveWritePrecondition,
         operationId: String?,
+        allowResumableCreate: Boolean = false,
     ): Result<DriveFileRef> = driveResult {
         val frozenBytes = bytes.copyOf()
         writeMutex.withLock {
@@ -341,6 +366,9 @@ internal class GoogleDriveWriteRepository(
             if (normalizedMimeType.isBlank() || '/' !in normalizedMimeType) {
                 throw DriveProtocolException("Drive blob MIME type is invalid: $path")
             }
+            if (normalizedMimeType.startsWith("application/vnd.google-apps.")) {
+                throw DriveProtocolException("Drive blob MIME type cannot request Google Workspace conversion: $path")
+            }
             if (!SHA256_REGEX.matches(sha256)) {
                 throw DriveProtocolException("Drive blob SHA-256 is invalid: $path")
             }
@@ -349,13 +377,48 @@ internal class GoogleDriveWriteRepository(
                 throw DriveProtocolException("Drive blob SHA-256 does not match its bytes: $path")
             }
             val useResumable = frozenBytes.size >= CONDITIONAL_RESUMABLE_MIN_BLOB_BYTES
-            if (useResumable && precondition is DriveWritePrecondition.MustNotExist) {
+            if (
+                useResumable &&
+                    precondition is DriveWritePrecondition.MustNotExist &&
+                    !allowResumableCreate
+            ) {
                 throw DriveProtocolException(
-                    "Drive create-only blob requires a bounded multipart upload: $path",
+                    "Drive create-only resumable blob requires its generated-id protocol: $path",
                 )
             }
+            if (allowResumableCreate && precondition !is DriveWritePrecondition.MustNotExist) {
+                throw DriveProtocolException("Drive resumable creation requires MustNotExist: $path")
+            }
             val expected = precondition as? DriveWritePrecondition.MustMatch
-            val operationIdentity = if (useResumable) {
+            val blobAppProperties = mapOf(
+                "entityType" to "attachmentBlob",
+                "sha256" to actualSha256,
+            )
+            if (useResumable && precondition is DriveWritePrecondition.MustNotExist) {
+                val stableOperationId = operationId
+                    ?.takeIf { it.isNotBlank() && it.length <= MAX_RESUMABLE_OPERATION_ID_LENGTH }
+                    ?.takeUnless { it.any(Char::isISOControl) }
+                    ?: throw DriveProtocolException(
+                        "Drive resumable creation requires a valid persisted operation id: $path",
+                    )
+                resumableOperations.record(accountId, stableOperationId)?.identity?.let { persisted ->
+                    if (
+                        persisted.target !is DriveResumableOperationTarget.New ||
+                        persisted.path != path ||
+                        persisted.sha256 != actualSha256 ||
+                        persisted.byteSize != frozenBytes.size.toLong() ||
+                        persisted.mimeType != normalizedMimeType ||
+                        persisted.creationFingerprint != creationFingerprint(
+                            path, normalizedMimeType, frozenBytes, blobAppProperties,
+                        )
+                    ) {
+                        throw DriveResumableOperationIdentityConflictException(
+                            "Drive resumable creation id is already bound to different immutable content.",
+                        )
+                    }
+                }
+            }
+            val operationIdentity = if (useResumable && expected != null) {
                 val stableOperationId = operationId
                     ?.takeIf(String::isNotBlank)
                     ?: throw DriveProtocolException(
@@ -377,6 +440,19 @@ internal class GoogleDriveWriteRepository(
             val token = accessToken(accountId)
             val rootId = requireExistingRoot(accountId, path)
             val parentId = requireExistingFolders(token, rootId, segments.dropLast(1), path)
+            if (useResumable && precondition is DriveWritePrecondition.MustNotExist) {
+                return@withLock conditionalCreateResumableMedia(
+                    token = token,
+                    accountId = accountId,
+                    parentId = parentId,
+                    path = path,
+                    name = segments.last(),
+                    mimeType = normalizedMimeType,
+                    content = frozenBytes,
+                    appProperties = blobAppProperties,
+                    operationId = checkNotNull(operationId),
+                )
+            }
             conditionalUpsertMedia(
                 token = token,
                 parentId = parentId,
@@ -384,10 +460,7 @@ internal class GoogleDriveWriteRepository(
                 name = segments.last(),
                 mimeType = normalizedMimeType,
                 content = frozenBytes,
-                appProperties = mapOf(
-                    "entityType" to "attachmentBlob",
-                    "sha256" to actualSha256,
-                ),
+                appProperties = blobAppProperties,
                 precondition = precondition,
                 useResumable = useResumable,
                 operationIdentity = operationIdentity,
@@ -914,6 +987,366 @@ internal class GoogleDriveWriteRepository(
                 error,
             )
         }
+    }
+
+    /**
+     * Creates a large blob exactly once under a pre-generated Drive id.
+     *
+     * The operation store is the authority for retries: it binds the generated
+     * id and all immutable intent before the first upload session is started.
+     * A retry therefore either reconciles that exact file or fails closed; it
+     * never allocates a second id or replaces an occupant at the canonical path.
+     */
+    private suspend fun conditionalCreateResumableMedia(
+        token: String,
+        accountId: AccountId,
+        parentId: String,
+        path: String,
+        name: String,
+        mimeType: String,
+        content: ByteArray,
+        appProperties: Map<String, String>,
+        operationId: String,
+    ): DriveFileRef {
+        if (
+            operationId.isBlank() ||
+                operationId.length > MAX_RESUMABLE_OPERATION_ID_LENGTH ||
+                operationId.any(Char::isISOControl)
+        ) {
+            throw DriveProtocolException("Drive resumable creation requires a valid persisted operation id: $path")
+        }
+        val creationFingerprint = creationFingerprint(path, mimeType, content, appProperties)
+        val intendedAppProperties = appProperties + (CREATE_FINGERPRINT_PROPERTY to creationFingerprint)
+        val existingRecord = resumableOperations.record(accountId, operationId)
+        existingRecord?.identity?.let { persisted ->
+            if (
+                persisted.target !is DriveResumableOperationTarget.New ||
+                persisted.path != path ||
+                persisted.sha256 != sha256(content) ||
+                persisted.byteSize != content.size.toLong() ||
+                persisted.mimeType != mimeType ||
+                persisted.creationFingerprint != creationFingerprint
+            ) {
+                throw DriveResumableOperationIdentityConflictException(
+                    "Drive resumable creation id is already bound to different immutable content.",
+                )
+            }
+        }
+        val recoverableReservation = if (existingRecord == null) {
+            readCreateReservation(token, parentId, path)
+        } else {
+            null
+        }
+        val identity = existingRecord?.identity ?: run {
+            recoverableReservation?.let { reserved ->
+                if (reserved.creationFingerprint != creationFingerprint) {
+                    throw DriveWritePreconditionConflictException(
+                        "Drive path has an active reservation for different content: $path",
+                    )
+                }
+                return@run DriveResumableOperationIdentity(
+                    accountId = accountId,
+                    operationId = operationId,
+                    path = path,
+                    fileId = reserved.fileId,
+                    sha256 = sha256(content),
+                    byteSize = content.size.toLong(),
+                    mimeType = mimeType,
+                    creationFingerprint = creationFingerprint,
+                )
+            }
+            val matches = findChildren(token, parentId, name)
+            if (matches.size > 1) {
+                throw DriveWritePreconditionConflictException(
+                    "Drive workspace contains duplicate managed path: $path",
+                )
+            }
+            if (matches.isNotEmpty()) {
+                throw DriveWritePreconditionConflictException(
+                    "Drive create-only path is already occupied: $path",
+                )
+            }
+            val generatedId = generateFileId(token)
+            DriveResumableOperationIdentity(
+                accountId = accountId,
+                operationId = operationId,
+                path = path,
+                fileId = generatedId,
+                sha256 = sha256(content),
+                byteSize = content.size.toLong(),
+                mimeType = mimeType,
+                creationFingerprint = creationFingerprint,
+            )
+        }
+        if (existingRecord == null && recoverableReservation != null) {
+            resumableOperations.begin(identity)
+        }
+
+        val currentMatches = findChildren(token, parentId, name)
+        if (currentMatches.size > 1) {
+            throw DriveWritePreconditionConflictException(
+                "Drive workspace contains duplicate managed path: $path",
+            )
+        }
+        currentMatches.singleOrNull()?.let { occupant ->
+            val reconciled = reconcileCreatedWrite(
+                token = token,
+                parentId = parentId,
+                path = path,
+                name = name,
+                mimeType = mimeType,
+                content = content,
+                expectedAppProperties = intendedAppProperties,
+                expectedId = identity.fileId,
+                requireExistingMimeType = null,
+            ) ?: throw DriveWritePreconditionConflictException(
+                "Drive create-only path is already occupied by different content: $path",
+            )
+            releaseCreateReservation(token, parentId, identity)
+            return completeResumableOperation(identity, reconciled)
+        }
+
+        acquireCreateReservation(token, parentId, identity)
+        resumableOperations.begin(identity)
+        val reservedPathMatches = findChildren(token, parentId, name)
+        if (reservedPathMatches.isNotEmpty()) {
+            releaseCreateReservation(token, parentId, identity)
+            throw DriveWritePreconditionConflictException(
+                "Drive create-only path became occupied before upload: $path",
+            )
+        }
+
+        val generatedTarget = try {
+            getMetadata(token, identity.fileId)
+        } catch (error: DriveHttpException) {
+            if (error.statusCode == 404) null else throw error
+        }
+        if (generatedTarget != null) {
+            throw DriveWritePreconditionConflictException(
+                "Drive generated file id is unexpectedly occupied: $path",
+            )
+        }
+
+        val metadata = buildJsonObject {
+            put("id", identity.fileId)
+            put("name", name)
+            put("mimeType", mimeType)
+            put("parents", buildJsonArray { add(JsonPrimitive(parentId)) })
+            put("appProperties", buildJsonObject {
+                intendedAppProperties.forEach { (key, value) -> put(key, value) }
+            })
+        }.toString()
+        var transferStarted = false
+        try {
+            val initiation = request(
+                token = token,
+                method = "POST",
+                url = uploadUrl("files", mapOf("uploadType" to "resumable", "fields" to FILE_FIELDS)),
+                headers = mapOf(
+                    "Content-Type" to "application/json; charset=UTF-8",
+                    "X-Upload-Content-Type" to mimeType,
+                    "X-Upload-Content-Length" to content.size.toString(),
+                ),
+                body = metadata.toByteArray(StandardCharsets.UTF_8),
+                mapPreconditionConflict = true,
+            )
+            val sessionUrl = initiation.header("Location")
+                ?.trim()
+                ?.takeIf(String::isNotBlank)
+                ?: throw DriveProtocolException("Drive resumable creation omitted its session URL: $path")
+            transferStarted = true
+            val completion = resumableUploader.upload(token, sessionUrl, content, mimeType)
+            val mutation = if (completion.body.isEmpty()) {
+                getMetadata(token, identity.fileId)
+            } else {
+                completion.toDriveItem("Drive resumable create upload")
+            }
+            val verified = verifyCreatedWrite(
+                token = token,
+                parentId = parentId,
+                path = path,
+                name = name,
+                mimeType = mimeType,
+                content = content,
+                expectedAppProperties = intendedAppProperties,
+                mutation = mutation,
+                requireExistingMimeType = null,
+            )
+            releaseCreateReservation(token, parentId, identity)
+            return completeResumableOperation(identity, verified)
+        } catch (error: CancellationException) {
+            if (transferStarted) reconcileResumableCreateAfterMutation(
+                token, parentId, path, name, mimeType, content, intendedAppProperties, identity,
+            )?.let { reconciled ->
+                runCatching { releaseCreateReservation(token, parentId, identity) }
+                    .onFailure(error::addSuppressed)
+                runCatching { completeResumableOperation(identity, reconciled) }.onFailure(error::addSuppressed)
+                error.addSuppressed(DriveWriteReconciledAfterCancellationException(reconciled))
+            } ?: runCatching { markResumableAmbiguous(identity) }.onFailure(error::addSuppressed)
+            throw error
+        } catch (error: Throwable) {
+            val reconciled = reconcileResumableCreateAfterMutation(
+                token, parentId, path, name, mimeType, content, intendedAppProperties, identity,
+            )
+            if (reconciled != null) {
+                releaseCreateReservation(token, parentId, identity)
+                return completeResumableOperation(identity, reconciled)
+            }
+            if (transferStarted) {
+                runCatching { markResumableAmbiguous(identity) }.onFailure(error::addSuppressed)
+            }
+            if (error is DriveWritePreconditionConflictException) throw error
+            throw DriveWriteAmbiguousCommitException(
+                "Drive resumable creation may have committed but could not be reconciled: $path",
+                error,
+            )
+        }
+    }
+
+    private suspend fun acquireCreateReservation(
+        token: String,
+        parentId: String,
+        identity: DriveResumableOperationIdentity,
+    ) {
+        val target = identity.target as? DriveResumableOperationTarget.New
+            ?: throw DriveProtocolException("Drive create reservation requires a new-file target.")
+        val (folder, response) = getMetadataResponse(token, parentId)
+        if (folder.mimeType != FOLDER_MIME_TYPE || folder.trashed) {
+            throw DriveProtocolException("Drive create reservation parent is not an active folder.")
+        }
+        val reservationKey = createReservationKey(identity.path)
+        val reservationValue = createReservationValue(target)
+        val existingReservation = folder.appProperties[reservationKey]
+        if (existingReservation != null) {
+            if (existingReservation == reservationValue) return
+            throw DriveWritePreconditionConflictException(
+                "Drive path already has another active create reservation: ${identity.path}",
+            )
+        }
+        val etag = response.header("ETag")?.trim()?.takeIf(String::isNotBlank)
+            ?: throw DriveProtocolException("Drive folder metadata omitted its reservation ETag.")
+        val reservedProperties = folder.appProperties + (reservationKey to reservationValue)
+        request(
+            token = token,
+            method = "PATCH",
+            url = apiUrl("files/${encodePathSegment(parentId)}", mapOf("fields" to FILE_FIELDS)),
+            headers = mapOf(
+                "Content-Type" to "application/json; charset=UTF-8",
+                "If-Match" to etag,
+            ),
+            body = buildJsonObject {
+                put("appProperties", buildJsonObject {
+                    reservedProperties.forEach { (key, value) -> put(key, value) }
+                })
+            }.toString().toByteArray(StandardCharsets.UTF_8),
+            mapPreconditionConflict = true,
+        )
+        val verified = getMetadata(token, parentId)
+        if (
+            verified.appProperties[reservationKey] != reservationValue
+        ) {
+            throw DriveWritePreconditionConflictException(
+                "Drive create reservation was not preserved: ${identity.path}",
+            )
+        }
+    }
+
+    private suspend fun releaseCreateReservation(
+        token: String,
+        parentId: String,
+        identity: DriveResumableOperationIdentity,
+    ) {
+        val target = identity.target as? DriveResumableOperationTarget.New ?: return
+        val (folder, response) = getMetadataResponse(token, parentId)
+        val reservationKey = createReservationKey(identity.path)
+        val reservationValue = createReservationValue(target)
+        val existingReservation = folder.appProperties[reservationKey] ?: return
+        if (existingReservation != reservationValue) {
+            throw DriveWritePreconditionConflictException(
+                "Drive create reservation changed before release: ${identity.path}",
+            )
+        }
+        val etag = response.header("ETag")?.trim()?.takeIf(String::isNotBlank)
+            ?: throw DriveProtocolException("Drive folder metadata omitted its release ETag.")
+        request(
+            token = token,
+            method = "PATCH",
+            url = apiUrl("files/${encodePathSegment(parentId)}", mapOf("fields" to FILE_FIELDS)),
+            headers = mapOf(
+                "Content-Type" to "application/json; charset=UTF-8",
+                "If-Match" to etag,
+            ),
+            body = buildJsonObject {
+                put("appProperties", buildJsonObject {
+                    folder.appProperties
+                        .filterKeys { it != reservationKey }
+                        .forEach { (key, value) -> put(key, value) }
+                    put(reservationKey, JsonNull)
+                })
+            }.toString().toByteArray(StandardCharsets.UTF_8),
+            mapPreconditionConflict = true,
+        )
+        val verified = getMetadata(token, parentId)
+        if (verified.appProperties.containsKey(reservationKey)) {
+            throw DriveProtocolException("Drive create reservation remained after release: ${identity.path}")
+        }
+    }
+
+    private suspend fun readCreateReservation(
+        token: String,
+        parentId: String,
+        path: String,
+    ): DriveResumableOperationTarget.New? {
+        val folder = getMetadata(token, parentId)
+        val raw = folder.appProperties[createReservationKey(path)] ?: return null
+        val separator = raw.length - SHA256_HEX_LENGTH - 1
+        if (separator <= 0 || raw.getOrNull(separator) != ':') {
+            throw DriveProtocolException("Drive create reservation is malformed: $path")
+        }
+        return DriveResumableOperationTarget.New(
+            fileId = raw.substring(0, separator),
+            creationFingerprint = raw.substring(separator + 1),
+        )
+    }
+
+    private fun createReservationKey(path: String): String =
+        "$CREATE_RESERVATION_PROPERTY_PREFIX${sha256(path.toByteArray(StandardCharsets.UTF_8)).take(32)}"
+
+    private fun createReservationValue(target: DriveResumableOperationTarget.New): String =
+        "${target.fileId}:${target.creationFingerprint}"
+
+    private suspend fun reconcileResumableCreateAfterMutation(
+        token: String,
+        parentId: String,
+        path: String,
+        name: String,
+        mimeType: String,
+        content: ByteArray,
+        expectedAppProperties: Map<String, String>,
+        identity: DriveResumableOperationIdentity,
+    ): DriveFileRef? = withContext(NonCancellable) {
+        runCatching {
+            reconcileCreatedWrite(
+                token, parentId, path, name, mimeType, content, expectedAppProperties,
+                identity.fileId, requireExistingMimeType = null,
+            )
+        }.getOrNull()
+    }
+
+    private suspend fun generateFileId(token: String): String {
+        val response = request(
+            token = token,
+            method = "GET",
+            url = apiUrl("files/generateIds", mapOf("count" to "1", "space" to "drive")),
+        )
+        val ids = try {
+            JSON.parseToJsonElement(response.body.toString(StandardCharsets.UTF_8))
+                .jsonObject["ids"] as? JsonArray
+        } catch (error: Exception) {
+            throw DriveProtocolException("Drive generated-id response is invalid.", error)
+        }
+        return ids?.singleOrNull()?.jsonPrimitive?.contentOrNull?.takeIf(String::isNotBlank)
+            ?: throw DriveProtocolException("Drive generated-id response omitted exactly one id.")
     }
 
     private suspend fun verifyCreatedWrite(
@@ -1506,7 +1939,10 @@ internal class GoogleDriveWriteRepository(
         const val DEFAULT_MAX_BLOB_BYTES = 256 * 1024 * 1024
         const val CONDITIONAL_RESUMABLE_MIN_BLOB_BYTES = 5 * 1024 * 1024
         const val CREATE_FINGERPRINT_PROPERTY = "easylabCreateFingerprint"
+        const val CREATE_RESERVATION_PROPERTY_PREFIX = "easylabCreateReservation_"
+        const val SHA256_HEX_LENGTH = 64
         const val DEFAULT_RESUMABLE_CHUNK_BYTES = 8 * 1024 * 1024
+        const val MAX_RESUMABLE_OPERATION_ID_LENGTH = 256
         const val REMOTE_HASH_CHUNK_BYTES = 4L * 1024 * 1024
         const val MAX_MANAGED_PATH_LENGTH = 1024
         const val MAX_PATH_SEGMENT_LENGTH = 255

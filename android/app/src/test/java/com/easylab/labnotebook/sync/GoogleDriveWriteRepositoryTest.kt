@@ -622,6 +622,245 @@ class GoogleDriveWriteRepositoryTest {
     }
 
     @Test
+    fun resumableCreateUsesOneGeneratedIdAndReconcilesExactRetry() = runTest {
+        val fixture = Fixture()
+        val bytes = ByteArray(5 * 1024 * 1024 + 1) { (it % 227).toByte() }
+        fixture.addEmptyAttachmentTree()
+
+        val first = fixture.repository.putBlobConditionalResumableCreate(
+            ACCOUNT_A,
+            LARGE_BLOB_PATH,
+            bytes,
+            "application/octet-stream",
+            sha256(bytes),
+            DriveWritePrecondition.MustNotExist,
+            "create-large-1",
+        ).getOrThrow()
+        val retry = fixture.repository.putBlobConditionalResumableCreate(
+            ACCOUNT_A,
+            LARGE_BLOB_PATH,
+            bytes,
+            "application/octet-stream",
+            sha256(bytes),
+            DriveWritePrecondition.MustNotExist,
+            "create-large-1",
+        ).getOrThrow()
+
+        assertEquals(first, retry)
+        assertTrue(first.id.startsWith("pre-generated-"))
+        assertEquals(1, fixture.transport.requests.count { it.url.contains("files/generateIds") })
+        assertEquals(
+            1,
+            fixture.transport.requests.count {
+                it.method == "POST" && queryParameter(it.url, "uploadType") == "resumable"
+            },
+        )
+        assertTrue(fixture.transport.lastUploadedContent?.contentEquals(bytes) == true)
+        assertTrue(
+            fixture.operationStore.record(ACCOUNT_A, "create-large-1")?.identity?.target
+                is DriveResumableOperationTarget.New,
+        )
+    }
+
+    @Test
+    fun resumableCreateRejectsChangedIdentityAndGeneratedIdCollisionWithoutUpload() = runTest {
+        val fixture = Fixture()
+        val bytes = ByteArray(5 * 1024 * 1024 + 1) { (it % 223).toByte() }
+        fixture.addEmptyAttachmentTree()
+
+        fixture.repository.putBlobConditionalResumableCreate(
+            ACCOUNT_A, LARGE_BLOB_PATH, bytes, "application/octet-stream", sha256(bytes),
+            DriveWritePrecondition.MustNotExist, "create-large-immutable",
+        ).getOrThrow()
+        val resumableCreatesBeforeStaleIdentity = fixture.transport.requests.count {
+            it.method == "POST" && queryParameter(it.url, "uploadType") == "resumable"
+        }
+        val changed = bytes.copyOf().also { it[0] = (it[0] + 1).toByte() }
+        val stale = fixture.repository.putBlobConditionalResumableCreate(
+            ACCOUNT_A, LARGE_BLOB_PATH, changed, "application/octet-stream", sha256(changed),
+            DriveWritePrecondition.MustNotExist, "create-large-immutable",
+        ).exceptionOrNull()
+
+        assertTrue(stale is DriveResumableOperationIdentityConflictException)
+        assertEquals(
+            resumableCreatesBeforeStaleIdentity,
+            fixture.transport.requests.count {
+                it.method == "POST" && queryParameter(it.url, "uploadType") == "resumable"
+            },
+        )
+
+        val collision = Fixture().also {
+            it.addEmptyAttachmentTree()
+            it.transport.preGeneratedIdCollision = true
+        }
+        val collisionError = collision.repository.putBlobConditionalResumableCreate(
+            ACCOUNT_A, LARGE_BLOB_PATH, bytes, "application/octet-stream", sha256(bytes),
+            DriveWritePrecondition.MustNotExist, "create-large-collision",
+        ).exceptionOrNull()
+
+        assertTrue(collisionError is DriveWritePreconditionConflictException)
+        assertEquals(
+            0,
+            collision.transport.requests.count {
+                it.method == "POST" && queryParameter(it.url, "uploadType") == "resumable"
+            },
+        )
+    }
+
+    @Test
+    fun resumableCreateAmbiguityRestartsOnlyWithItsPersistedGeneratedId() = runTest {
+        val fixture = Fixture()
+        val bytes = ByteArray(5 * 1024 * 1024 + 1) { (it % 211).toByte() }
+        fixture.addEmptyAttachmentTree()
+        fixture.transport.failFirstResumableChunkBeforeAccept = true
+        fixture.transport.failResumableStatusQueries = true
+
+        val interrupted = fixture.repository.putBlobConditionalResumableCreate(
+            ACCOUNT_A, LARGE_BLOB_PATH, bytes, "application/octet-stream", sha256(bytes),
+            DriveWritePrecondition.MustNotExist, "create-large-retry",
+        ).exceptionOrNull()
+        fixture.transport.failResumableStatusQueries = false
+        val retry = fixture.repository.putBlobConditionalResumableCreate(
+            ACCOUNT_A, LARGE_BLOB_PATH, bytes, "application/octet-stream", sha256(bytes),
+            DriveWritePrecondition.MustNotExist, "create-large-retry",
+        ).getOrThrow()
+
+        assertTrue(interrupted is DriveWriteAmbiguousCommitException)
+        assertTrue(retry.id.startsWith("pre-generated-"))
+        assertEquals(1, fixture.transport.requests.count { it.url.contains("files/generateIds") })
+        assertEquals(
+            2,
+            fixture.transport.requests.count {
+                it.method == "POST" && queryParameter(it.url, "uploadType") == "resumable"
+            },
+        )
+    }
+
+    @Test
+    fun resumableCreateCancellationAfterCommitPropagatesAndRecordsCompletion() = runTest {
+        val fixture = Fixture()
+        val bytes = ByteArray(5 * 1024 * 1024 + 1) { (it % 199).toByte() }
+        fixture.addEmptyAttachmentTree()
+        fixture.transport.cancelFinalResumableResponseAfterCommit = true
+
+        val cancellation = runCatching {
+            fixture.repository.putBlobConditionalResumableCreate(
+                ACCOUNT_A, LARGE_BLOB_PATH, bytes, "application/octet-stream", sha256(bytes),
+                DriveWritePrecondition.MustNotExist, "create-large-cancel",
+            )
+        }.exceptionOrNull()
+
+        assertTrue(cancellation is CancellationException)
+        assertTrue(
+            fixture.operationStore.record(ACCOUNT_A, "create-large-cancel")?.state ==
+                DriveResumableOperationState.Completed,
+        )
+    }
+
+    @Test
+    fun abandonedPathReservationIsAdoptedByIndependentStoreWithoutNewId() = runTest {
+        val fixture = Fixture()
+        val bytes = ByteArray(5 * 1024 * 1024 + 1) { (it % 197).toByte() }
+        fixture.addEmptyAttachmentTree()
+        fixture.transport.failFirstResumableChunkBeforeAccept = true
+        fixture.transport.failResumableStatusQueries = true
+
+        val first = fixture.repository.putBlobConditionalResumableCreate(
+            ACCOUNT_A, LARGE_BLOB_PATH, bytes, "application/octet-stream", sha256(bytes),
+            DriveWritePrecondition.MustNotExist, "create-reservation-owner",
+        ).exceptionOrNull()
+        fixture.transport.failResumableStatusQueries = false
+        val independentStore = DriveResumableOperationStore(FakeResumableOperationPersistence())
+        val recovered = fixture.newRepository(independentStore).putBlobConditionalResumableCreate(
+            ACCOUNT_A, LARGE_BLOB_PATH, bytes, "application/octet-stream", sha256(bytes),
+            DriveWritePrecondition.MustNotExist, "create-reservation-recovery",
+        ).getOrThrow()
+
+        assertTrue(first is DriveWriteAmbiguousCommitException)
+        assertTrue(recovered.id.startsWith("pre-generated-"))
+        assertEquals(1, fixture.transport.requests.count { it.url.contains("files/generateIds") })
+        assertTrue(
+            independentStore.record(ACCOUNT_A, "create-reservation-recovery")?.identity?.fileId == recovered.id,
+        )
+    }
+
+    @Test
+    fun abandonedReservationDoesNotBlockDifferentPathInSameFolder() = runTest {
+        val fixture = Fixture()
+        val bytes = ByteArray(5 * 1024 * 1024 + 1) { (it % 193).toByte() }
+        fixture.addEmptyAttachmentTree()
+        fixture.transport.failFirstResumableChunkBeforeAccept = true
+        fixture.transport.failResumableStatusQueries = true
+
+        fixture.repository.putBlobConditionalResumableCreate(
+            ACCOUNT_A, LARGE_BLOB_PATH, bytes, "application/octet-stream", sha256(bytes),
+            DriveWritePrecondition.MustNotExist, "create-path-one",
+        ).exceptionOrNull()
+        fixture.transport.failResumableStatusQueries = false
+        val otherPath = "attachments/2026-07-16/other-large.bin"
+        val created = fixture.newRepository().putBlobConditionalResumableCreate(
+            ACCOUNT_A, otherPath, bytes, "application/octet-stream", sha256(bytes),
+            DriveWritePrecondition.MustNotExist, "create-path-two",
+        ).getOrThrow()
+
+        assertEquals(otherPath, created.path)
+        assertEquals(2, fixture.transport.requests.count { it.url.contains("files/generateIds") })
+    }
+
+    @Test
+    fun independentStoreCannotAdoptReservationForDifferentContent() = runTest {
+        val fixture = Fixture()
+        val bytes = ByteArray(5 * 1024 * 1024 + 1) { (it % 191).toByte() }
+        fixture.addEmptyAttachmentTree()
+        fixture.transport.failFirstResumableChunkBeforeAccept = true
+        fixture.transport.failResumableStatusQueries = true
+
+        fixture.repository.putBlobConditionalResumableCreate(
+            ACCOUNT_A, LARGE_BLOB_PATH, bytes, "application/octet-stream", sha256(bytes),
+            DriveWritePrecondition.MustNotExist, "create-original-content",
+        ).exceptionOrNull()
+        val changed = bytes.copyOf().also { it[0] = (it[0] + 1).toByte() }
+        val independentStore = DriveResumableOperationStore(FakeResumableOperationPersistence())
+        val conflict = fixture.newRepository(independentStore).putBlobConditionalResumableCreate(
+            ACCOUNT_A, LARGE_BLOB_PATH, changed, "application/octet-stream", sha256(changed),
+            DriveWritePrecondition.MustNotExist, "create-different-content",
+        ).exceptionOrNull()
+
+        assertTrue(conflict is DriveWritePreconditionConflictException)
+        assertEquals(1, fixture.transport.requests.count { it.url.contains("files/generateIds") })
+    }
+
+    @Test
+    fun independentStoreAdoptsCommittedFileWhenOwnerCouldNotReleaseReservation() = runTest {
+        val fixture = Fixture()
+        val bytes = ByteArray(5 * 1024 * 1024 + 1) { (it % 181).toByte() }
+        fixture.addEmptyAttachmentTree()
+        fixture.transport.cancelFinalResumableResponseAfterCommit = true
+        fixture.transport.failReservationRelease = true
+
+        val ownerCancellation = runCatching {
+            fixture.repository.putBlobConditionalResumableCreate(
+                ACCOUNT_A, LARGE_BLOB_PATH, bytes, "application/octet-stream", sha256(bytes),
+                DriveWritePrecondition.MustNotExist, "create-owner-committed",
+            )
+        }.exceptionOrNull()
+        fixture.transport.failReservationRelease = false
+        val independentStore = DriveResumableOperationStore(FakeResumableOperationPersistence())
+        val recovered = fixture.newRepository(independentStore).putBlobConditionalResumableCreate(
+            ACCOUNT_A, LARGE_BLOB_PATH, bytes, "application/octet-stream", sha256(bytes),
+            DriveWritePrecondition.MustNotExist, "create-adopt-committed",
+        ).getOrThrow()
+
+        assertTrue(ownerCancellation is CancellationException)
+        assertEquals(LARGE_BLOB_PATH, recovered.path)
+        assertEquals(
+            DriveResumableOperationState.Completed,
+            independentStore.record(ACCOUNT_A, "create-adopt-committed")?.state,
+        )
+        assertEquals(1, fixture.transport.requests.count { it.url.contains("files/generateIds") })
+    }
+
+    @Test
     fun resumableBlobCancellationAfterCommitPropagatesAndPersistsCompletion() = runTest {
         val fixture = Fixture()
         val bytes = ByteArray(5 * 1024 * 1024 + 1) { (it % 241).toByte() }
@@ -711,9 +950,13 @@ class GoogleDriveWriteRepositoryTest {
         val operationPersistence = FakeResumableOperationPersistence()
         val operationStore = DriveResumableOperationStore(operationPersistence)
         val transport = FakeDriveWriteTransport()
-        val repository = GoogleDriveWriteRepository(
+        val repository = newRepository()
+
+        fun newRepository(
+            resumableStore: DriveResumableOperationStore = operationStore,
+        ) = GoogleDriveWriteRepository(
             authRepository = auth,
-            resumableOperations = operationStore,
+            resumableOperations = resumableStore,
             rootFolderIds = store,
             transport = transport,
             resumableChunkBytes = 256 * 1024,
@@ -745,6 +988,12 @@ class GoogleDriveWriteRepositoryTest {
             addExistingRoot()
             transport.add(FakeNode.folder("entries", "entries", parentId = "root-a"))
             transport.add(FakeNode.folder("day", "2026-07-16", parentId = "entries"))
+        }
+
+        fun addEmptyAttachmentTree() {
+            addExistingRoot()
+            transport.add(FakeNode.folder("attachments", "attachments", parentId = "root-a"))
+            transport.add(FakeNode.folder("attachment-day", "2026-07-16", parentId = "attachments"))
         }
 
         fun addExistingRoot() {
@@ -860,6 +1109,8 @@ class GoogleDriveWriteRepositoryTest {
         var failFirstResumableChunkBeforeAccept = false
         var failResumableStatusQueries = false
         var onResumableInitiated: (() -> Unit)? = null
+        var preGeneratedIdCollision = false
+        var failReservationRelease = false
         private val nodes = linkedMapOf<String, FakeNode>()
         private var nextId = 1
         private var resumableSession: FakeResumableSession? = null
@@ -874,9 +1125,13 @@ class GoogleDriveWriteRepositoryTest {
             forcedStatus?.let { return DriveHttpResponse(statusCode = it) }
             val uri = URI(request.url)
             return when {
+                request.method == "GET" && uri.path.endsWith("/files/generateIds") -> generateIds()
                 request.method == "GET" && uri.path.contains("/files/") -> getById(request, uri)
                 request.method == "GET" -> list(request)
                 request.method == "POST" && !uri.path.contains("/upload/") -> createFolder(request)
+                request.method == "POST" &&
+                    queryParameter(request.url, "uploadType") == "resumable" -> initiateResumable(request, uri)
+                request.method == "PATCH" && !uri.path.contains("/upload/") -> patchMetadata(request, uri)
                 request.method == "PATCH" &&
                     queryParameter(request.url, "uploadType") == "resumable" -> initiateResumable(request, uri)
                 request.method == "PUT" && uri.path.contains("/upload/drive/v3/files/") -> resumeUpload(request)
@@ -884,6 +1139,52 @@ class GoogleDriveWriteRepositoryTest {
                     multipartUpload(request, uri)
                 else -> error("Unexpected request: ${request.method} ${request.url}")
             }
+        }
+
+        private fun patchMetadata(request: DriveHttpRequest, uri: URI): DriveHttpResponse {
+            val id = uri.path.substringAfterLast("/files/")
+            val node = nodes[id] ?: return DriveHttpResponse(404)
+            if (request.headers["If-Match"] != node.etag) return DriveHttpResponse(412)
+            val metadata = Json.parseToJsonElement(
+                checkNotNull(request.body).toString(StandardCharsets.UTF_8),
+            ).jsonObject
+            if (
+                failReservationRelease &&
+                    (metadata["appProperties"] as? JsonObject)?.values?.any {
+                        it is kotlinx.serialization.json.JsonNull
+                    } == true
+            ) {
+                return DriveHttpResponse(503)
+            }
+            (metadata["appProperties"] as? JsonObject)?.forEach { (key, value) ->
+                if (value is kotlinx.serialization.json.JsonNull) {
+                    node.appProperties = node.appProperties - key
+                } else {
+                    node.appProperties = node.appProperties + (key to value.jsonPrimitive.content)
+                }
+            }
+            node.version += 1
+            node.etag = "\"etag-${node.id}-v${node.version}\""
+            return DriveHttpResponse(200, body = nodeJson(node).toByteArray())
+        }
+
+        private fun generateIds(): DriveHttpResponse {
+            val id = "pre-generated-${nextId++}"
+            if (preGeneratedIdCollision) {
+                nodes[id] = FakeNode.file(
+                    id = id,
+                    name = "collision.bin",
+                    parentId = "root-a",
+                    mimeType = "application/octet-stream",
+                    body = byteArrayOf(1),
+                )
+            }
+            return DriveHttpResponse(
+                200,
+                body = buildJsonObject {
+                    put("ids", buildJsonArray { add(JsonPrimitive(id)) })
+                }.toString().toByteArray(),
+            )
         }
 
         private fun getById(request: DriveHttpRequest, uri: URI): DriveHttpResponse {
@@ -1009,19 +1310,29 @@ class GoogleDriveWriteRepositoryTest {
             request: DriveHttpRequest,
             uri: URI,
         ): DriveHttpResponse {
-            val id = uri.path.substringAfterLast("/files/")
-            val node = nodes.getValue(id)
-            rejectPatchStatus?.let { return DriveHttpResponse(it) }
-            if (request.headers["If-Match"] != node.etag) return DriveHttpResponse(412)
             val metadata = Json.parseToJsonElement(
                 request.body!!.toString(StandardCharsets.UTF_8),
             ).jsonObject
+            val create = request.method == "POST"
+            val id = if (create) {
+                metadata["id"]?.jsonPrimitive?.content ?: error("Missing generated create id")
+            } else {
+                uri.path.substringAfterLast("/files/")
+            }
+            if (!create) {
+                val node = nodes.getValue(id)
+                rejectPatchStatus?.let { return DriveHttpResponse(it) }
+                if (request.headers["If-Match"] != node.etag) return DriveHttpResponse(412)
+            } else if (nodes.containsKey(id)) {
+                return DriveHttpResponse(409)
+            }
             val totalBytes = request.headers.getValue("X-Upload-Content-Length").toInt()
             resumableSession = FakeResumableSession(
                 fileId = id,
                 metadata = metadata,
                 totalBytes = totalBytes,
                 bytes = ByteArray(totalBytes),
+                create = create,
             )
             onResumableInitiated?.invoke()
             return DriveHttpResponse(
@@ -1038,9 +1349,9 @@ class GoogleDriveWriteRepositoryTest {
             val contentRange = request.headers.getValue("Content-Range")
             if (contentRange.startsWith("bytes */")) {
                 if (failResumableStatusQueries) return DriveHttpResponse(503)
-                val node = nodes.getValue(session.fileId)
+                val node = nodes[session.fileId]
                 if (session.committed) {
-                    return DriveHttpResponse(200, body = nodeJson(node).toByteArray())
+                    return DriveHttpResponse(200, body = nodeJson(checkNotNull(node)).toByteArray())
                 }
                 return DriveHttpResponse(
                     308,
@@ -1075,7 +1386,17 @@ class GoogleDriveWriteRepositoryTest {
                     headers = mapOf("Range" to "bytes=0-${session.receivedBytes - 1}"),
                 )
             }
-            val node = nodes.getValue(session.fileId)
+            val node = nodes[session.fileId] ?: if (session.create) {
+                FakeNode.file(
+                    id = session.fileId,
+                    name = session.metadata.getValue("name").jsonPrimitive.content,
+                    parentId = session.metadata.getValue("parents").jsonArray.single().jsonPrimitive.content,
+                    mimeType = session.metadata.getValue("mimeType").jsonPrimitive.content,
+                    body = byteArrayOf(),
+                ).also { created -> nodes[created.id] = created }
+            } else {
+                error("Missing resumable update target")
+            }
             node.body = session.bytes.copyOf()
             node.version += 1
             node.etag = "\"etag-${node.id}-v${node.version}\""
@@ -1096,6 +1417,7 @@ class GoogleDriveWriteRepositoryTest {
             val metadata: JsonObject,
             val totalBytes: Int,
             val bytes: ByteArray,
+            val create: Boolean,
             var receivedBytes: Int = 0,
             var committed: Boolean = false,
         )

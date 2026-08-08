@@ -288,24 +288,26 @@ class DriveV1WriteTransactionTest {
     }
 
     @Test
-    fun keepsLargeCreateOnlyBlobBlockedUntilCreateProtocolExists() {
+    fun dispatchesLargeCreateOnlyBlobToGeneratedIdProtocol() = runTest {
         val bytes = ByteArray(MULTIPART_LIMIT_BYTES)
-        val error = runCatching {
-            DriveV1WriteTransaction(
-                accountId = ACCOUNT,
-                prerequisites = listOf(
-                    blob(
-                        BLOB_PATH,
-                        bytes,
-                        precondition = DriveWritePrecondition.MustNotExist,
-                        resumableOperationId = "new-attachment-upload-1",
-                    ),
+        val writer = RecordingWriter()
+        val transaction = DriveV1WriteTransaction(
+            accountId = ACCOUNT,
+            prerequisites = listOf(
+                blob(
+                    BLOB_PATH,
+                    bytes,
+                    precondition = DriveWritePrecondition.MustNotExist,
+                    resumableOperationId = "new-attachment-upload-1",
                 ),
-                manifest = json(DriveV1Paths.manifest),
-            )
-        }.exceptionOrNull()
+            ),
+            manifest = json(DriveV1Paths.manifest),
+        )
 
-        assertTrue(error is IllegalArgumentException)
+        DriveV1WriteTransactionExecutor(writer).execute(transaction).getOrThrow()
+
+        assertEquals(listOf(BLOB_PATH), writer.resumableCreatePaths)
+        assertEquals(DriveV1Paths.manifest, writer.paths.last())
     }
 
     @Test
@@ -381,6 +383,7 @@ class DriveV1WriteTransactionTest {
         val resumablePaths = mutableListOf<String>()
         val resumableOperationIds = mutableListOf<String>()
         val resumableBytes = mutableListOf<ByteArray>()
+        val resumableCreatePaths = mutableListOf<String>()
 
         override suspend fun putJsonConditional(
             accountId: AccountId,
@@ -413,6 +416,18 @@ class DriveV1WriteTransactionTest {
             resumableBytes += bytes.copyOf()
             return result
         }
+
+        override suspend fun putBlobConditionalResumableCreate(
+            accountId: AccountId,
+            path: String,
+            bytes: ByteArray,
+            mimeType: String,
+            sha256: String,
+            precondition: DriveWritePrecondition,
+            operationId: String,
+        ): Result<DriveFileRef> = putBlobConditionalResumable(
+            accountId, path, bytes, mimeType, sha256, precondition, operationId,
+        ).also { resumableCreatePaths += path }
 
         private fun record(
             accountId: AccountId,
