@@ -29,6 +29,23 @@ internal interface DriveConditionalWriteClient {
         sha256: String,
         precondition: DriveWritePrecondition,
     ): Result<DriveFileRef>
+
+    /**
+     * Resumes a guarded update to an existing attachment blob.
+     *
+     * This is intentionally an existing-file-only operation. Create-only
+     * resumable uploads need a persisted generated Drive file id and are kept
+     * out of this transaction boundary until that protocol is available.
+     */
+    suspend fun putBlobConditionalResumable(
+        accountId: AccountId,
+        path: String,
+        bytes: ByteArray,
+        mimeType: String,
+        sha256: String,
+        precondition: DriveWritePrecondition,
+        operationId: String,
+    ): Result<DriveFileRef>
 }
 
 internal sealed interface DriveV1TransactionWrite {
@@ -47,6 +64,7 @@ internal sealed interface DriveV1TransactionWrite {
         val mimeType: String,
         val sha256: String,
         override val precondition: DriveWritePrecondition,
+        val resumableOperationId: String? = null,
     ) : DriveV1TransactionWrite {
         override fun equals(other: Any?): Boolean =
             other is Blob &&
@@ -54,7 +72,8 @@ internal sealed interface DriveV1TransactionWrite {
                 bytes.contentEquals(other.bytes) &&
                 mimeType == other.mimeType &&
                 sha256 == other.sha256 &&
-                precondition == other.precondition
+                precondition == other.precondition &&
+                resumableOperationId == other.resumableOperationId
 
         override fun hashCode(): Int {
             var result = path.hashCode()
@@ -62,6 +81,7 @@ internal sealed interface DriveV1TransactionWrite {
             result = 31 * result + mimeType.hashCode()
             result = 31 * result + sha256.hashCode()
             result = 31 * result + precondition.hashCode()
+            result = 31 * result + (resumableOperationId?.hashCode() ?: 0)
             return result
         }
     }
@@ -110,14 +130,16 @@ internal data class DriveV1WriteTransaction(
                 require(write.path.startsWith("attachments/") && !write.path.endsWith(".json", ignoreCase = true)) {
                     "Drive v1 transaction blob path must be attachment content: ${write.path}"
                 }
-                require(write.bytes.size <= MAX_MULTIPART_BYTES) {
-                    "Drive v1 transaction blob requires resumable upload: ${write.path}"
-                }
-                require(
-                    write.precondition !is DriveWritePrecondition.MustNotExist ||
-                        write.bytes.size < MAX_MULTIPART_BYTES,
-                ) {
-                    "Drive v1 create-only blob requires a bounded multipart upload: ${write.path}"
+                val requiresResumable = write.bytes.size >= MAX_MULTIPART_BYTES
+                if (requiresResumable) {
+                    require(write.precondition is DriveWritePrecondition.MustMatch) {
+                        "Drive v1 create-only blob requires a bounded multipart upload: ${write.path}"
+                    }
+                    requireValidResumableOperationId(write.resumableOperationId, write.path)
+                } else {
+                    require(write.resumableOperationId == null) {
+                        "Drive v1 transaction multipart blob must not carry a resumable operation id: ${write.path}"
+                    }
                 }
                 val normalizedMimeType = write.mimeType.substringBefore(';').trim()
                 require(normalizedMimeType.isNotBlank() && '/' in normalizedMimeType) {
@@ -151,6 +173,17 @@ internal data class DriveV1WriteTransaction(
         }
         require(!requireJson || path.endsWith(".json", ignoreCase = true)) {
             "Drive v1 transaction JSON path must end in .json: $path"
+        }
+    }
+
+    private fun requireValidResumableOperationId(operationId: String?, path: String) {
+        require(
+            operationId != null &&
+                operationId.isNotBlank() &&
+                operationId.length <= MAX_RESUMABLE_OPERATION_ID_LENGTH &&
+                operationId.none(Char::isISOControl),
+        ) {
+            "Drive v1 resumable blob requires a valid persisted operation id: $path"
         }
     }
 
@@ -227,6 +260,7 @@ internal data class DriveV1WriteTransaction(
 
     private companion object {
         const val MAX_MULTIPART_BYTES = 5 * 1024 * 1024
+        const val MAX_RESUMABLE_OPERATION_ID_LENGTH = 256
         const val MAX_MANAGED_PATH_LENGTH = 1024
         const val MAX_PATH_SEGMENT_LENGTH = 255
         val SHA256_REGEX = Regex("^[0-9a-fA-F]{64}$")
@@ -356,13 +390,25 @@ internal class DriveV1WriteTransactionExecutor(
             json = write.json,
             precondition = write.precondition,
         )
-        is DriveV1TransactionWrite.Blob -> putBlobConditional(
-            accountId = accountId,
-            path = write.path,
-            bytes = write.bytes,
-            mimeType = write.mimeType,
-            sha256 = write.sha256,
-            precondition = write.precondition,
-        )
+        is DriveV1TransactionWrite.Blob -> if (write.resumableOperationId == null) {
+            putBlobConditional(
+                accountId = accountId,
+                path = write.path,
+                bytes = write.bytes,
+                mimeType = write.mimeType,
+                sha256 = write.sha256,
+                precondition = write.precondition,
+            )
+        } else {
+            putBlobConditionalResumable(
+                accountId = accountId,
+                path = write.path,
+                bytes = write.bytes,
+                mimeType = write.mimeType,
+                sha256 = write.sha256,
+                precondition = write.precondition,
+                operationId = write.resumableOperationId,
+            )
+        }
     }
 }

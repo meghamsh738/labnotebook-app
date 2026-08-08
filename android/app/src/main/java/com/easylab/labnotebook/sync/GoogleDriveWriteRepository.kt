@@ -300,12 +300,10 @@ internal class GoogleDriveWriteRepository(
     )
 
     /**
-     * Unwired capability for resumable updates to existing attachment blobs.
-     *
-     * The transaction executor intentionally remains multipart-only until
-     * manifest-last publication can persist and propagate this operation id.
+     * Guarded resumable update capability for the unwired transaction path.
+     * Production sync remains read-only; this does not change its injection.
      */
-    internal suspend fun putBlobConditionalResumable(
+    override suspend fun putBlobConditionalResumable(
         accountId: AccountId,
         path: String,
         bytes: ByteArray,

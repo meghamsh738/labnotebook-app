@@ -202,14 +202,185 @@ class DriveV1WriteTransactionTest {
         )
     }
 
+    @Test
+    fun dispatchesExistingFiveMiBBlobResumablyAndPublishesManifestAfterIt() = runTest {
+        val writer = RecordingWriter()
+        val largeBytes = ByteArray(MULTIPART_LIMIT_BYTES) { index -> (index % 251).toByte() }
+        val operationId = "existing-attachment-upload-1"
+        val transaction = transaction(
+            prerequisites = listOf(
+                json(TOMBSTONE_PATH),
+                blob(BLOB_PATH, largeBytes, resumableOperationId = operationId),
+                json(ENTRY_PATH),
+            ),
+        )
+
+        DriveV1WriteTransactionExecutor(writer).execute(transaction).getOrThrow()
+
+        assertEquals(
+            listOf(TOMBSTONE_PATH, BLOB_PATH, ENTRY_PATH, DriveV1Paths.manifest),
+            writer.paths,
+        )
+        assertEquals(listOf(BLOB_PATH), writer.resumablePaths)
+        assertEquals(listOf(operationId), writer.resumableOperationIds)
+        assertEquals(DriveV1Paths.manifest, writer.paths.last())
+    }
+
+    @Test
+    fun rejectsResumableBlobWithoutPersistedOperationIdBeforeWriting() {
+        val bytes = ByteArray(MULTIPART_LIMIT_BYTES)
+
+        val error = runCatching {
+            transaction(prerequisites = listOf(blob(BLOB_PATH, bytes)))
+        }.exceptionOrNull()
+
+        assertTrue(error is IllegalArgumentException)
+    }
+
+    @Test
+    fun rejectsOperationIdForBoundedMultipartBlob() {
+        val error = runCatching {
+            transaction(
+                prerequisites = listOf(
+                    blob(BLOB_PATH, "small".toByteArray(), resumableOperationId = "must-not-be-used"),
+                ),
+            )
+        }.exceptionOrNull()
+
+        assertTrue(error is IllegalArgumentException)
+    }
+
+    @Test
+    fun usesTheFiveMiBBoundaryWithoutAnUnguardedFallback() = runTest {
+        val bounded = transaction(
+            prerequisites = listOf(blob(BLOB_PATH, ByteArray(MULTIPART_LIMIT_BYTES - 1))),
+        )
+        val atBoundary = transaction(
+            prerequisites = listOf(
+                blob(
+                    BLOB_PATH,
+                    ByteArray(MULTIPART_LIMIT_BYTES),
+                    resumableOperationId = "boundary-at-five-mib",
+                ),
+            ),
+        )
+        val aboveBoundary = transaction(
+            prerequisites = listOf(
+                blob(
+                    BLOB_PATH,
+                    ByteArray(MULTIPART_LIMIT_BYTES + 1),
+                    resumableOperationId = "boundary-above-five-mib",
+                ),
+            ),
+        )
+
+        val boundedWriter = RecordingWriter()
+        val atBoundaryWriter = RecordingWriter()
+        val aboveBoundaryWriter = RecordingWriter()
+
+        DriveV1WriteTransactionExecutor(boundedWriter).execute(bounded).getOrThrow()
+        DriveV1WriteTransactionExecutor(atBoundaryWriter).execute(atBoundary).getOrThrow()
+        DriveV1WriteTransactionExecutor(aboveBoundaryWriter).execute(aboveBoundary).getOrThrow()
+
+        assertTrue(boundedWriter.resumablePaths.isEmpty())
+        assertEquals(listOf(BLOB_PATH), atBoundaryWriter.resumablePaths)
+        assertEquals(listOf(BLOB_PATH), aboveBoundaryWriter.resumablePaths)
+    }
+
+    @Test
+    fun keepsLargeCreateOnlyBlobBlockedUntilCreateProtocolExists() {
+        val bytes = ByteArray(MULTIPART_LIMIT_BYTES)
+        val error = runCatching {
+            DriveV1WriteTransaction(
+                accountId = ACCOUNT,
+                prerequisites = listOf(
+                    blob(
+                        BLOB_PATH,
+                        bytes,
+                        precondition = DriveWritePrecondition.MustNotExist,
+                        resumableOperationId = "new-attachment-upload-1",
+                    ),
+                ),
+                manifest = json(DriveV1Paths.manifest),
+            )
+        }.exceptionOrNull()
+
+        assertTrue(error is IllegalArgumentException)
+    }
+
+    @Test
+    fun resumableFailureSuppressesManifest() = runTest {
+        val writer = RecordingWriter(failAtPath = BLOB_PATH)
+        val bytes = ByteArray(MULTIPART_LIMIT_BYTES)
+        val result = DriveV1WriteTransactionExecutor(writer).execute(
+            transaction(
+                prerequisites = listOf(
+                    blob(BLOB_PATH, bytes, resumableOperationId = "existing-attachment-upload-2"),
+                    json(ENTRY_PATH),
+                ),
+            ),
+        )
+
+        val error = result.exceptionOrNull()
+        assertTrue(error is DriveV1WriteTransactionException)
+        assertEquals(BLOB_PATH, (error as DriveV1WriteTransactionException).failedPath)
+        assertEquals(listOf(BLOB_PATH), writer.paths)
+        assertFalse(DriveV1Paths.manifest in writer.paths)
+    }
+
+    @Test
+    fun resumableCancellationIsRethrownAndSuppressesManifest() = runTest {
+        val writer = RecordingWriter(cancelAtPath = BLOB_PATH)
+        var cancelled = false
+
+        try {
+            DriveV1WriteTransactionExecutor(writer).execute(
+                transaction(
+                    prerequisites = listOf(
+                        blob(
+                            BLOB_PATH,
+                            ByteArray(MULTIPART_LIMIT_BYTES),
+                            resumableOperationId = "existing-attachment-upload-4",
+                        ),
+                    ),
+                ),
+            )
+        } catch (_: CancellationException) {
+            cancelled = true
+        }
+
+        assertTrue(cancelled)
+        assertEquals(listOf(BLOB_PATH), writer.paths)
+        assertFalse(DriveV1Paths.manifest in writer.paths)
+    }
+
+    @Test
+    fun resumableBlobSnapshotCannotBeAlteredByCallerBytes() = runTest {
+        val bytes = ByteArray(MULTIPART_LIMIT_BYTES) { 1 }
+        val writer = RecordingWriter(onFirstRecord = { bytes[0] = 2 })
+        val transaction = transaction(
+            prerequisites = listOf(
+                blob(BLOB_PATH, bytes, resumableOperationId = "existing-attachment-upload-3"),
+            ),
+        )
+
+        DriveV1WriteTransactionExecutor(writer).execute(transaction).getOrThrow()
+
+        assertEquals(1, writer.resumableBytes.single().first().toInt())
+    }
+
     private class RecordingWriter(
         private val failAtPath: String? = null,
         private val wrongResultAtPath: String? = null,
         private val cancelAtPath: String? = null,
+        private val onFirstRecord: (() -> Unit)? = null,
     ) : DriveConditionalWriteClient {
         val paths = mutableListOf<String>()
         val accountIds = mutableListOf<AccountId>()
         val preconditions = mutableListOf<DriveWritePrecondition>()
+        val resumablePaths = mutableListOf<String>()
+        val resumableOperationIds = mutableListOf<String>()
+        val resumableBytes = mutableListOf<ByteArray>()
 
         override suspend fun putJsonConditional(
             accountId: AccountId,
@@ -227,11 +398,28 @@ class DriveV1WriteTransactionTest {
             precondition: DriveWritePrecondition,
         ): Result<DriveFileRef> = record(accountId, path, precondition)
 
+        override suspend fun putBlobConditionalResumable(
+            accountId: AccountId,
+            path: String,
+            bytes: ByteArray,
+            mimeType: String,
+            sha256: String,
+            precondition: DriveWritePrecondition,
+            operationId: String,
+        ): Result<DriveFileRef> {
+            val result = record(accountId, path, precondition)
+            resumablePaths += path
+            resumableOperationIds += operationId
+            resumableBytes += bytes.copyOf()
+            return result
+        }
+
         private fun record(
             accountId: AccountId,
             path: String,
             precondition: DriveWritePrecondition,
         ): Result<DriveFileRef> {
+            if (paths.isEmpty()) onFirstRecord?.invoke()
             paths += path
             accountIds += accountId
             preconditions += precondition
@@ -313,12 +501,18 @@ class DriveV1WriteTransactionTest {
         precondition = precondition,
     )
 
-    private fun blob(path: String, bytes: ByteArray) = DriveV1TransactionWrite.Blob(
+    private fun blob(
+        path: String,
+        bytes: ByteArray,
+        precondition: DriveWritePrecondition = match(path),
+        resumableOperationId: String? = null,
+    ) = DriveV1TransactionWrite.Blob(
         path = path,
         bytes = bytes,
         mimeType = "application/octet-stream",
         sha256 = sha256(bytes),
-        precondition = match(path),
+        precondition = precondition,
+        resumableOperationId = resumableOperationId,
     )
 
     private fun match(path: String) = DriveWritePrecondition.MustMatch(
@@ -335,5 +529,6 @@ class DriveV1WriteTransactionTest {
         const val ENTRY_PATH = "entries/2026-07-23-entry-a.json"
         const val BLOB_PATH = "attachments/2026-07-23/attachment-a.bin"
         const val TOMBSTONE_PATH = "tombstones/entry--entry-old.json"
+        const val MULTIPART_LIMIT_BYTES = 5 * 1024 * 1024
     }
 }
