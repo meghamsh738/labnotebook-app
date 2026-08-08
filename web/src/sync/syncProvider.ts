@@ -27,11 +27,17 @@ export type RemoteFileRef = {
   mimeType?: string
   size?: number
   updatedAt: string
+  version?: string
+  etag?: string
   appProperties?: Record<string, string>
 }
 
 export type RemoteJson<T> = RemoteFileRef & {
   value: T
+}
+
+export type RemoteJsonText = RemoteFileRef & {
+  text: string
 }
 
 export type BlobMetadata = {
@@ -43,6 +49,30 @@ export type BlobMetadata = {
 
 export type PutOptions = {
   appProperties?: Record<string, string>
+  precondition?: WritePrecondition
+}
+
+export type WritePrecondition = {
+  kind: 'must-match'
+  fileId: string
+  version: string
+  etag: string
+}
+
+export class WritePreconditionError extends Error {}
+
+export function assertWritePrecondition(
+  existing: RemoteFileRef | undefined,
+  precondition: WritePrecondition,
+) {
+  if (
+    !existing
+    || existing.id !== precondition.fileId
+    || existing.version !== precondition.version
+    || existing.etag !== precondition.etag
+  ) {
+    throw new WritePreconditionError('Remote file identity changed before the conditional write.')
+  }
 }
 
 export type ListOptions = {
@@ -55,12 +85,14 @@ export type ChangePage = {
 }
 
 export interface SyncProvider {
+  readonly supportsVersionedCas?: boolean
   signIn(): Promise<AuthSession>
   signOut(): Promise<void>
   ensureWorkspace(): Promise<WorkspaceRef>
   ensureDeviceRecord(device: DeviceProfile): Promise<void>
 
   getJson<T>(path: string): Promise<RemoteJson<T> | null>
+  getJsonText?(path: string): Promise<RemoteJsonText | null>
   putJson<T>(path: string, value: T, options?: PutOptions): Promise<RemoteFileRef>
 
   getBlob(path: string): Promise<Blob | null>
@@ -76,7 +108,7 @@ export interface SyncProvider {
 
 type RemoteJsonRecord = {
   file: RemoteFileRef
-  value: unknown
+  rawText: string
 }
 
 type RemoteBlobRecord = {
@@ -97,6 +129,7 @@ function clone<T>(value: T): T {
 }
 
 export class MockSyncProvider implements SyncProvider {
+  readonly supportsVersionedCas = true
   private signedIn = false
   private sequence = 0
   private readonly jsonFiles = new Map<string, RemoteJsonRecord>()
@@ -125,14 +158,21 @@ export class MockSyncProvider implements SyncProvider {
     this.requireSignIn()
     const record = this.jsonFiles.get(path)
     if (!record) return null
-    return { ...record.file, value: clone(record.value) as T }
+    return { ...record.file, value: JSON.parse(record.rawText) as T }
+  }
+
+  async getJsonText(path: string): Promise<RemoteJsonText | null> {
+    this.requireSignIn()
+    const record = this.jsonFiles.get(path)
+    return record ? { ...record.file, text: record.rawText } : null
   }
 
   async putJson<T>(path: string, value: T, options?: PutOptions): Promise<RemoteFileRef> {
     this.requireSignIn()
     const existing = this.jsonFiles.get(path)?.file
-    const file = this.makeFile(path, 'application/json', existing?.id, options?.appProperties)
-    this.jsonFiles.set(path, { file, value: clone(value) })
+    if (options?.precondition) assertWritePrecondition(existing, options.precondition)
+    const file = this.makeFile(path, 'application/json', existing, options?.appProperties)
+    this.jsonFiles.set(path, { file, rawText: JSON.stringify(clone(value)) })
     this.recordChange(file)
     return file
   }
@@ -150,7 +190,7 @@ export class MockSyncProvider implements SyncProvider {
   async putBlob(path: string, blob: Blob, metadata: BlobMetadata): Promise<RemoteFileRef> {
     this.requireSignIn()
     const existing = this.blobFiles.get(path)?.file
-    const file = this.makeFile(path, metadata.mimeType || blob.type || 'application/octet-stream', existing?.id, metadata.appProperties)
+    const file = this.makeFile(path, metadata.mimeType || blob.type || 'application/octet-stream', existing, metadata.appProperties)
     file.size = metadata.byteSize ?? blob.size
     this.blobFiles.set(path, { file, blob })
     this.recordChange(file)
@@ -196,20 +236,42 @@ export class MockSyncProvider implements SyncProvider {
   async duplicateJson<T>(sourcePath: string, duplicatePath: string, value?: T) {
     const source = this.jsonFiles.get(sourcePath)
     if (!source && typeof value === 'undefined') throw new Error(`No mock JSON exists at ${sourcePath}.`)
-    return this.putJson(duplicatePath, typeof value === 'undefined' ? source!.value as T : value)
+    return this.putJson(
+      duplicatePath,
+      typeof value === 'undefined' ? JSON.parse(source!.rawText) as T : value,
+    )
+  }
+
+  async putRawJsonForTest(path: string, rawText: string, options?: PutOptions): Promise<RemoteFileRef> {
+    this.requireSignIn()
+    const existing = this.jsonFiles.get(path)?.file
+    if (options?.precondition) assertWritePrecondition(existing, options.precondition)
+    const file = this.makeFile(path, 'application/json', existing, options?.appProperties)
+    this.jsonFiles.set(path, { file, rawText })
+    this.recordChange(file)
+    return file
   }
 
   private requireSignIn() {
     if (!this.signedIn) throw new Error('Mock sync provider is not signed in.')
   }
 
-  private makeFile(path: string, mimeType: string, existingId?: string, appProperties?: Record<string, string>): RemoteFileRef {
+  private makeFile(
+    path: string,
+    mimeType: string,
+    existing?: RemoteFileRef,
+    appProperties?: Record<string, string>,
+  ): RemoteFileRef {
+    const id = existing?.id ?? `mock-file-${++this.sequence}`
+    const version = String(Number.parseInt(existing?.version ?? '0', 10) + 1)
     return {
-      id: existingId ?? `mock-file-${++this.sequence}`,
+      id,
       path,
       name: fileNameFromPath(path),
       mimeType,
       updatedAt: nowIso(),
+      version,
+      etag: `"${id}-v${version}"`,
       appProperties,
     }
   }
@@ -262,6 +324,7 @@ function driveFileToRemoteRef(path: string, file: DriveFile): RemoteFileRef {
 }
 
 export class GoogleDriveSyncProvider implements SyncProvider {
+  readonly supportsVersionedCas = false
   private readonly client: FolderDriveClient
   private readonly folderName: string
   private readonly uploadRetryCount: number
@@ -307,6 +370,15 @@ export class GoogleDriveSyncProvider implements SyncProvider {
     if (!file) return null
     const value = await this.client.downloadJson<T>(file.id)
     return { ...driveFileToRemoteRef(path, file), value }
+  }
+
+  async getJsonText(path: string): Promise<RemoteJsonText | null> {
+    const file = await this.findFile(path)
+    if (!file) return null
+    const text = this.client.downloadText
+      ? await this.client.downloadText(file.id)
+      : JSON.stringify(await this.client.downloadJson<unknown>(file.id))
+    return { ...driveFileToRemoteRef(path, file), text }
   }
 
   async putJson<T>(path: string, value: T): Promise<RemoteFileRef> {

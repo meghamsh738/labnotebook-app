@@ -4,9 +4,9 @@
     "dateBucket": "2026-05-24",
     "entityId": "entry-unique",
     "expectedPath": "entries/2026-05-24.json",
-    "observedAndroidPath": "entries/2026-05-24-entry-unique.json",
-    "runtimeParity": "blocked",
-    "blockingIssueId": "android-unique-entry-path"
+    "observedAndroidPath": "entries/2026-05-24.json",
+    "runtimeParity": "resolved",
+    "resolvedIssueId": "android-unique-entry-path"
   },
   "sameDayCollision": {
     "dateBucket": "2026-05-24",
@@ -48,9 +48,8 @@
         "preserve": true
       }
     },
-    "observedAndroidThumbnail": "data:image/png;base64,private",
-    "runtimeParity": "blocked",
-    "blockingIssueId": "android-data-thumbnail"
+    "runtimeParity": "resolved",
+    "resolvedIssueId": "android-data-thumbnail"
   },
   "fileBoxPayload": {
     "input": {
@@ -60,7 +59,7 @@
     "expected": {
       "id": "filebox-canonical"
     },
-    "webRuntimeParity": "blocked",
-    "blockingIssueId": "web-payload-projection"
+    "webRuntimeParity": "resolved",
+    "resolvedIssueId": "web-payload-projection"
   }
 }

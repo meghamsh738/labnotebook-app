@@ -83,19 +83,20 @@ assert.deepEqual(actualJsonFiles, expectedJsonFiles)
 
 const policy = await fixture('policy.json')
 const blockers = new Set(policy.runtimeParity.blockingIssueIds)
+const resolved = new Set(policy.runtimeParity.resolvedIssueIds)
 assert.equal(policy.gateVersion, 1)
 assert.equal(policy.driveContractVersion, 1)
 assert.equal(policy.writeGate, 'disabled-until-runtime-parity')
 assert.equal(policy.runtimeParity.status, 'blocked')
 assert.equal(policy.runtimeParity.nativeDriveWritesAllowed, false)
-assert.deepEqual([...blockers].sort(), [
+assert.deepEqual([...blockers], ['web-versioned-cas'])
+assert.deepEqual([...resolved].sort(), [
   'android-data-thumbnail',
   'android-unique-entry-path',
   'malformed-json-quarantine',
   'tombstone-target-normalization',
   'web-filebox-transfer-cascade',
   'web-payload-projection',
-  'web-versioned-cas',
 ])
 assert.deepEqual(policy.remoteVersion.existingRequires, ['fileId', 'version'])
 assert.equal(policy.remoteVersion.minimumVersion, 1)
@@ -113,8 +114,8 @@ assert.equal(
 )
 assert.equal(malformed.expected.decision, 'quarantine-conflict')
 assert.equal(malformed.expected.remoteWriteAllowed, false)
-assert.equal(malformed.expected.runtimeParity, 'blocked')
-assert.ok(blockers.has(malformed.expected.blockingIssueId))
+assert.equal(malformed.expected.runtimeParity, 'resolved')
+assert.ok(resolved.has(malformed.expected.resolvedIssueId))
 
 const missing = await fixture('missing-record.json')
 assert.ok(missing.baseline.fileId)
@@ -153,9 +154,9 @@ const [equalLeft, equalRight] = equalTargets.equalInstantDivergence
 assert.equal(equalLeft.deletedAt, equalRight.deletedAt)
 assert.notEqual(equalLeft.deletedByDeviceId, equalRight.deletedByDeviceId)
 assert.equal(equalTargets.expected.equalInstantDecision, 'blocked')
-assert.equal(equalTargets.expected.runtimeParity, 'blocked')
-assert.ok(blockers.has(equalTargets.expected.blockingIssueId))
-assert.notEqual(equalTargets.expected.observedNativeCreatedId, equalTargets.expected.canonical.id)
+assert.equal(equalTargets.expected.runtimeParity, 'resolved')
+assert.ok(resolved.has(equalTargets.expected.resolvedIssueId))
+assert.equal(equalTargets.expected.observedNativeCreatedId, equalTargets.expected.canonical.id)
 
 const nonResurrection = await fixture('non-resurrection.json')
 assert.deepEqual(
@@ -166,8 +167,8 @@ assert.deepEqual(nonResurrection.expected.remainingLiveTargets, [])
 assert.equal(nonResurrection.expected.explicitChildTombstonesRequired, false)
 assert.equal(nonResurrection.expected.legacyChildTombstonesAccepted, true)
 assert.equal(nonResurrection.expected.staleRemoteRecordsIgnored, true)
-assert.equal(nonResurrection.expected.runtimeParity, 'blocked')
-assert.ok(blockers.has(nonResurrection.expected.blockingIssueId))
+assert.equal(nonResurrection.expected.runtimeParity, 'resolved')
+assert.ok(resolved.has(nonResurrection.expected.resolvedIssueId))
 assert.ok(nonResurrection.tombstones.some((item) => item.id.startsWith('delete-')))
 
 const canonicalization = await fixture('canonicalization.json')
@@ -175,9 +176,9 @@ assert.equal(
   canonicalization.uniqueEntry.expectedPath,
   `entries/${canonicalization.uniqueEntry.dateBucket}.json`,
 )
-assert.equal(canonicalization.uniqueEntry.runtimeParity, 'blocked')
-assert.ok(blockers.has(canonicalization.uniqueEntry.blockingIssueId))
-assert.notEqual(
+assert.equal(canonicalization.uniqueEntry.runtimeParity, 'resolved')
+assert.ok(resolved.has(canonicalization.uniqueEntry.resolvedIssueId))
+assert.equal(
   canonicalization.uniqueEntry.expectedPath,
   canonicalization.uniqueEntry.observedAndroidPath,
 )
@@ -201,10 +202,10 @@ for (const [fixtureKey, policyKind] of [
   assert.deepEqual(canonicalPayload, fixtureCase.expected)
 }
 assert.equal(canonicalization.attachmentPayload.expected.futureRemoteField.preserve, true)
-assert.equal(canonicalization.attachmentPayload.runtimeParity, 'blocked')
-assert.ok(blockers.has(canonicalization.attachmentPayload.blockingIssueId))
-assert.equal(canonicalization.fileBoxPayload.webRuntimeParity, 'blocked')
-assert.ok(blockers.has(canonicalization.fileBoxPayload.blockingIssueId))
+assert.equal(canonicalization.attachmentPayload.runtimeParity, 'resolved')
+assert.ok(resolved.has(canonicalization.attachmentPayload.resolvedIssueId))
+assert.equal(canonicalization.fileBoxPayload.webRuntimeParity, 'resolved')
+assert.ok(resolved.has(canonicalization.fileBoxPayload.resolvedIssueId))
 
 // These source-anchored checks ensure the assessment cannot silently claim parity
 // while the known client implementations still have the recorded blockers.
@@ -214,21 +215,25 @@ const androidSerializer = await source(
 const androidDao = await source(
   'android/app/src/main/java/com/easylab/labnotebook/data/local/LabNotebookDao.kt',
 )
+const androidReader = await source(
+  'android/app/src/main/java/com/easylab/labnotebook/sync/DriveReadOnlyMetadataSync.kt',
+)
 const webSyncEngine = await source('web/src/sync/syncEngine.ts')
 const webDataCore = await source('web/src/sync/dataCore.ts')
 const webProvider = await source('web/src/sync/syncProvider.ts')
 
-assert.match(androidSerializer, /A new entry must use its collision-safe ID-derived Drive path/)
+assert.match(androidSerializer, /requires a path selected from a complete same-day inventory/)
 assert.match(androidSerializer, /thumbnail = thumbnail\?\.takeUnless\(::isLocalCacheHint\)/)
-assert.doesNotMatch(androidSerializer, /startsWith\("data:"\)/)
-assert.match(androidDao, /val baseRecordId = "delete-\$entityKind-\$entityId"/)
-assert.match(webSyncEngine, /existing\.id === tombstone\.id/)
+assert.match(androidSerializer, /startsWith\("data:"\)/)
+assert.match(androidDao, /val baseRecordId = "del-\$entityKind-\$entityId"/)
+assert.match(androidReader, /conf-invalid-\$entityKind-\$\{ref\.path\}/)
+assert.match(androidReader, /cacheAsBaseline = false/)
+assert.match(webSyncEngine, /normalizeTombstonesByTarget\(\[\.\.\.snapshot\.tombstones, tombstone\]\)/)
 const readRemoteEntries = webSyncEngine.slice(
   webSyncEngine.indexOf('async function readRemoteEntries'),
   webSyncEngine.indexOf('async function readRemoteAttachments'),
 )
-assert.match(readRemoteEntries, /await provider\.getJson<unknown>\(file\.path\)/)
-assert.doesNotMatch(readRemoteEntries, /try\s*\{|catch\s*\(/)
+assert.match(readRemoteEntries, /readValidatedRemoteJson/)
 const readRemoteTombstones = webSyncEngine.slice(
   webSyncEngine.indexOf('async function readRemoteTombstones'),
 )
@@ -237,17 +242,21 @@ const applyTombstones = webDataCore.slice(
   webDataCore.indexOf('export function applyTombstonesToSnapshot'),
   webDataCore.indexOf('export function buildPendingSyncQueue'),
 )
-assert.doesNotMatch(applyTombstones, /fileBoxItemId/)
+assert.match(applyTombstones, /fileBoxItemId/)
 const providerContract = webProvider.slice(
   webProvider.indexOf('export interface SyncProvider'),
-  webProvider.indexOf('export class'),
+  webProvider.indexOf('type RemoteJsonRecord'),
 )
-assert.doesNotMatch(providerContract, /ifMatch|etag|precondition/i)
-assert.match(webDataCore, /buildEntryEnvelope[\s\S]*payload: entry/)
-assert.match(webDataCore, /buildAttachmentEnvelope[\s\S]*payload: attachment/)
-assert.match(webSyncEngine, /buildFileBoxEnvelope[\s\S]*payload: item/)
+assert.match(providerContract, /supportsVersionedCas/)
+assert.match(webProvider, /precondition\?: WritePrecondition/)
+assert.match(webProvider, /class MockSyncProvider[\s\S]*supportsVersionedCas = true/)
+assert.match(webProvider, /class GoogleDriveSyncProvider[\s\S]*supportsVersionedCas = false/)
+assert.match(webDataCore, /buildEntryEnvelope[\s\S]*payload: projectEntryPayload\(entry\)/)
+assert.match(webDataCore, /buildAttachmentEnvelope[\s\S]*payload: projectAttachmentPayload\(attachment\)/)
+assert.match(webSyncEngine, /buildFileBoxEnvelope[\s\S]*payload: projectFileBoxPayload\(item\)/)
+assert.match(webSyncEngine, /rawJson: raw\?\.text/)
 
 console.log(
   `Drive v1 parity assessment passed: ${actualJsonFiles.length} shared JSON fixtures; `
-    + `${blockers.size} runtime blockers keep native writes disabled.`,
+    + `${blockers.size} runtime blocker${blockers.size === 1 ? '' : 's'} keep native writes disabled.`,
 )

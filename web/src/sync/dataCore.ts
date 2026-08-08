@@ -102,7 +102,7 @@ export function buildEntryEnvelope(entry: Entry, device: DeviceProfile): SyncEnt
     version: 1,
     updatedAt: entry.lastEditedDatetime || nowIso(),
     updatedByDeviceId: entry.updatedByDeviceId || device.id,
-    payload: entry,
+    payload: projectEntryPayload(entry),
   }
 }
 
@@ -113,8 +113,133 @@ export function buildAttachmentEnvelope(attachment: Attachment, device: DevicePr
     version: 1,
     updatedAt: attachment.updatedAt || attachment.createdAt || nowIso(),
     updatedByDeviceId: device.id,
-    payload: attachment,
+    payload: projectAttachmentPayload(attachment),
   }
+}
+
+function isLocalCacheHint(value: string) {
+  const normalized = value.trim().toLowerCase()
+  return normalized.startsWith('blob:')
+    || normalized.startsWith('file:')
+    || normalized.startsWith('content:')
+    || normalized.startsWith('data:')
+    || normalized.startsWith('/')
+    || normalized.startsWith('~/')
+    || /^[a-z]:[\\/]/.test(normalized)
+}
+
+export function projectEntryPayload(entry: Entry): Entry {
+  const payload = { ...entry }
+  if (payload.syncPath && isLocalCacheHint(payload.syncPath)) delete payload.syncPath
+  return payload
+}
+
+export function projectAttachmentPayload(attachment: Attachment): Attachment {
+  const payload = { ...attachment }
+  delete payload.cachedPath
+  delete payload.cacheKey
+  if (payload.thumbnail && isLocalCacheHint(payload.thumbnail)) delete payload.thumbnail
+  return payload
+}
+
+export function projectFileBoxPayload(item: FileBoxItem): FileBoxItem {
+  const payload = { ...item }
+  delete payload.localObjectUrl
+  return payload
+}
+
+export function canonicalTombstoneId(entityKind: TombstoneRecord['entityKind'], entityId: string) {
+  return `del-${entityKind}-${entityId}`
+}
+
+export function normalizeTombstone(tombstone: TombstoneRecord): TombstoneRecord {
+  return {
+    ...tombstone,
+    id: canonicalTombstoneId(tombstone.entityKind, tombstone.entityId),
+  }
+}
+
+function sameTombstoneSemantics(left: TombstoneRecord, right: TombstoneRecord) {
+  return left.entityKind === right.entityKind
+    && left.entityId === right.entityId
+    && left.deletedAt === right.deletedAt
+    && left.deletedByDeviceId === right.deletedByDeviceId
+    && left.reason === right.reason
+}
+
+export function normalizeTombstonesByTarget(
+  tombstones: TombstoneRecord[],
+  detectedAt = new Date().toISOString(),
+): { tombstones: TombstoneRecord[]; conflicts: SyncConflict[] } {
+  const preferred = new Map<string, TombstoneRecord>()
+  const conflicts = new Map<string, SyncConflict>()
+  for (const candidateValue of tombstones) {
+    const candidate = normalizeTombstone(candidateValue)
+    const target = `${candidate.entityKind}\u0000${candidate.entityId}`
+    const current = preferred.get(target)
+    if (!current) {
+      preferred.set(target, candidate)
+      continue
+    }
+    const candidateTime = Date.parse(candidate.deletedAt)
+    const currentTime = Date.parse(current.deletedAt)
+    if (candidateTime > currentTime) {
+      preferred.set(target, candidate)
+      continue
+    }
+    if (candidateTime < currentTime || sameTombstoneSemantics(candidate, current)) continue
+
+    const ordered: TombstoneRecord[] = [current, candidate]
+    ordered.sort((left, right) => {
+      const leftKey = `${left.deletedByDeviceId}\u0000${left.reason ?? ''}`
+      const rightKey = `${right.deletedByDeviceId}\u0000${right.reason ?? ''}`
+      return leftKey.localeCompare(rightKey)
+    })
+    preferred.set(target, ordered[0])
+    const conflictId = `conf-${candidate.entityKind}-${candidate.entityId}`
+    conflicts.set(conflictId, {
+      id: conflictId,
+      entityKind: candidate.entityKind,
+      entityId: candidate.entityId,
+      localUpdatedAt: candidate.deletedAt,
+      remoteUpdatedAt: candidate.deletedAt,
+      detectedAt,
+      resolution: 'pending',
+      summary: 'Equal-time tombstones disagree; deletion remains effective but publication is blocked.',
+      localCopy: { tombstone: ordered[0] },
+      remoteCopy: { tombstone: ordered[1] },
+    })
+  }
+  return {
+    tombstones: [...preferred.values()].sort((left, right) =>
+      `${left.entityKind}\u0000${left.entityId}`.localeCompare(`${right.entityKind}\u0000${right.entityId}`)),
+    conflicts: [...conflicts.values()],
+  }
+}
+
+export function effectiveDeletedTargetSets(snapshot: JournalSnapshot, tombstones: TombstoneRecord[]) {
+  const deletedEntries = new Set(tombstones.filter((t) => t.entityKind === 'entry').map((t) => t.entityId))
+  const deletedAttachments = new Set(tombstones.filter((t) => t.entityKind === 'attachment').map((t) => t.entityId))
+  const deletedFileBoxItems = new Set(tombstones.filter((t) => t.entityKind === 'fileBoxItem').map((t) => t.entityId))
+  const deletedTransfers = new Set(tombstones.filter((t) => t.entityKind === 'transfer').map((t) => t.entityId))
+  for (const attachment of snapshot.attachments) {
+    if (deletedEntries.has(attachment.entryId)) deletedAttachments.add(attachment.id)
+  }
+  for (const item of snapshot.fileBoxItems) {
+    if (deletedEntries.has(item.entryId) || deletedAttachments.has(item.attachmentId || '')) {
+      deletedFileBoxItems.add(item.id)
+    }
+  }
+  for (const transfer of snapshot.transfers) {
+    if (
+      deletedEntries.has(transfer.entryId || '')
+      || deletedAttachments.has(transfer.attachmentId || '')
+      || deletedFileBoxItems.has(transfer.fileBoxItemId || '')
+    ) {
+      deletedTransfers.add(transfer.id)
+    }
+  }
+  return { deletedEntries, deletedAttachments, deletedFileBoxItems, deletedTransfers }
 }
 
 export function mergeEntryEnvelopes(
@@ -149,10 +274,9 @@ export function applyTombstonesToSnapshot(snapshot: JournalSnapshot, tombstones:
   // Device identity is owned by the active local profile, and deleting a tombstone
   // has no safe v1 resurrection semantics. Those tombstone kinds remain recorded
   // but intentionally do not erase local snapshot state.
-  const deletedEntries = new Set(tombstones.filter((t) => t.entityKind === 'entry').map((t) => t.entityId))
-  const deletedAttachments = new Set(tombstones.filter((t) => t.entityKind === 'attachment').map((t) => t.entityId))
-  const deletedFileBoxItems = new Set(tombstones.filter((t) => t.entityKind === 'fileBoxItem').map((t) => t.entityId))
-  const deletedTransfers = new Set(tombstones.filter((t) => t.entityKind === 'transfer').map((t) => t.entityId))
+  const normalized = normalizeTombstonesByTarget(tombstones)
+  const { deletedEntries, deletedAttachments, deletedFileBoxItems, deletedTransfers } =
+    effectiveDeletedTargetSets(snapshot, normalized.tombstones)
   const entries = Object.fromEntries(Object.entries(snapshot.entries)
     .filter(([id]) => !deletedEntries.has(id))
     .map(([id, entry]) => [id, {
@@ -168,8 +292,15 @@ export function applyTombstonesToSnapshot(snapshot: JournalSnapshot, tombstones:
     entries,
     attachments: snapshot.attachments.filter((attachment) => !deletedAttachments.has(attachment.id) && !deletedEntries.has(attachment.entryId)),
     fileBoxItems: snapshot.fileBoxItems.filter((item) => !deletedFileBoxItems.has(item.id) && !deletedAttachments.has(item.attachmentId || '') && !deletedEntries.has(item.entryId)),
-    transfers: snapshot.transfers.filter((transfer) => !deletedTransfers.has(transfer.id) && !deletedAttachments.has(transfer.attachmentId || '') && !deletedEntries.has(transfer.entryId || '')),
-    tombstones,
+    transfers: snapshot.transfers.filter((transfer) =>
+      !deletedTransfers.has(transfer.id)
+      && !deletedFileBoxItems.has(transfer.fileBoxItemId || '')
+      && !deletedAttachments.has(transfer.attachmentId || '')
+      && !deletedEntries.has(transfer.entryId || '')),
+    conflicts: [...new Map(
+      [...snapshot.conflicts, ...normalized.conflicts].map((conflict) => [conflict.id, conflict]),
+    ).values()],
+    tombstones: normalized.tombstones,
   }
 }
 

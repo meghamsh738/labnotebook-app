@@ -8,6 +8,7 @@ import {
   buildPendingSyncQueue,
   hashBlobSha256,
   mergeEntryEnvelopes,
+  normalizeTombstonesByTarget,
   safeDriveSegment,
 } from '../src/sync/dataCore'
 import {
@@ -156,6 +157,126 @@ test('tombstones remove deleted entries and their attachments from snapshots', (
 
   expect(Object.keys(removed.entries)).toEqual([])
   expect(removed.attachments).toEqual([])
+})
+
+test('parent and File Box tombstones transitively suppress fileBox-only transfers', () => {
+  const daily = entry('entry-parent', '2026-05-23', '2026-05-23T09:00:00.000Z')
+  const childAttachment = attachment('att-child', daily.id, 'raw.csv')
+  const removed = applyTombstonesToSnapshot(
+    {
+      entries: { [daily.id]: daily },
+      attachments: [childAttachment],
+      fileBoxItems: [
+        {
+          id: 'filebox-child',
+          entryId: daily.id,
+          attachmentId: childAttachment.id,
+          filename: 'raw.csv',
+          filesize: '1 KB',
+          sourceDeviceId: device.id,
+          sourceDeviceName: device.name,
+          status: 'available',
+          createdAt: '2026-05-23T09:00:00.000Z',
+          updatedAt: '2026-05-23T09:00:00.000Z',
+        },
+        {
+          id: 'filebox-orphan',
+          entryId: '',
+          filename: 'orphan.csv',
+          filesize: '1 KB',
+          sourceDeviceId: device.id,
+          sourceDeviceName: device.name,
+          status: 'available',
+          createdAt: '2026-05-23T09:00:00.000Z',
+          updatedAt: '2026-05-23T09:00:00.000Z',
+        },
+      ],
+      transfers: [
+        {
+          id: 'transfer-child',
+          fileBoxItemId: 'filebox-child',
+          filename: 'raw.csv',
+          fromDeviceId: device.id,
+          fromDeviceName: device.name,
+          provider: 'google-drive',
+          status: 'available',
+          createdAt: '2026-05-23T09:00:00.000Z',
+          updatedAt: '2026-05-23T09:00:00.000Z',
+        },
+        {
+          id: 'transfer-filebox-only',
+          fileBoxItemId: 'filebox-orphan',
+          filename: 'orphan.csv',
+          fromDeviceId: device.id,
+          fromDeviceName: device.name,
+          provider: 'google-drive',
+          status: 'available',
+          createdAt: '2026-05-23T09:00:00.000Z',
+          updatedAt: '2026-05-23T09:00:00.000Z',
+        },
+      ],
+      conflicts: [],
+      tombstones: [],
+    },
+    [
+      {
+        id: 'delete-entry-entry-parent',
+        entityKind: 'entry',
+        entityId: daily.id,
+        deletedAt: '2026-05-23T12:00:00.000Z',
+        deletedByDeviceId: device.id,
+      },
+      {
+        id: 'delete-fileBoxItem-filebox-orphan',
+        entityKind: 'fileBoxItem',
+        entityId: 'filebox-orphan',
+        deletedAt: '2026-05-23T12:01:00.000Z',
+        deletedByDeviceId: device.id,
+      },
+    ],
+  )
+
+  expect(Object.keys(removed.entries)).toEqual([])
+  expect(removed.attachments).toEqual([])
+  expect(removed.fileBoxItems).toEqual([])
+  expect(removed.transfers).toEqual([])
+})
+
+test('legacy tombstone ids normalize by target and equal-time divergence blocks publication', () => {
+  const normalized = normalizeTombstonesByTarget([
+    {
+      id: 'delete-attachment-att-equal',
+      entityKind: 'attachment',
+      entityId: 'att-equal',
+      deletedAt: '2026-05-23T10:00:00.000Z',
+      deletedByDeviceId: 'dev-a',
+    },
+    {
+      id: 'arbitrary-newer-id',
+      entityKind: 'attachment',
+      entityId: 'att-equal',
+      deletedAt: '2026-05-23T11:00:00.000Z',
+      deletedByDeviceId: 'dev-b',
+    },
+  ])
+  expect(normalized.tombstones).toEqual([{
+    id: 'del-attachment-att-equal',
+    entityKind: 'attachment',
+    entityId: 'att-equal',
+    deletedAt: '2026-05-23T11:00:00.000Z',
+    deletedByDeviceId: 'dev-b',
+  }])
+  expect(normalized.conflicts).toEqual([])
+
+  const divergent = normalizeTombstonesByTarget([
+    { ...normalized.tombstones[0], deletedByDeviceId: 'dev-a' },
+    { ...normalized.tombstones[0], id: 'legacy-id', deletedByDeviceId: 'dev-b' },
+  ], '2026-05-23T12:05:00.000Z')
+  expect(divergent.tombstones).toHaveLength(1)
+  expect(divergent.conflicts).toMatchObject([{
+    id: 'conf-attachment-att-equal',
+    resolution: 'pending',
+  }])
 })
 
 test('hashes attachment blobs for sync identity', async () => {

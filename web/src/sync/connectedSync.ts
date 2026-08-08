@@ -87,6 +87,7 @@ export type SyncProvider = {
   uploadJson<T>(parentFolderId: string, name: string, data: T): Promise<string>
   uploadBlob(parentFolderId: string, name: string, blob: Blob, mimeType?: string, metadata?: DriveBlobMetadata): Promise<string>
   downloadJson<T>(fileId: string): Promise<T>
+  downloadText?(fileId: string): Promise<string>
   downloadBlob(fileId: string): Promise<Blob>
   getFileMetadata(fileId: string): Promise<DriveFile>
   listFolder(parentFolderId: string, query?: string): Promise<DriveFile[]>
@@ -749,6 +750,13 @@ export class GoogleDriveProvider implements SyncProvider {
 
   async downloadJson<T>(fileId: string): Promise<T> {
     return this.request<T>(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?alt=media`)
+  }
+
+  async downloadText(fileId: string): Promise<string> {
+    const response = await this.requestRaw(
+      `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?alt=media`,
+    )
+    return response.text()
   }
 
   async downloadBlob(fileId: string): Promise<Blob> {

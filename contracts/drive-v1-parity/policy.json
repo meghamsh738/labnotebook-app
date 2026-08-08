@@ -6,12 +6,14 @@
     "status": "blocked",
     "nativeDriveWritesAllowed": false,
     "blockingIssueIds": [
+      "web-versioned-cas"
+    ],
+    "resolvedIssueIds": [
       "android-unique-entry-path",
       "android-data-thumbnail",
       "tombstone-target-normalization",
       "web-filebox-transfer-cascade",
       "malformed-json-quarantine",
-      "web-versioned-cas",
       "web-payload-projection"
     ]
   },

@@ -11,12 +11,13 @@ not enable writes, and does not authorize live Drive mutation testing.
 
 ## Current result
 
-Runtime parity is **blocked**. The fixture policy names the exact blockers:
-Android's baseline-free daily-entry path, Android `data:` thumbnails, native/web
-tombstone target normalization, the web File Box-to-transfer cascade, malformed
-JSON quarantine, versioned CAS in web writes, and web payload projection.
-Removing a blocker from the policy requires a client-behavior test proving it
-was fixed.
+Runtime parity remains **blocked only on production web versioned CAS**.
+Android's baseline-free daily-entry path and `data:` thumbnail projection,
+native/web tombstone target normalization, the web File Box-to-transfer
+cascade, malformed JSON quarantine, and web payload projection now have
+client-behavior tests. The web provider protocol and mock enforce version/ETag
+preconditions, but the real Google provider and sync engine remain deliberately
+unwired pending a separately reviewed, live-write-safe milestone.
 
 ## Locked policies
 
@@ -36,8 +37,7 @@ was fixed.
 - For equal tombstone targets, the later `deletedAt` wins. Identical records at
   the same instant converge. Divergent records at the same instant block.
 - Stale live JSON or blobs never resurrect a tombstoned entity or descendant.
-- Malformed remote JSON is quarantined as a pending conflict. Until native can
-  do that losslessly, the write gate remains blocked.
+- Malformed remote JSON is quarantined losslessly as a pending conflict.
 
 Changing the deletion cascade or canonical identity rules is a breaking contract
 change and requires explicit review before runtime behavior is modified.

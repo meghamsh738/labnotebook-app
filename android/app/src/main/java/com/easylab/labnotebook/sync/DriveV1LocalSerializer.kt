@@ -24,6 +24,37 @@ internal data class DriveV1SerializedDocument(
     val attachmentBlobPath: String? = null,
 )
 
+internal class DriveV1NewEntryPathSelection private constructor(
+    val entityId: String,
+    val dateBucket: String,
+    val sameDayEntityIds: Set<String>,
+    val targetPath: String,
+) {
+    companion object {
+        fun fromCompleteSameDayInventory(
+            entityId: String,
+            dateBucket: String,
+            sameDayEntityIds: Collection<String>,
+        ): DriveV1NewEntryPathSelection {
+            val normalizedIds = sameDayEntityIds.toSet()
+            require(entityId in normalizedIds) {
+                "The complete same-day inventory must contain the new entry."
+            }
+            val targetPath = if (normalizedIds.size == 1) {
+                DriveV1Paths.entry(dateBucket)
+            } else {
+                DriveV1Paths.entry(dateBucket, entityId)
+            }
+            return DriveV1NewEntryPathSelection(
+                entityId = entityId,
+                dateBucket = dateBucket,
+                sameDayEntityIds = normalizedIds,
+                targetPath = targetPath,
+            )
+        }
+    }
+}
+
 internal data class DriveV1ManifestInventory(
     val devices: Collection<DeviceEntity>,
     val entries: Collection<JournalEntryEntity>,
@@ -43,6 +74,7 @@ internal object DriveV1LocalSerializer {
         queue: SyncQueueEntity,
         targetPath: String,
         rawBaseline: DriveRawDocumentEntity? = null,
+        newEntryPathSelection: DriveV1NewEntryPathSelection? = null,
     ): DriveV1SerializedDocument {
         requireAccount(accountId, entity.accountId)
         requireQueue(accountId, queue, "entry", entity.id, "upsert")
@@ -56,8 +88,18 @@ internal object DriveV1LocalSerializer {
         requireEntryVersionContract(entity, queue, original)
         validatePath("entry", targetPath)
         if (rawBaseline == null) {
-            require(targetPath == DriveV1Paths.entry(entity.dateBucket, entity.id)) {
-                "A new entry must use its collision-safe ID-derived Drive path."
+            val selection = requireNotNull(newEntryPathSelection) {
+                "A new entry requires a path selected from a complete same-day inventory."
+            }
+            require(selection.entityId == entity.id && selection.dateBucket == entity.dateBucket) {
+                "The new-entry path selection does not match the serialized entry."
+            }
+            require(targetPath == selection.targetPath) {
+                "A new entry must use its complete-inventory canonical Drive path."
+            }
+        } else {
+            require(newEntryPathSelection == null) {
+                "An existing entry must preserve its verified baseline path."
             }
         }
         val entry = entity.toDriveV1(original?.value?.payload, targetPath).requireV1()
@@ -549,6 +591,7 @@ internal object DriveV1LocalSerializer {
         return normalized.startsWith("blob:") ||
             normalized.startsWith("file:") ||
             normalized.startsWith("content:") ||
+            normalized.startsWith("data:") ||
             normalized.startsWith("/") ||
             normalized.startsWith("~/") ||
             Regex("^[a-z]:[\\\\/]").containsMatchIn(normalized)

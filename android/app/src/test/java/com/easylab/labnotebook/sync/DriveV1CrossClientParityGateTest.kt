@@ -37,16 +37,21 @@ class DriveV1CrossClientParityGateTest {
         assertEquals("blocked", runtimeParity.text("status"))
         assertFalse(runtimeParity.booleanValue("nativeDriveWritesAllowed"))
         assertEquals(
+            setOf("web-versioned-cas"),
+            runtimeParity.arrayValue("blockingIssueIds").mapTo(hashSetOf()) {
+                it.jsonPrimitive.content
+            },
+        )
+        assertEquals(
             setOf(
                 "android-unique-entry-path",
                 "android-data-thumbnail",
                 "tombstone-target-normalization",
                 "web-filebox-transfer-cascade",
                 "malformed-json-quarantine",
-                "web-versioned-cas",
                 "web-payload-projection",
             ),
-            runtimeParity.arrayValue("blockingIssueIds").mapTo(hashSetOf()) {
+            runtimeParity.arrayValue("resolvedIssueIds").mapTo(hashSetOf()) {
                 it.jsonPrimitive.content
             },
         )
@@ -80,8 +85,8 @@ class DriveV1CrossClientParityGateTest {
         assertEquals("quarantine-conflict", expected.text("decision"))
         assertEquals("pending", expected.text("resolution"))
         assertFalse(expected.booleanValue("remoteWriteAllowed"))
-        assertEquals("blocked", expected.text("runtimeParity"))
-        assertEquals("malformed-json-quarantine", expected.text("blockingIssueId"))
+        assertEquals("resolved", expected.text("runtimeParity"))
+        assertEquals("malformed-json-quarantine", expected.text("resolvedIssueId"))
     }
 
     @Test
@@ -170,9 +175,9 @@ class DriveV1CrossClientParityGateTest {
         assertEquals(divergent[0].deletedAt, divergent[1].deletedAt)
         assertNotEquals(divergent[0].deletedByDeviceId, divergent[1].deletedByDeviceId)
         assertEquals("blocked", expected.text("equalInstantDecision"))
-        assertEquals("blocked", expected.text("runtimeParity"))
-        assertEquals("tombstone-target-normalization", expected.text("blockingIssueId"))
-        assertNotEquals(expectedCanonical.id, expected.text("observedNativeCreatedId"))
+        assertEquals("resolved", expected.text("runtimeParity"))
+        assertEquals("tombstone-target-normalization", expected.text("resolvedIssueId"))
+        assertEquals(expectedCanonical.id, expected.text("observedNativeCreatedId"))
     }
 
     @Test
@@ -232,8 +237,8 @@ class DriveV1CrossClientParityGateTest {
         assertTrue(expected.booleanValue("legacyChildTombstonesAccepted"))
         assertTrue(expected.booleanValue("staleRemoteRecordsIgnored"))
         assertTrue(tombstones.any { it.id.startsWith("delete-") })
-        assertEquals("blocked", expected.text("runtimeParity"))
-        assertEquals("web-filebox-transfer-cascade", expected.text("blockingIssueId"))
+        assertEquals("resolved", expected.text("runtimeParity"))
+        assertEquals("web-filebox-transfer-cascade", expected.text("resolvedIssueId"))
     }
 
     @Test
@@ -257,29 +262,25 @@ class DriveV1CrossClientParityGateTest {
             syncPath = case.objectValue("entryPayload").objectValue("input").text("syncPath"),
         )
         val entryQueue = queue(accountId, "entry", entry.id, updatedAt)
-        val uniqueAttempt = runCatching {
-            DriveV1LocalSerializer.serializeEntry(
-                accountId,
-                entry,
-                entryQueue,
-                unique.text("expectedPath"),
-            )
-        }
-        val collisionDocument = DriveV1LocalSerializer.serializeEntry(
+        val uniqueDocument = DriveV1LocalSerializer.serializeEntry(
             accountId,
             entry,
             entryQueue,
-            unique.text("observedAndroidPath"),
+            unique.text("expectedPath"),
+            newEntryPathSelection = DriveV1NewEntryPathSelection.fromCompleteSameDayInventory(
+                entityId = entry.id,
+                dateBucket = entry.dateBucket,
+                sameDayEntityIds = listOf(entry.id),
+            ),
         )
-        val collisionEnvelope = json.decodeFromString<DriveV1Envelope<DriveV1Entry>>(
-            collisionDocument.json,
+        val uniqueEnvelope = json.decodeFromString<DriveV1Envelope<DriveV1Entry>>(
+            uniqueDocument.json,
         )
         assertEquals(unique.text("expectedPath"), DriveV1Paths.entry(unique.text("dateBucket")))
-        assertTrue(uniqueAttempt.isFailure)
-        assertEquals("blocked", unique.text("runtimeParity"))
-        assertEquals("android-unique-entry-path", unique.text("blockingIssueId"))
-        assertEquals(unique.text("observedAndroidPath"), collisionDocument.path)
-        assertNull(collisionEnvelope.payload.syncPath)
+        assertEquals(unique.text("expectedPath"), uniqueDocument.path)
+        assertEquals("resolved", unique.text("runtimeParity"))
+        assertEquals("android-unique-entry-path", unique.text("resolvedIssueId"))
+        assertNull(uniqueEnvelope.payload.syncPath)
         assertEquals(
             collision.text("expectedPath"),
             DriveV1Paths.entry(collision.text("dateBucket"), collision.text("entityId")),
@@ -314,12 +315,9 @@ class DriveV1CrossClientParityGateTest {
         )
         assertNull(attachmentEnvelope.payload.cachedPath)
         assertNull(attachmentEnvelope.payload.cacheKey)
-        assertEquals(
-            attachmentCase.text("observedAndroidThumbnail"),
-            attachmentEnvelope.payload.thumbnail,
-        )
-        assertEquals("blocked", attachmentCase.text("runtimeParity"))
-        assertEquals("android-data-thumbnail", attachmentCase.text("blockingIssueId"))
+        assertNull(attachmentEnvelope.payload.thumbnail)
+        assertEquals("resolved", attachmentCase.text("runtimeParity"))
+        assertEquals("android-data-thumbnail", attachmentCase.text("resolvedIssueId"))
 
         val fileBoxCase = case.objectValue("fileBoxPayload")
         val fileBoxItem = FileBoxItemEntity(
@@ -344,8 +342,8 @@ class DriveV1CrossClientParityGateTest {
             fileBoxDocument.json,
         )
         assertNull(fileBoxEnvelope.payload.localObjectUrl)
-        assertEquals("blocked", fileBoxCase.text("webRuntimeParity"))
-        assertEquals("web-payload-projection", fileBoxCase.text("blockingIssueId"))
+        assertEquals("resolved", fileBoxCase.text("webRuntimeParity"))
+        assertEquals("web-payload-projection", fileBoxCase.text("resolvedIssueId"))
     }
 
     private fun queue(

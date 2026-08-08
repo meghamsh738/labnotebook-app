@@ -47,8 +47,8 @@
     },
     "drivePath": "tombstones/attachment--att-equal.json",
     "equalInstantDecision": "blocked",
-    "runtimeParity": "blocked",
-    "blockingIssueId": "tombstone-target-normalization",
-    "observedNativeCreatedId": "delete-attachment-att-equal"
+    "runtimeParity": "resolved",
+    "resolvedIssueId": "tombstone-target-normalization",
+    "observedNativeCreatedId": "del-attachment-att-equal"
   }
 }

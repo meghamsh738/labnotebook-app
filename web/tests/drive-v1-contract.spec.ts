@@ -8,6 +8,9 @@ import {
   buildAttachmentEnvelope,
   buildEntryDriveFileName,
   buildEntryEnvelope,
+  projectAttachmentPayload,
+  projectEntryPayload,
+  projectFileBoxPayload,
 } from '../src/sync/dataCore'
 import { journalDbNameForScope } from '../src/sync/repositories'
 import {
@@ -31,6 +34,7 @@ import {
 } from '../src/sync/schemas'
 
 const contractRoot = fileURLToPath(new URL('../../contracts/drive-v1/', import.meta.url))
+const parityContractRoot = fileURLToPath(new URL('../../contracts/drive-v1-parity/', import.meta.url))
 const expectedJsonPaths = [
   'attachments/2026-05-23/att-contract-result.csv.json',
   'conflicts/conf-entry-entry-contract.json',
@@ -45,6 +49,21 @@ const expectedJsonPaths = [
 async function readFixture(relativePath: string) {
   return JSON.parse(await readFile(path.join(contractRoot, relativePath), 'utf8')) as unknown
 }
+
+test('outbound payload projection strips local-only fields and preserves unknown remote fields', async () => {
+  const fixture = JSON.parse(
+    await readFile(path.join(parityContractRoot, 'canonicalization.json'), 'utf8'),
+  ) as {
+    entryPayload: { input: Entry; expected: Entry }
+    attachmentPayload: { input: Attachment; expected: Attachment }
+    fileBoxPayload: { input: FileBoxItem; expected: FileBoxItem }
+  }
+
+  expect(projectEntryPayload(fixture.entryPayload.input)).toEqual(fixture.entryPayload.expected)
+  expect(projectAttachmentPayload(fixture.attachmentPayload.input))
+    .toEqual(fixture.attachmentPayload.expected)
+  expect(projectFileBoxPayload(fixture.fileBoxPayload.input)).toEqual(fixture.fileBoxPayload.expected)
+})
 
 async function listJsonFiles(directory: string, prefix = ''): Promise<string[]> {
   const entries = await readdir(directory, { withFileTypes: true })

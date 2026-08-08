@@ -18,8 +18,11 @@ import com.easylab.labnotebook.data.local.TransferEntity
 import com.easylab.labnotebook.data.repository.DriveFileRef
 import com.easylab.labnotebook.data.repository.DriveRepository
 import com.easylab.labnotebook.data.repository.DriveWriteCapability
+import kotlinx.coroutines.flow.first
 import kotlinx.serialization.decodeFromString
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -456,6 +459,28 @@ class DriveReadOnlyMetadataSyncTest {
         assertEquals(before.attachment, database.dao().attachment(accountA.value, before.attachment.id))
         assertNull(database.dao().visibleEntry(accountA.value, before.entry.id))
         assertNull(database.dao().visibleAttachment(accountA.value, before.attachment.id))
+        assertTrue(database.dao().observeIncomingFileBoxItems(accountA.value).first().isEmpty())
+        assertTrue(database.dao().observeVisibleTransfers(accountA.value).first().isEmpty())
+    }
+
+    @Test
+    fun fileBoxTombstoneAlsoHidesItsExistingTransferChild() = runTest {
+        val before = seedEveryRecordType(accountA.value, useGoldenIds = true)
+        database.dao().clearQueue(accountA.value)
+        database.dao().upsertTombstone(
+            TombstoneEntity(
+                accountId = accountA.value,
+                id = "del-fileBoxItem-${before.fileBoxItem.id}",
+                entityKind = "fileBoxItem",
+                entityId = before.fileBoxItem.id,
+                deletedAt = SYNCED_AT,
+                deletedByDeviceId = "remote-device",
+            ),
+        )
+
+        assertTrue(database.dao().observeIncomingFileBoxItems(accountA.value).first().isEmpty())
+        assertTrue(database.dao().observeVisibleTransfers(accountA.value).first().isEmpty())
+        assertEquals(before.transfer, database.dao().transfers(accountA.value).single())
     }
 
     @Test
@@ -643,6 +668,55 @@ class DriveReadOnlyMetadataSyncTest {
     }
 
     @Test
+    fun malformedEntityJsonIsQuarantinedLosslesslyAndIdempotently() = runTest {
+        val malformed = """{"id":"entry-malformed","kind":"entry","payload":"""
+        val files = linkedMapOf(
+            MANIFEST_PATH to manifestJson(entryCount = 1),
+            "entries/2026-05-24.json" to malformed,
+        )
+        val reader = DriveV1MetadataReader(FakeDriveRepository(files))
+        val snapshot = reader.read(accountA)
+
+        assertTrue(snapshot.entries.isEmpty())
+        assertEquals(1, snapshot.conflicts.size)
+        val quarantined = snapshot.conflicts.single()
+        assertEquals("conf-invalid-entry-entries/2026-05-24.json", quarantined.value.id)
+        assertEquals("entries/2026-05-24.json", quarantined.value.entityId)
+        assertEquals("pending", quarantined.value.resolution)
+        assertEquals(malformed, quarantined.value.remoteCopy?.jsonObject?.get("rawJson")?.jsonPrimitive?.content)
+        assertFalse(quarantined.cacheAsBaseline)
+
+        val applier = DriveV1MetadataApplier(database, now = { SYNCED_AT })
+        applier.apply(accountA, snapshot)
+        applier.apply(accountA, reader.read(accountA))
+
+        val stored = database.dao().conflicts(accountA.value).single()
+        assertEquals(quarantined.value.id, stored.id)
+        assertTrue(stored.remoteCopyJson.orEmpty().contains("entry-malformed"))
+        assertNull(database.dao().driveRawDocument(accountA.value, "conflict", quarantined.value.id))
+        assertNull(database.dao().entry(accountA.value, "entry-malformed"))
+    }
+
+    @Test
+    fun semanticallyEqualTombstonesWithDifferentLegacyIdsConvergeByTarget() = runTest {
+        val files = linkedMapOf(
+            MANIFEST_PATH to manifestJson(),
+            "tombstones/entry--entry-contract-a.json" to
+                tombstoneJson("entry", "entry-contract")
+                    .replace("del-entry-entry-contract", "delete-entry-entry-contract"),
+            "tombstones/entry--entry-contract-b.json" to
+                tombstoneJson("entry", "entry-contract")
+                    .replace("del-entry-entry-contract", "arbitrary-legacy-marker"),
+        )
+
+        val snapshot = DriveV1MetadataReader(FakeDriveRepository(files)).read(accountA)
+
+        assertEquals(1, snapshot.tombstones.size)
+        assertEquals("entry", snapshot.tombstones.single().value.entityKind)
+        assertEquals("entry-contract", snapshot.tombstones.single().value.entityId)
+    }
+
+    @Test
     fun newerRemoteTombstoneReusesExistingRoomIdentityForSameTarget() = runTest {
         val dao = database.dao()
         val local = TombstoneEntity(
@@ -670,6 +744,13 @@ class DriveReadOnlyMetadataSyncTest {
         assertEquals("2026-05-23T09:50:00.000Z", stored.deletedAt)
         assertEquals("dev-contract", stored.deletedByDeviceId)
         assertEquals("remote deletion", stored.reason)
+        val baseline = checkNotNull(dao.driveRawDocument(accountA.value, "tombstone", local.id))
+        assertNull(dao.driveRawDocument(accountA.value, "tombstone", "del-entry-entry-contract"))
+        assertEquals(local.id, DriveV1Json.decodeLossless<DriveV1Tombstone>(baseline.rawJson).value.id)
+
+        val serialized = DriveV1LocalSerializer.serializeTombstone(accountA, stored, baseline)
+        assertEquals("tombstones/entry--entry-contract.json", serialized.path)
+        assertEquals(local.id, DriveV1Json.decodeLossless<DriveV1Tombstone>(serialized.json).value.id)
     }
 
     @Test

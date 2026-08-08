@@ -14,6 +14,7 @@ import com.easylab.labnotebook.data.local.TombstoneEntity
 import com.easylab.labnotebook.data.local.deleteQueueEventId
 import com.easylab.labnotebook.data.local.upsertQueueEventId
 import com.easylab.labnotebook.sync.DriveV1LocalSerializer
+import com.easylab.labnotebook.sync.DriveV1NewEntryPathSelection
 import com.easylab.labnotebook.sync.DriveV1Paths
 import kotlinx.coroutines.test.runTest
 import org.junit.After
@@ -91,6 +92,11 @@ class LegacyWorkspaceImporterTest {
             entry,
             entryQueue,
             DriveV1Paths.entry(entry.dateBucket, entry.id),
+            newEntryPathSelection = DriveV1NewEntryPathSelection.fromCompleteSameDayInventory(
+                entityId = entry.id,
+                dateBucket = entry.dateBucket,
+                sameDayEntityIds = listOf(entry.id, "same-day-collision"),
+            ),
         )
         assertEquals(DriveV1Paths.entry(entry.dateBucket, entry.id), serialized.path)
 

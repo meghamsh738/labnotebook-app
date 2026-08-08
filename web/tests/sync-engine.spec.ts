@@ -2,6 +2,7 @@ import { expect, test } from '@playwright/test'
 import type { Attachment, DeviceProfile, Entry, TombstoneRecord } from '../src/domain/types'
 import { MemoryBlobStore } from '../src/sync/blobStore'
 import type { JournalSnapshot } from '../src/sync/dataCore'
+import { buildEntryEnvelope } from '../src/sync/dataCore'
 import { MemoryJournalStore, resolveSyncConflict, selectPreferredConflict, syncOnce } from '../src/sync/syncEngine'
 import { MockSyncProvider } from '../src/sync/syncProvider'
 
@@ -102,6 +103,98 @@ test('mock sync provider lets two devices converge on daily entries', async () =
 
   expect(desktopPull.pulledEntries).toBe(1)
   expect(Object.keys(finalDesktop.entries).sort()).toEqual(['entry-2026-05-23', 'entry-2026-05-24'])
+})
+
+test('malformed remote JSON is quarantined without overwriting the source path', async () => {
+  const provider = new MockSyncProvider()
+  const desktop = device('dev-desktop', 'Desktop')
+  const store = new MemoryJournalStore(snapshot(desktop))
+  await syncOnce({ provider, store, device: desktop })
+  await provider.signIn()
+  const malformed = '{"id":"entry-malformed","kind":"entry","payload":'
+  await provider.putRawJsonForTest('entries/2026-05-24.json', malformed)
+
+  await syncOnce({ provider, store, device: desktop })
+  const manifestBeforeQuarantine = await provider.loadManifest<unknown>()
+  await syncOnce({ provider, store, device: desktop })
+
+  const finalSnapshot = await store.getSnapshot()
+  expect(finalSnapshot.entries).toEqual({})
+  expect(finalSnapshot.conflicts).toMatchObject([{
+    id: 'conf-invalid-entry-entries/2026-05-24.json',
+    entityKind: 'entry',
+    entityId: 'entries/2026-05-24.json',
+    resolution: 'pending',
+    remoteCopy: {
+      path: 'entries/2026-05-24.json',
+      rawJson: malformed,
+    },
+  }])
+  await expect(provider.getJson('entries/2026-05-24.json')).rejects.toThrow()
+  await expect(provider.getJsonText('entries/2026-05-24.json'))
+    .resolves.toMatchObject({ text: malformed })
+  expect(finalSnapshot.conflicts.filter((conflict) => conflict.id === 'conf-invalid-entry-entries/2026-05-24.json')).toHaveLength(1)
+  expect(await provider.loadManifest()).toEqual(manifestBeforeQuarantine)
+  expect(await provider.listManagedFiles({ prefix: 'conflicts/' })).toEqual([])
+})
+
+test('a verified remote entry path is reused instead of creating a recomputed duplicate', async () => {
+  const provider = new MockSyncProvider()
+  const desktop = device('dev-preserve-path', 'Desktop')
+  const remoteEntry = entry({ id: 'entry-preserve-path', date: '2026-05-23', text: 'remote', deviceId: desktop.id })
+  const legacyPath = 'entries/verified-legacy-name.json'
+  await provider.signIn()
+  await provider.putJson(legacyPath, buildEntryEnvelope(remoteEntry, desktop))
+  const store = new MemoryJournalStore(snapshot(desktop))
+
+  await syncOnce({ provider, store, device: desktop })
+  const edited = await store.getSnapshot()
+  edited.entries[remoteEntry.id] = { ...edited.entries[remoteEntry.id], title: 'edited locally', lastEditedDatetime: '2026-05-23T10:00:00.000Z' }
+  await store.saveSnapshot(edited)
+  await syncOnce({ provider, store, device: desktop })
+
+  expect((await provider.listManagedFiles({ prefix: 'entries/' })).map((file) => file.path)).toEqual([legacyPath])
+  await expect(provider.getJson<{ payload: Entry }>(legacyPath)).resolves.toMatchObject({ value: { payload: { title: 'edited locally' } } })
+})
+
+test('equal-time divergent tombstones create a conflict and are not published', async () => {
+  const provider = new MockSyncProvider()
+  const desktop = device('dev-divergent-delete', 'Desktop')
+  const localSnapshot = snapshot(desktop)
+  localSnapshot.tombstones = [
+    {
+      id: 'legacy-delete-entry-target',
+      entityKind: 'entry',
+      entityId: 'entry-target',
+      deletedAt: '2026-05-23T12:00:00Z',
+      deletedByDeviceId: 'dev-a',
+      reason: 'first reason',
+    },
+    {
+      id: 'other-delete-entry-target',
+      entityKind: 'entry',
+      entityId: 'entry-target',
+      deletedAt: '2026-05-23T12:00:00.000Z',
+      deletedByDeviceId: 'dev-b',
+      reason: 'second reason',
+    },
+  ]
+  const store = new MemoryJournalStore(localSnapshot)
+
+  const result = await syncOnce({ provider, store, device: desktop })
+  const finalSnapshot = await store.getSnapshot()
+  const remoteTombstones = (await provider.listManagedFiles())
+    .filter((file) => file.path.startsWith('tombstones/'))
+
+  expect(result.pushedTombstones).toBe(0)
+  expect(remoteTombstones).toEqual([])
+  expect(finalSnapshot.tombstones).toHaveLength(1)
+  expect(finalSnapshot.conflicts).toMatchObject([{
+    id: 'conf-entry-entry-target',
+    entityKind: 'entry',
+    entityId: 'entry-target',
+    resolution: 'pending',
+  }])
 })
 
 test('manifest keeps its creation time and accumulates device history across syncs', async () => {
@@ -239,14 +332,14 @@ test('attachment blobs upload to Drive paths and restore into another device cac
   const remoteBlob = await provider.getBlob('attachments/2026-05-23/att-image-image.png')
   const pulled = await syncOnce({ provider, store: mobileStore, device: mobile, blobStore: mobileBlobStore })
   const mobileSnapshot = await mobileStore.getSnapshot()
-  const restoredBlob = await mobileBlobStore.get('cache-att-image')
+  const restoredBlob = await mobileBlobStore.get('attachment-att-image')
 
   expect(pushed.uploadedBlobs).toBe(1)
   expect(await remoteBlob?.text()).toBe('image bytes')
   expect(pulled.downloadedBlobs).toBe(1)
   expect(mobileSnapshot.attachments[0]).toMatchObject({
     id: 'att-image',
-    cacheKey: 'cache-att-image',
+    cacheKey: 'attachment-att-image',
     sha256: localBlob.sha256,
     syncStatus: 'synced',
   })
@@ -270,6 +363,10 @@ test('attachment blobs restore by Drive file id after remote metadata is renamed
   const metadataPath = 'attachments/2026-05-23/att-image-original.png.json'
   const remoteMetadata = await provider.getJson<{ payload: Attachment }>(metadataPath)
   expect(remoteMetadata?.value.payload.driveFileId).toBeTruthy()
+  const verifiedBlobPath = 'attachments/verified-archive/image-by-id.json'
+  const verifiedBlob = await provider.putBlob(verifiedBlobPath, new Blob(['stable image bytes'], { type: 'application/json' }), {
+    mimeType: 'application/json',
+  })
   await provider.putJson(metadataPath, {
     ...remoteMetadata!.value,
     updatedAt: '2026-05-23T12:00:00.000Z',
@@ -277,6 +374,7 @@ test('attachment blobs restore by Drive file id after remote metadata is renamed
       ...remoteMetadata!.value.payload,
       filename: 'renamed.png',
       storagePath: 'attachments/renamed.png',
+      driveFileId: verifiedBlob.id,
       updatedAt: '2026-05-23T12:00:00.000Z',
     },
   })
@@ -288,7 +386,20 @@ test('attachment blobs restore by Drive file id after remote metadata is renamed
 
   expect(pulled.downloadedBlobs).toBe(1)
   expect(mobileSnapshot.attachments[0]).toMatchObject({ filename: 'renamed.png', syncStatus: 'synced' })
-  expect(await mobileBlobStore.get('cache-att-image').then((blob) => blob?.text())).toBe('stable image bytes')
+  expect(await mobileBlobStore.get('attachment-att-image').then((blob) => blob?.text())).toBe('stable image bytes')
+
+  const replacement = await mobileBlobStore.put('attachment-att-image', new Blob(['replaced image bytes'], { type: 'application/json' }))
+  const locallyChanged = await mobileStore.getSnapshot()
+  locallyChanged.attachments[0] = {
+    ...locallyChanged.attachments[0],
+    sha256: replacement.sha256,
+    syncStatus: 'queued',
+    updatedAt: '2026-05-23T13:00:00.000Z',
+  }
+  await mobileStore.saveSnapshot(locallyChanged)
+  await syncOnce({ provider, store: mobileStore, device: mobile, blobStore: mobileBlobStore })
+  expect(await provider.getBlob(verifiedBlobPath).then((blob) => blob?.text())).toBe('replaced image bytes')
+  expect(await provider.getBlob('attachments/2026-05-23/att-image-renamed.png')).toBeNull()
 })
 
 test('a corrupt attachment cache is replaced from the Drive file id', async () => {
@@ -307,14 +418,14 @@ test('a corrupt attachment cache is replaced from the Drive file id', async () =
   await syncOnce({ provider, store: desktopStore, device: desktop, blobStore: desktopBlobStore })
 
   const mobileBlobStore = new MemoryBlobStore()
-  await mobileBlobStore.put('cache-att-image', new Blob(['corrupt cache bytes'], { type: 'image/png' }))
+  await mobileBlobStore.put('attachment-att-image', new Blob(['corrupt cache bytes'], { type: 'image/png' }))
   const mobileStore = new MemoryJournalStore(snapshot(mobile))
   const pulled = await syncOnce({ provider, store: mobileStore, device: mobile, blobStore: mobileBlobStore })
   const mobileSnapshot = await mobileStore.getSnapshot()
 
   expect(pulled.downloadedBlobs).toBe(1)
   expect(mobileSnapshot.attachments[0]).toMatchObject({ id: 'att-image', syncStatus: 'synced' })
-  expect(await mobileBlobStore.get('cache-att-image').then((blob) => blob?.text())).toBe('trusted image bytes')
+  expect(await mobileBlobStore.get('attachment-att-image').then((blob) => blob?.text())).toBe('trusted image bytes')
 })
 
 test('a synced attachment with a stale cached hash is verified and repaired from Drive', async () => {
@@ -335,22 +446,22 @@ test('a synced attachment with a stale cached hash is verified and repaired from
   await syncOnce({ provider, store: desktopStore, device: desktop, blobStore: desktopBlobStore })
   await syncOnce({ provider, store: mobileStore, device: mobile, blobStore: mobileBlobStore })
 
-  await mobileBlobStore.put('cache-att-stale', new Blob(['corrupt'], { type: 'text/plain' }))
-  const staleRecord = await mobileBlobStore.getRecord('cache-att-stale')
+  await mobileBlobStore.put('attachment-att-stale-cache', new Blob(['corrupt'], { type: 'text/plain' }))
+  const staleRecord = await mobileBlobStore.getRecord('attachment-att-stale-cache')
   expect(staleRecord).toBeTruthy()
-  mobileBlobStore.getRecord = async (key: string) => key === 'cache-att-stale' && staleRecord
+  mobileBlobStore.getRecord = async (key: string) => key === 'attachment-att-stale-cache' && staleRecord
     ? { ...staleRecord, sha256: trusted.sha256 }
     : undefined
 
   const result = await syncOnce({ provider, store: mobileStore, device: mobile, blobStore: mobileBlobStore })
-  const repaired = await mobileBlobStore.get('cache-att-stale')
+  const repaired = await mobileBlobStore.get('attachment-att-stale-cache')
   const finalMobile = await mobileStore.getSnapshot()
 
   expect(result.downloadedBlobs).toBe(1)
   expect(await repaired?.text()).toBe('trusted')
   expect(finalMobile.attachments[0]).toMatchObject({
     id: 'att-stale-cache',
-    cacheKey: 'cache-att-stale',
+    cacheKey: 'attachment-att-stale-cache',
     sha256: trusted.sha256,
     syncStatus: 'synced',
   })
@@ -962,7 +1073,7 @@ test('local-won remote-delete resolution revives an attachment without reopening
   }
   await desktopStore.saveSnapshot(revivedDesktop)
   await syncOnce({ provider, store: desktopStore, device: desktop })
-  const remoteAfterEdit = await provider.getJson<{ payload: Attachment }>('attachments/2026-05-23/att-resolve-delete-edited-after-revival.csv.json')
+  const remoteAfterEdit = await provider.getJson<{ payload: Attachment }>('attachments/2026-05-23/att-resolve-delete-baseline.csv.json')
   expect(remoteAfterEdit?.value.payload.filename).toBe('edited-after-revival.csv')
   await syncOnce({ provider, store: mobileStore, device: mobile })
   const finalMobile = await mobileStore.getSnapshot()

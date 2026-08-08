@@ -178,6 +178,10 @@ interface LabNotebookDao {
     @Query(
         "SELECT * FROM file_box_items AS item WHERE item.accountId = :accountId " +
             "AND item.status NOT IN ('attached', 'rejected', 'removed') " +
+            "AND NOT EXISTS (SELECT 1 FROM tombstones AS marker WHERE marker.accountId = item.accountId " +
+            "AND marker.entityKind = 'entry' AND marker.entityId = item.entryId) " +
+            "AND NOT EXISTS (SELECT 1 FROM tombstones AS marker WHERE marker.accountId = item.accountId " +
+            "AND marker.entityKind = 'attachment' AND marker.entityId = item.attachmentId) " +
             "AND (NOT EXISTS (SELECT 1 FROM tombstones AS marker WHERE marker.accountId = item.accountId " +
             "AND marker.entityKind = 'fileBoxItem' AND marker.entityId = item.id) " +
             "OR EXISTS (SELECT 1 FROM sync_queue AS pending WHERE pending.accountId = item.accountId " +
@@ -193,6 +197,12 @@ interface LabNotebookDao {
     @Query(
         "SELECT * FROM transfers AS transfer WHERE transfer.accountId = :accountId " +
             "AND transfer.status != 'removed' " +
+            "AND NOT EXISTS (SELECT 1 FROM tombstones AS marker WHERE marker.accountId = transfer.accountId " +
+            "AND marker.entityKind = 'entry' AND marker.entityId = transfer.entryId) " +
+            "AND NOT EXISTS (SELECT 1 FROM tombstones AS marker WHERE marker.accountId = transfer.accountId " +
+            "AND marker.entityKind = 'attachment' AND marker.entityId = transfer.attachmentId) " +
+            "AND NOT EXISTS (SELECT 1 FROM tombstones AS marker WHERE marker.accountId = transfer.accountId " +
+            "AND marker.entityKind = 'fileBoxItem' AND marker.entityId = transfer.fileBoxItemId) " +
             "AND (NOT EXISTS (SELECT 1 FROM tombstones AS marker WHERE marker.accountId = transfer.accountId " +
             "AND marker.entityKind = 'transfer' AND marker.entityId = transfer.id) " +
             "OR EXISTS (SELECT 1 FROM sync_queue AS pending WHERE pending.accountId = transfer.accountId " +
@@ -593,7 +603,7 @@ interface LabNotebookDao {
         reason: String?,
         baseVersion: Int? = null,
     ) {
-        val baseRecordId = "delete-$entityKind-$entityId"
+        val baseRecordId = "del-$entityKind-$entityId"
         val tombstoneId = tombstone(accountId, entityKind, entityId)?.id ?: baseRecordId
         deleteStalePendingUpserts(accountId, entityKind, entityId)
         upsertTombstone(

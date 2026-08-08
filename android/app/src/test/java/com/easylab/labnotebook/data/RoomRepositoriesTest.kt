@@ -492,6 +492,9 @@ class RoomRepositoriesTest {
                 ),
                 dao.tombstones("account-a").map { it.entityKind to it.entityId }.toSet(),
             )
+            assertTrue(dao.tombstones("account-a").all {
+                it.id == "del-${it.entityKind}-${it.entityId}"
+            })
             assertEquals(
                 setOf(
                     "entry" to "entry-1",

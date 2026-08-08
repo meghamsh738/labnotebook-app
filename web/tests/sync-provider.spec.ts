@@ -9,13 +9,47 @@ import {
 } from '../src/sync/connectedSync'
 import type { JournalSnapshot } from '../src/sync/dataCore'
 import { MemoryJournalStore, syncOnce } from '../src/sync/syncEngine'
-import { GoogleDriveSyncProvider } from '../src/sync/syncProvider'
+import {
+  GoogleDriveSyncProvider,
+  MockSyncProvider,
+  WritePreconditionError,
+} from '../src/sync/syncProvider'
 
 type FakeDriveNode = DriveFile & {
   parentId?: string
   json?: unknown
   blob?: Blob
 }
+
+test('Mock provider enforces exact file, version, and ETag preconditions', async () => {
+  const provider = new MockSyncProvider()
+  await provider.signIn()
+  const created = await provider.putJson('entries/2026-05-24.json', { title: 'base' })
+  expect(provider.supportsVersionedCas).toBe(true)
+  const precondition = {
+    kind: 'must-match' as const,
+    fileId: created.id,
+    version: created.version!,
+    etag: created.etag!,
+  }
+
+  const updated = await provider.putJson(
+    created.path,
+    { title: 'updated' },
+    { precondition },
+  )
+  expect(updated.version).not.toBe(created.version)
+  await expect(provider.putJson(
+    created.path,
+    { title: 'stale' },
+    { precondition },
+  )).rejects.toBeInstanceOf(WritePreconditionError)
+  await expect(provider.putJson(
+    'entries/missing.json',
+    { title: 'missing' },
+    { precondition },
+  )).rejects.toBeInstanceOf(WritePreconditionError)
+})
 
 class FakeFolderDriveClient implements FolderDriveClient {
   readonly kind = 'google-drive' as const
@@ -436,69 +470,38 @@ test('GoogleDriveSyncProvider accepts a renamed saved folder with a valid Drive 
   expect(workspace.id).toBe('renamed-root-folder')
 })
 
-test('GoogleDriveSyncProvider keeps a linked workspace when its configured display name changes', async () => {
+test('GoogleDriveSyncProvider blocks sync before sign-in or workspace mutation without CAS', async () => {
   const client = new FakeFolderDriveClient()
-  const initial = new GoogleDriveSyncProvider({
-    clientId: 'test-client-id',
-    client,
-    folderName: 'Original notebook',
-  })
+  const provider = new GoogleDriveSyncProvider({ clientId: 'test-client-id', client, folderName: 'Original notebook' })
   const testDevice = device()
   const store = new MemoryJournalStore(journalSnapshot(testDevice))
 
-  await syncOnce({ provider: initial, store, device: testDevice })
-  const initialWorkspace = await initial.ensureWorkspace()
-
-  const renamed = new GoogleDriveSyncProvider({
-    clientId: 'test-client-id',
-    client,
-    folderName: 'Renamed notebook',
-    folderId: initialWorkspace.id,
-  })
-  await syncOnce({ provider: renamed, store, device: testDevice })
-  const renamedWorkspace = await renamed.ensureWorkspace()
-
-  expect(renamedWorkspace.id).toBe(initialWorkspace.id)
-  expect(client.rootFolders('Original notebook')).toHaveLength(1)
-  expect(client.rootFolders('Renamed notebook')).toHaveLength(0)
-  await expect(renamed.loadManifest<{ rootFolderName: string }>()).resolves.toMatchObject({
-    rootFolderName: 'Renamed notebook',
-  })
+  await expect(syncOnce({ provider, store, device: testDevice })).rejects.toThrow(/writes are disabled.*compare-and-swap/i)
+  expect(client.rootFolders('Original notebook')).toHaveLength(0)
 })
 
-test('a custom-name workspace is reused on a second provider instance', async () => {
+test('GoogleDriveSyncProvider remains disabled for custom workspace names', async () => {
   const client = new FakeFolderDriveClient()
   const testDevice = device()
   const store = new MemoryJournalStore(journalSnapshot(testDevice))
 
-  await syncOnce({
-    provider: new GoogleDriveSyncProvider({ clientId: 'test-client-id', client, folderName: 'Custom study' }),
-    store,
-    device: testDevice,
-  })
-  await syncOnce({
-    provider: new GoogleDriveSyncProvider({ clientId: 'test-client-id', client, folderName: 'Custom study' }),
-    store,
-    device: testDevice,
-  })
+  await expect(syncOnce({
+    provider: new GoogleDriveSyncProvider({ clientId: 'test-client-id', client, folderName: 'Custom study' }), store, device: testDevice,
+  })).rejects.toThrow(/writes are disabled.*compare-and-swap/i)
 
-  expect(client.rootFolders('Custom study')).toHaveLength(1)
+  expect(client.rootFolders('Custom study')).toHaveLength(0)
 })
 
 for (const interruptedUpload of ['dev-test.json', '2026-05-23.json']) {
-  test(`first sync reuses its workspace after ${interruptedUpload} upload is interrupted`, async () => {
+  test(`disabled Google sync does not reach the ${interruptedUpload} upload path`, async () => {
     const client = new FakeFolderDriveClient()
     const testDevice = device()
     const store = new MemoryJournalStore(journalSnapshot(testDevice))
     const firstProvider = new GoogleDriveSyncProvider({ clientId: 'test-client-id', client })
     client.failNextJsonUploadName = interruptedUpload
 
-    await expect(syncOnce({ provider: firstProvider, store, device: testDevice })).rejects.toThrow(/injected json upload failure/i)
-    expect(client.rootFolders('Easylab Lab Notebook')).toHaveLength(1)
-
-    const retryProvider = new GoogleDriveSyncProvider({ clientId: 'test-client-id', client })
-    await expect(syncOnce({ provider: retryProvider, store, device: testDevice })).resolves.toBeTruthy()
-    expect(client.rootFolders('Easylab Lab Notebook')).toHaveLength(1)
+    await expect(syncOnce({ provider: firstProvider, store, device: testDevice })).rejects.toThrow(/writes are disabled.*compare-and-swap/i)
+    expect(client.rootFolders('Easylab Lab Notebook')).toHaveLength(0)
   })
 }
 

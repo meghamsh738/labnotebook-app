@@ -16,6 +16,8 @@ import {
   buildAttachmentEnvelope,
   buildEntryDriveFileName,
   buildEntryEnvelope,
+  normalizeTombstonesByTarget,
+  projectFileBoxPayload,
   safeDriveSegment,
   type JournalSnapshot,
 } from './dataCore'
@@ -29,6 +31,7 @@ import {
   validateManifest,
   validateTombstone,
   validateTransferEnvelope,
+  type ValidationResult,
 } from './schemas'
 import type { BlobStore } from './blobStore'
 import {
@@ -43,6 +46,10 @@ export type SyncEngineMeta = {
   attachmentHashes: Record<string, string>
   fileBoxHashes: Record<string, string>
   transferHashes: Record<string, string>
+  /** Paths verified while reading Drive. Existing records must never be relocated implicitly. */
+  entryPaths?: Record<string, string>
+  attachmentPaths?: Record<string, string>
+  attachmentBlobPaths?: Record<string, string>
   lastSyncedAt?: string
   driveChangesToken?: string
 }
@@ -398,6 +405,25 @@ function conflictRemoteTombstone(conflict: SyncConflict) {
   return result.ok ? result.value : undefined
 }
 
+function divergentTombstoneTarget(conflict: SyncConflict) {
+  if (conflict.resolution !== 'pending') return undefined
+  if (typeof conflict.localCopy !== 'object' || conflict.localCopy === null || Array.isArray(conflict.localCopy)) {
+    return undefined
+  }
+  const localResult = validateTombstone((conflict.localCopy as { tombstone?: unknown }).tombstone)
+  const remote = conflictRemoteTombstone(conflict)
+  if (!localResult.ok || !remote) return undefined
+  const local = localResult.value
+  if (
+    local.entityKind !== remote.entityKind
+    || local.entityId !== remote.entityId
+    || Date.parse(local.deletedAt) !== Date.parse(remote.deletedAt)
+  ) {
+    return undefined
+  }
+  return `${local.entityKind}\u0000${local.entityId}`
+}
+
 function matchingResolvedConflict(
   conflicts: SyncConflict[],
   entityKind: SyncConflict['entityKind'],
@@ -474,7 +500,7 @@ export function buildFileBoxEnvelope(item: FileBoxItem, device: DeviceProfile): 
     version: 1,
     updatedAt: item.updatedAt || nowIso(),
     updatedByDeviceId: device.id,
-    payload: item,
+    payload: projectFileBoxPayload(item),
   }
 }
 
@@ -716,14 +742,52 @@ export async function syncOnce(params: {
   downloadRemoteBlobs?: boolean
 }): Promise<SyncEngineResult> {
   const { provider, store, device, blobStore, downloadRemoteBlobs = true } = params
+  if (provider.supportsVersionedCas !== true) {
+    throw new Error('Drive v1 writes are disabled until the provider supports versioned compare-and-swap.')
+  }
   await provider.signIn()
   const workspace = await provider.ensureWorkspace()
   let snapshot = await store.getSnapshot()
+  const normalizedLocalTombstones = normalizeTombstonesByTarget(snapshot.tombstones)
+  snapshot.tombstones = normalizedLocalTombstones.tombstones
+  for (const conflict of normalizedLocalTombstones.conflicts) {
+    snapshot.conflicts = upsertConflict(snapshot.conflicts, conflict)
+  }
   const meta = { ...defaultMeta(), ...(await store.getMeta()) }
   meta.fileBoxHashes = meta.fileBoxHashes ?? {}
   meta.transferHashes = meta.transferHashes ?? {}
+  meta.entryPaths = meta.entryPaths ?? {}
+  meta.attachmentPaths = meta.attachmentPaths ?? {}
+  meta.attachmentBlobPaths = meta.attachmentBlobPaths ?? {}
   const manifestResult = validateManifest(await provider.loadManifest<unknown>())
   let previousManifest: SyncManifest | undefined = manifestResult.ok ? manifestResult.value : undefined
+
+  // Validate the complete remote snapshot before making any remote mutation.  A malformed
+  // tombstone cannot safely be ignored because its unknown target could otherwise resurrect.
+  const [remoteConflicts, remoteTombstones, remoteEntries, remoteAttachments, remoteFileBoxItems, remoteTransfers] = await Promise.all([
+    readRemoteConflicts(provider, device.id),
+    readRemoteTombstones(provider, device.id),
+    readRemoteEntries(provider, device.id),
+    readRemoteAttachments(provider, device.id),
+    readRemoteFileBoxItems(provider, device.id),
+    readRemoteTransfers(provider, device.id),
+  ])
+  const invalidRemoteRecords = [
+    ...remoteConflicts.invalid,
+    ...remoteTombstones.invalid,
+    ...remoteEntries.invalid,
+    ...remoteAttachments.invalid,
+    ...remoteFileBoxItems.invalid,
+    ...remoteTransfers.invalid,
+  ]
+  if (invalidRemoteRecords.length > 0) {
+    for (const conflict of invalidRemoteRecords) snapshot.conflicts = upsertConflict(snapshot.conflicts, conflict)
+    await saveStoreState(store, snapshot, meta)
+    return {
+      pulledEntries: 0, pushedEntries: 0, pulledAttachments: 0, pushedAttachments: 0,
+      uploadedBlobs: 0, downloadedBlobs: 0, pushedTombstones: 0, conflicts: snapshot.conflicts.length,
+    }
+  }
   if (!previousManifest) {
     previousManifest = createManifest({
       device,
@@ -746,16 +810,13 @@ export async function syncOnce(params: {
   let pushedTombstones = 0
   let conflicts = snapshot.conflicts.length
 
-  const remoteConflicts = await readRemoteConflicts(provider, device.id)
   for (const remoteConflict of remoteConflicts.valid) {
     const localConflict = snapshot.conflicts.find((conflict) => conflict.id === remoteConflict.id)
     const preferred = localConflict ? selectPreferredConflict(localConflict, remoteConflict) : remoteConflict
     if (!localConflict || preferred === remoteConflict) snapshot.conflicts = upsertConflict(snapshot.conflicts, remoteConflict)
   }
-  snapshot.conflicts = [...snapshot.conflicts, ...remoteConflicts.invalid]
 
   const locallyWonRemoteDeletes = new Map<string, string>()
-  const remoteTombstones = await readRemoteTombstones(provider, device.id)
   for (const tombstone of remoteTombstones.valid) {
     const resolvedDeleteConflict = snapshot.conflicts.find((conflict) => {
       const resolvedTombstone = conflictRemoteTombstone(conflict)
@@ -851,11 +912,12 @@ export async function syncOnce(params: {
         }
       }
     }
-    if (!snapshot.tombstones.some((existing) => existing.id === tombstone.id)) {
-      snapshot.tombstones.push(tombstone)
+    const mergedTombstones = normalizeTombstonesByTarget([...snapshot.tombstones, tombstone])
+    snapshot.tombstones = mergedTombstones.tombstones
+    for (const conflict of mergedTombstones.conflicts) {
+      snapshot.conflicts = upsertConflict(snapshot.conflicts, conflict)
     }
   }
-  snapshot.conflicts = [...snapshot.conflicts, ...remoteTombstones.invalid]
   snapshot = applyTombstonesToSnapshot(snapshot, snapshot.tombstones)
 
   const tombstonedEntries = new Set(snapshot.tombstones.filter((tombstone) => tombstone.entityKind === 'entry').map((tombstone) => tombstone.entityId))
@@ -863,10 +925,9 @@ export async function syncOnce(params: {
   const tombstonedFileBoxItems = new Set(snapshot.tombstones.filter((tombstone) => tombstone.entityKind === 'fileBoxItem').map((tombstone) => tombstone.entityId))
   const tombstonedTransfers = new Set(snapshot.tombstones.filter((tombstone) => tombstone.entityKind === 'transfer').map((tombstone) => tombstone.entityId))
 
-  const remoteEntries = await readRemoteEntries(provider, device.id)
-  snapshot.conflicts = [...snapshot.conflicts, ...remoteEntries.invalid]
   for (const remoteEnvelope of remoteEntries.valid) {
     const remoteEntry = remoteEnvelope.payload
+    meta.entryPaths[remoteEntry.id] = remoteEnvelope.remotePath
     const resolvedDeleteAt = locallyWonRemoteDeletes.get(`entry:${remoteEntry.id}`)
     if (tombstonedEntries.has(remoteEntry.id)
       || (resolvedDeleteAt && Date.parse(remoteEnvelope.updatedAt) <= Date.parse(resolvedDeleteAt))) continue
@@ -922,13 +983,17 @@ export async function syncOnce(params: {
     }))
   }
 
-  const remoteAttachments = await readRemoteAttachments(provider, device.id)
-  snapshot.conflicts = [...snapshot.conflicts, ...remoteAttachments.invalid]
   for (const remoteEnvelope of remoteAttachments.valid) {
     const remoteAttachment = remoteEnvelope.payload
+    meta.attachmentPaths[remoteAttachment.id] = remoteEnvelope.remotePath
+    if (remoteEnvelope.remoteBlobPath) meta.attachmentBlobPaths[remoteAttachment.id] = remoteEnvelope.remoteBlobPath
+    else delete meta.attachmentBlobPaths[remoteAttachment.id]
     const resolvedDeleteAt = locallyWonRemoteDeletes.get(`attachment:${remoteAttachment.id}`)
     if (tombstonedAttachments.has(remoteAttachment.id) || tombstonedEntries.has(remoteAttachment.entryId)
-      || (resolvedDeleteAt && Date.parse(remoteEnvelope.updatedAt) <= Date.parse(resolvedDeleteAt))) continue
+      || (resolvedDeleteAt && Date.parse(remoteEnvelope.updatedAt) <= Date.parse(resolvedDeleteAt))) {
+      tombstonedAttachments.add(remoteAttachment.id)
+      continue
+    }
     const localIndex = snapshot.attachments.findIndex((attachment) => attachment.id === remoteAttachment.id)
     const remoteHash = await attachmentMetadataHash(remoteAttachment)
     const baseHash = meta.attachmentHashes[remoteAttachment.id]
@@ -998,13 +1063,14 @@ export async function syncOnce(params: {
     }))
   }
 
-  const remoteFileBoxItems = await readRemoteFileBoxItems(provider, device.id)
-  snapshot.conflicts = [...snapshot.conflicts, ...remoteFileBoxItems.invalid]
   for (const remoteEnvelope of remoteFileBoxItems.valid) {
     const remoteItem = remoteEnvelope.payload
     const resolvedDeleteAt = locallyWonRemoteDeletes.get(`fileBoxItem:${remoteItem.id}`)
     if (tombstonedFileBoxItems.has(remoteItem.id) || tombstonedEntries.has(remoteItem.entryId) || tombstonedAttachments.has(remoteItem.attachmentId || '')
-      || (resolvedDeleteAt && Date.parse(remoteEnvelope.updatedAt) <= Date.parse(resolvedDeleteAt))) continue
+      || (resolvedDeleteAt && Date.parse(remoteEnvelope.updatedAt) <= Date.parse(resolvedDeleteAt))) {
+      tombstonedFileBoxItems.add(remoteItem.id)
+      continue
+    }
     const localIndex = snapshot.fileBoxItems.findIndex((item) => item.id === remoteItem.id)
     const remoteHash = await fileBoxMetadataHash(remoteItem)
     const baseHash = meta.fileBoxHashes[remoteItem.id]
@@ -1053,12 +1119,11 @@ export async function syncOnce(params: {
     }))
   }
 
-  const remoteTransfers = await readRemoteTransfers(provider, device.id)
-  snapshot.conflicts = [...snapshot.conflicts, ...remoteTransfers.invalid]
   for (const remoteEnvelope of remoteTransfers.valid) {
     const remoteTransfer = remoteEnvelope.payload
     const resolvedDeleteAt = locallyWonRemoteDeletes.get(`transfer:${remoteTransfer.id}`)
-    if (tombstonedTransfers.has(remoteTransfer.id) || tombstonedEntries.has(remoteTransfer.entryId || '') || tombstonedAttachments.has(remoteTransfer.attachmentId || '')
+    if (tombstonedTransfers.has(remoteTransfer.id) || tombstonedFileBoxItems.has(remoteTransfer.fileBoxItemId || '')
+      || tombstonedEntries.has(remoteTransfer.entryId || '') || tombstonedAttachments.has(remoteTransfer.attachmentId || '')
       || (resolvedDeleteAt && Date.parse(remoteEnvelope.updatedAt) <= Date.parse(resolvedDeleteAt))) continue
     const localIndex = snapshot.transfers.findIndex((transfer) => transfer.id === remoteTransfer.id)
     const remoteHash = await transferMetadataHash(remoteTransfer)
@@ -1108,7 +1173,11 @@ export async function syncOnce(params: {
     }))
   }
 
+  const blockedTombstoneTargets = new Set(
+    snapshot.conflicts.map(divergentTombstoneTarget).filter((target): target is string => Boolean(target)),
+  )
   for (const tombstone of snapshot.tombstones) {
+    if (blockedTombstoneTargets.has(`${tombstone.entityKind}\u0000${tombstone.entityId}`)) continue
     await provider.putJson(tombstonePath(tombstone), tombstone, {
       appProperties: { entityType: 'tombstone', entityId: tombstone.entityId },
     })
@@ -1122,7 +1191,13 @@ export async function syncOnce(params: {
 
   for (const attachment of snapshot.attachments) {
     if (openConflictAttachments.has(attachment.id)) continue
-    const uploadedBlob = await uploadAttachmentBlob(attachment, snapshot.entries, provider, blobStore)
+    const uploadedBlob = await uploadAttachmentBlob(
+      attachment,
+      snapshot.entries,
+      provider,
+      blobStore,
+      meta.attachmentBlobPaths[attachment.id],
+    )
     if (uploadedBlob.uploaded) uploadedBlobs += 1
     const nextAttachment = uploadedBlob.attachment
     const attachmentIndex = snapshot.attachments.findIndex((candidate) => candidate.id === nextAttachment.id)
@@ -1130,7 +1205,7 @@ export async function syncOnce(params: {
     if (nextAttachment.syncStatus === 'failed') continue
     const hash = await attachmentMetadataHash(nextAttachment)
     if (hash !== meta.attachmentHashes[attachment.id]) {
-      await provider.putJson(attachmentMetadataPath(nextAttachment, snapshot.entries), buildAttachmentEnvelope({
+      await provider.putJson(meta.attachmentPaths[nextAttachment.id] ?? attachmentMetadataPath(nextAttachment, snapshot.entries), buildAttachmentEnvelope({
         ...nextAttachment,
         syncStatus: 'synced',
       }, device), {
@@ -1147,7 +1222,7 @@ export async function syncOnce(params: {
     const hash = await entryContentHash(entry)
     if (hash !== meta.entryHashes[entry.id]) {
       const envelope = buildEntryEnvelope({ ...entry, syncStatus: 'synced', updatedByDeviceId: device.id }, device)
-      await provider.putJson(entryPath(entry, snapshot.entries), envelope, {
+      await provider.putJson(meta.entryPaths[entry.id] ?? entryPath(entry, snapshot.entries), envelope, {
         appProperties: { entityType: 'entry', entityId: entry.id, contentHash: hash },
       })
       meta.entryHashes[entry.id] = hash
@@ -1173,7 +1248,9 @@ export async function syncOnce(params: {
   }
 
   for (const transfer of snapshot.transfers) {
-    if (openConflictTransfers.has(transfer.id) || tombstonedTransfers.has(transfer.id) || tombstonedEntries.has(transfer.entryId || '') || tombstonedAttachments.has(transfer.attachmentId || '')) continue
+    if (openConflictTransfers.has(transfer.id) || tombstonedTransfers.has(transfer.id)
+      || tombstonedFileBoxItems.has(transfer.fileBoxItemId || '')
+      || tombstonedEntries.has(transfer.entryId || '') || tombstonedAttachments.has(transfer.attachmentId || '')) continue
     const hash = await transferMetadataHash(transfer)
     if (hash !== meta.transferHashes[transfer.id]) {
       await provider.putJson(transferPath(transfer), buildTransferEnvelope(transfer, device), {
@@ -1207,7 +1284,8 @@ async function uploadAttachmentBlob(
   attachment: Attachment,
   entries: Record<string, Entry>,
   provider: SyncProvider,
-  blobStore?: BlobStore
+  blobStore?: BlobStore,
+  verifiedBlobPath?: string,
 ): Promise<{ attachment: Attachment; uploaded: boolean }> {
   if (!blobStore) return { attachment, uploaded: false }
   const key = attachmentBlobKey(attachment)
@@ -1234,7 +1312,7 @@ async function uploadAttachmentBlob(
     return { attachment: { ...attachment, syncStatus: 'failed' }, uploaded: false }
   }
   const actualSha256 = verified.actualSha256
-  const remote = await provider.putBlob(attachmentBlobPath(attachment, entries), record.blob, {
+  const remote = await provider.putBlob(verifiedBlobPath ?? attachmentBlobPath(attachment, entries), record.blob, {
     mimeType: attachment.contentType || attachment.mimeType || record.mimeType,
     sha256: actualSha256,
     byteSize: record.size,
@@ -1312,8 +1390,8 @@ export async function downloadAttachmentBlob(params: {
   return restoreRemoteAttachmentBlob(params.attachment, params.entries, params.provider, params.blobStore, true)
 }
 
-function newestEnvelopePerId<T>(envelopes: SyncEntityEnvelope<T>[]) {
-  const newest = new Map<string, SyncEntityEnvelope<T>>()
+function newestEnvelopePerId<T extends SyncEntityEnvelope<unknown>>(envelopes: T[]) {
+  const newest = new Map<string, T>()
   for (const envelope of envelopes) {
     const current = newest.get(envelope.id)
     if (!current || Date.parse(envelope.updatedAt) >= Date.parse(current.updatedAt)) newest.set(envelope.id, envelope)
@@ -1321,78 +1399,83 @@ function newestEnvelopePerId<T>(envelopes: SyncEntityEnvelope<T>[]) {
   return [...newest.values()]
 }
 
+type RemoteEnvelope<T> = SyncEntityEnvelope<T> & { remotePath: string }
+
+function remoteEnvelope<T>(path: string, envelope: SyncEntityEnvelope<T>): RemoteEnvelope<T> {
+  return { ...envelope, remotePath: path }
+}
+
 async function readRemoteEntries(provider: SyncProvider, deviceId: string) {
   const files = await provider.listManagedFiles({ prefix: 'entries/' })
-  const valid: SyncEntityEnvelope<Entry>[] = []
+  const valid: RemoteEnvelope<Entry>[] = []
   const invalid: SyncConflict[] = []
   for (const file of files) {
-    const remote = await provider.getJson<unknown>(file.path)
-    const result = validateEntryEnvelope(remote?.value)
-    if (result.ok) valid.push(result.value)
-    else invalid.push(buildInvalidRemoteJsonConflict({
-      entityKind: 'entry',
-      entityId: file.path,
-      deviceId,
-      error: result.error,
-      remoteCopy: remote?.value,
-    }))
+    const result = await readValidatedRemoteJson(provider, file, deviceId, 'entry', validateEntryEnvelope)
+    if (result.ok) valid.push(remoteEnvelope(file.path, result.value))
+    else invalid.push(result.conflict)
   }
   return { valid: newestEnvelopePerId(valid), invalid }
 }
 
 async function readRemoteAttachments(provider: SyncProvider, deviceId: string) {
-  const files = (await provider.listManagedFiles({ prefix: 'attachments/' })).filter((file) => file.path.endsWith('.json'))
-  const valid: SyncEntityEnvelope<Attachment>[] = []
+  const allFiles = await provider.listManagedFiles({ prefix: 'attachments/' })
+  const files = allFiles.filter((file) => file.path.endsWith('.json'))
+  const filesById = new Map(allFiles.map((file) => [file.id, file]))
+  const valid: (RemoteEnvelope<Attachment> & { remoteBlobPath?: string })[] = []
   const invalid: SyncConflict[] = []
-  for (const file of files) {
-    const remote = await provider.getJson<unknown>(file.path)
-    const result = validateAttachmentEnvelope(remote?.value)
-    if (result.ok) valid.push(result.value)
-    else invalid.push(buildInvalidRemoteJsonConflict({
-      entityKind: 'attachment',
-      entityId: file.path,
-      deviceId,
-      error: result.error,
-      remoteCopy: remote?.value,
-    }))
+  const results = await Promise.all(files.map(async (file) => ({
+    file,
+    result: await readValidatedRemoteJson(provider, file, deviceId, 'attachment', validateAttachmentEnvelope),
+  })))
+  const referencedBlobIds = new Set(results.flatMap(({ result }) =>
+    result.ok && result.value.payload.driveFileId ? [result.value.payload.driveFileId] : [],
+  ))
+  for (const { file, result } of results) {
+    if (!result.ok) {
+      // A blob may itself be a JSON file.  Its Drive file identity, not its suffix,
+      // distinguishes it from a malformed metadata sidecar.
+      if (referencedBlobIds.has(file.id)) continue
+      invalid.push(result.conflict)
+      continue
+    }
+    const attachment = result.value.payload
+    const blobFile = attachment.driveFileId ? filesById.get(attachment.driveFileId) : undefined
+    if (attachment.driveFileId && (!blobFile || blobFile.id === file.id)) {
+      invalid.push(buildInvalidRemoteJsonConflict({
+        entityKind: 'attachment',
+        entityId: file.path,
+        deviceId,
+        error: 'Attachment metadata references a blob that is not present in the verified Drive listing.',
+        remoteCopy: result.value,
+        detectedAt: file.updatedAt,
+      }))
+      continue
+    }
+    valid.push({ ...remoteEnvelope(file.path, result.value), remoteBlobPath: blobFile?.path })
   }
   return { valid: newestEnvelopePerId(valid), invalid }
 }
 
 async function readRemoteFileBoxItems(provider: SyncProvider, deviceId: string) {
   const files = await provider.listManagedFiles({ prefix: 'filebox/' })
-  const valid: SyncEntityEnvelope<FileBoxItem>[] = []
+  const valid: RemoteEnvelope<FileBoxItem>[] = []
   const invalid: SyncConflict[] = []
   for (const file of files) {
-    const remote = await provider.getJson<unknown>(file.path)
-    const result = validateFileBoxEnvelope(remote?.value)
-    if (result.ok) valid.push(result.value)
-    else invalid.push(buildInvalidRemoteJsonConflict({
-      entityKind: 'fileBoxItem',
-      entityId: file.path,
-      deviceId,
-      error: result.error,
-      remoteCopy: remote?.value,
-    }))
+    const result = await readValidatedRemoteJson(provider, file, deviceId, 'fileBoxItem', validateFileBoxEnvelope)
+    if (result.ok) valid.push(remoteEnvelope(file.path, result.value))
+    else invalid.push(result.conflict)
   }
   return { valid: newestEnvelopePerId(valid), invalid }
 }
 
 async function readRemoteTransfers(provider: SyncProvider, deviceId: string) {
   const files = await provider.listManagedFiles({ prefix: 'transfers/' })
-  const valid: SyncEntityEnvelope<TransferRecord>[] = []
+  const valid: RemoteEnvelope<TransferRecord>[] = []
   const invalid: SyncConflict[] = []
   for (const file of files) {
-    const remote = await provider.getJson<unknown>(file.path)
-    const result = validateTransferEnvelope(remote?.value)
-    if (result.ok) valid.push(result.value)
-    else invalid.push(buildInvalidRemoteJsonConflict({
-      entityKind: 'transfer',
-      entityId: file.path,
-      deviceId,
-      error: result.error,
-      remoteCopy: remote?.value,
-    }))
+    const result = await readValidatedRemoteJson(provider, file, deviceId, 'transfer', validateTransferEnvelope)
+    if (result.ok) valid.push(remoteEnvelope(file.path, result.value))
+    else invalid.push(result.conflict)
   }
   return { valid: newestEnvelopePerId(valid), invalid }
 }
@@ -1402,26 +1485,23 @@ async function readRemoteConflicts(provider: SyncProvider, deviceId: string) {
   const valid: SyncConflict[] = []
   const invalid: SyncConflict[] = []
   for (const file of files) {
-    const remote = await provider.getJson<unknown>(file.path)
-    const result = validateConflict(remote?.value)
-    if (result.ok) {
-      valid.push(result.value)
-      continue
-    }
-    const remoteKind = remote?.value && typeof remote.value === 'object' && !Array.isArray(remote.value)
-      ? (remote.value as { entityKind?: unknown }).entityKind
-      : undefined
-    const entityKind = remoteKind === 'attachment' || remoteKind === 'fileBoxItem' || remoteKind === 'transfer'
-      || remoteKind === 'device' || remoteKind === 'tombstone'
-      ? remoteKind
-      : 'entry'
-    invalid.push(buildInvalidRemoteJsonConflict({
-      entityKind,
-      entityId: file.path,
+    const result = await readValidatedRemoteJson(
+      provider,
+      file,
       deviceId,
-      error: result.error,
-      remoteCopy: remote?.value,
-    }))
+      (value) => {
+        const remoteKind = value && typeof value === 'object' && !Array.isArray(value)
+          ? (value as { entityKind?: unknown }).entityKind
+          : undefined
+        return remoteKind === 'attachment' || remoteKind === 'fileBoxItem' || remoteKind === 'transfer'
+          || remoteKind === 'device' || remoteKind === 'tombstone'
+          ? remoteKind
+          : 'entry'
+      },
+      validateConflict,
+    )
+    if (result.ok) valid.push(result.value)
+    else invalid.push(result.conflict)
   }
   const preferred = new Map<string, SyncConflict>()
   for (const conflict of valid) {
@@ -1436,16 +1516,65 @@ async function readRemoteTombstones(provider: SyncProvider, deviceId: string) {
   const valid: TombstoneRecord[] = []
   const invalid: SyncConflict[] = []
   for (const file of files) {
-    const remote = await provider.getJson<unknown>(file.path)
-    const result = validateTombstone(remote?.value)
+    const result = await readValidatedRemoteJson(provider, file, deviceId, 'tombstone', validateTombstone)
     if (result.ok) valid.push(result.value)
-    else invalid.push(buildInvalidRemoteJsonConflict({
-      entityKind: 'tombstone',
-      entityId: file.path,
-      deviceId,
-      error: result.error,
-      remoteCopy: remote?.value,
-    }))
+    else invalid.push(result.conflict)
   }
-  return { valid, invalid }
+  const normalized = normalizeTombstonesByTarget(valid)
+  return { valid: normalized.tombstones, invalid: [...invalid, ...normalized.conflicts] }
+}
+
+async function readValidatedRemoteJson<T>(
+  provider: SyncProvider,
+  file: { path: string; updatedAt: string },
+  deviceId: string,
+  invalidEntityKind: SyncConflict['entityKind'] | ((value: unknown) => SyncConflict['entityKind']),
+  validate: (value: unknown) => ValidationResult<T>,
+): Promise<{ ok: true; value: T } | { ok: false; conflict: SyncConflict }> {
+  let remoteValue: unknown
+  try {
+    remoteValue = (await provider.getJson<unknown>(file.path))?.value
+    const result = validate(remoteValue)
+    if (result.ok) return result
+    const entityKind = typeof invalidEntityKind === 'function'
+      ? invalidEntityKind(remoteValue)
+      : invalidEntityKind
+    return {
+      ok: false,
+      conflict: buildInvalidRemoteJsonConflict({
+        entityKind,
+        entityId: file.path,
+        deviceId,
+        error: result.error,
+        remoteCopy: remoteValue,
+        detectedAt: file.updatedAt,
+      }),
+    }
+  } catch (error) {
+    let raw: Awaited<ReturnType<NonNullable<SyncProvider['getJsonText']>>> = null
+    if (provider.getJsonText) {
+      try {
+        raw = await provider.getJsonText(file.path)
+      } catch {
+        raw = null
+      }
+    }
+    const entityKind = typeof invalidEntityKind === 'function'
+      ? invalidEntityKind(undefined)
+      : invalidEntityKind
+    return {
+      ok: false,
+      conflict: buildInvalidRemoteJsonConflict({
+        entityKind,
+        entityId: file.path,
+        deviceId,
+        error: error instanceof Error ? error.message : 'Remote JSON could not be parsed.',
+        remoteCopy: {
+          path: file.path,
+          rawJson: raw?.text,
+        },
+        detectedAt: file.updatedAt,
+      }),
+    }
+  }
 }

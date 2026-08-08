@@ -296,8 +296,9 @@ export function buildInvalidRemoteJsonConflict(params: {
   deviceId: string
   error: string
   remoteCopy: unknown
+  detectedAt?: string
 }): SyncConflict {
-  const now = new Date().toISOString()
+  const now = params.detectedAt ?? new Date().toISOString()
   return {
     id: `conf-invalid-${params.entityKind}-${params.entityId}`,
     entityKind: params.entityKind,

@@ -89,7 +89,13 @@ class DriveV1LocalSerializerTest {
         val queue = queue("entry", entry.id, entry.updatedAt)
         val selectedPath = "entries/2026-07-15-entry-1.json"
 
-        val serialized = DriveV1LocalSerializer.serializeEntry(accountId, entry, queue, selectedPath)
+        val serialized = DriveV1LocalSerializer.serializeEntry(
+            accountId,
+            entry,
+            queue,
+            selectedPath,
+            newEntryPathSelection = pathSelection(entry, entry.id, "entry-2"),
+        )
         val envelope = json.decodeFromString<DriveV1Envelope<DriveV1Entry>>(serialized.json)
 
         assertEquals(selectedPath, serialized.path)
@@ -98,25 +104,38 @@ class DriveV1LocalSerializerTest {
     }
 
     @Test
-    fun newEntryCannotInferAnUnsafeSameDayPathFromAnIncompleteSnapshot() {
+    fun newEntryAcceptsOnlyAPreflightSelectedCanonicalPath() {
         val first = entry(id = "entry/one")
         val safePath = DriveV1Paths.entry(first.dateBucket, first.id)
+        val uniquePath = DriveV1Paths.entry(first.dateBucket)
 
         val serialized = DriveV1LocalSerializer.serializeEntry(
             accountId,
             first,
             queue("entry", first.id, first.updatedAt),
             safePath,
+            newEntryPathSelection = pathSelection(first, first.id, "entry-two"),
         )
 
         assertEquals("entries/2026-07-15-entry%2Fone.json", serialized.path)
+        assertEquals(
+            uniquePath,
+            DriveV1LocalSerializer.serializeEntry(
+                accountId,
+                first,
+                queue("entry", first.id, first.updatedAt),
+                uniquePath,
+                newEntryPathSelection = pathSelection(first, first.id),
+            ).path,
+        )
         assertTrue(
             runCatching {
                 DriveV1LocalSerializer.serializeEntry(
                     accountId,
                     first,
                     queue("entry", first.id, first.updatedAt),
-                    "entries/2026-07-15.json",
+                    "entries/2026-07-15-unrelated.json",
+                    newEntryPathSelection = pathSelection(first, first.id),
                 )
             }.isFailure,
         )
@@ -141,7 +160,7 @@ class DriveV1LocalSerializerTest {
             syncStatus = "queued",
             createdAt = "2026-07-15T09:30:00Z",
             updatedAt = "2026-07-15T10:30:00Z",
-            thumbnail = "blob:local-preview",
+            thumbnail = "data:image/png;base64,local-preview",
             cachedPath = "/private/cache/att-1",
             cacheKey = "file:/private/cache/key",
         )
@@ -360,6 +379,7 @@ class DriveV1LocalSerializerTest {
                     entry,
                     queue("entry", entry.id, entry.updatedAt),
                     "entries/2026-07-15-entry-1.json",
+                    newEntryPathSelection = pathSelection(entry, entry.id, "entry-2"),
                 )
             }.isFailure,
         )
@@ -372,6 +392,7 @@ class DriveV1LocalSerializerTest {
                     validEntry.copy(accountId = "account-b"),
                     queue("entry", validEntry.id, validEntry.updatedAt),
                     "entries/2026-07-15-entry-1.json",
+                    newEntryPathSelection = pathSelection(validEntry, validEntry.id, "entry-2"),
                 )
             }.isFailure,
         )
@@ -382,6 +403,7 @@ class DriveV1LocalSerializerTest {
                     validEntry,
                     queue("attachment", validEntry.id, validEntry.updatedAt),
                     "entries/2026-07-15-entry-1.json",
+                    newEntryPathSelection = pathSelection(validEntry, validEntry.id, "entry-2"),
                 )
             }.isFailure,
         )
@@ -568,6 +590,15 @@ class DriveV1LocalSerializerTest {
         updatedAt = updatedAt,
         updatedByDeviceId = "device-a",
         baseVersion = baseVersion,
+    )
+
+    private fun pathSelection(
+        entry: JournalEntryEntity,
+        vararg sameDayEntityIds: String,
+    ) = DriveV1NewEntryPathSelection.fromCompleteSameDayInventory(
+        entityId = entry.id,
+        dateBucket = entry.dateBucket,
+        sameDayEntityIds = sameDayEntityIds.toList(),
     )
 
     private fun attachment(

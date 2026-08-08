@@ -60,7 +60,7 @@
     "explicitChildTombstonesRequired": false,
     "legacyChildTombstonesAccepted": true,
     "staleRemoteRecordsIgnored": true,
-    "runtimeParity": "blocked",
-    "blockingIssueId": "web-filebox-transfer-cascade"
+    "runtimeParity": "resolved",
+    "resolvedIssueId": "web-filebox-transfer-cascade"
   }
 }

@@ -9,7 +9,7 @@
     "conflictId": "conf-invalid-entry-entries/2026-05-24.json",
     "resolution": "pending",
     "remoteWriteAllowed": false,
-    "runtimeParity": "blocked",
-    "blockingIssueId": "malformed-json-quarantine"
+    "runtimeParity": "resolved",
+    "resolvedIssueId": "malformed-json-quarantine"
   }
 }

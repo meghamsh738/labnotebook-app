@@ -19,12 +19,21 @@ import java.util.Date
 import java.util.GregorianCalendar
 import java.util.Locale
 import java.util.TimeZone
+import kotlinx.serialization.SerializationException
 import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 
 internal data class RemoteRecord<T>(
     val ref: DriveFileRef,
     val value: T,
     val rawJson: String,
+    val cacheAsBaseline: Boolean = true,
+)
+
+private data class QuarantinedRecordBatch<T>(
+    val valid: List<RemoteRecord<T>>,
+    val conflicts: List<RemoteRecord<DriveV1Conflict>>,
 )
 
 internal data class DriveV1MetadataSnapshot(
@@ -86,24 +95,34 @@ internal class DriveV1MetadataReader(private val drive: DriveRepository) {
         val devices = latestByKey(records(accountId, refs, "devices/") {
             DriveV1Json.format.decodeFromString<DriveV1Device>(it).requireV1()
         }, { it.id }, { it.lastSeenAt })
-        val allEntries = latestByKey(records(accountId, refs, "entries/") {
+        val entryBatch = recordsQuarantining(accountId, refs, "entries/", "entry") {
             DriveV1Json.format.decodeFromString<DriveV1Envelope<DriveV1Entry>>(it).requireV1("entry")
-        }, { it.id }, { it.updatedAt })
-        val allAttachments = latestByKey(records(accountId, refs, "attachments/") {
+        }
+        val allEntries = latestByKey(entryBatch.valid, { it.id }, { it.updatedAt })
+        val attachmentBatch = recordsQuarantining(accountId, refs, "attachments/", "attachment") {
             DriveV1Json.format.decodeFromString<DriveV1Envelope<DriveV1Attachment>>(it).requireV1("attachment")
-        }, { it.id }, { it.updatedAt })
-        val allFileBoxItems = latestByKey(records(accountId, refs, "filebox/") {
+        }
+        val allAttachments = latestByKey(attachmentBatch.valid, { it.id }, { it.updatedAt })
+        val fileBoxBatch = recordsQuarantining(accountId, refs, "filebox/", "fileBoxItem") {
             DriveV1Json.format.decodeFromString<DriveV1Envelope<DriveV1FileBoxItem>>(it).requireV1("fileBoxItem")
-        }, { it.id }, { it.updatedAt })
-        val allTransfers = latestByKey(records(accountId, refs, "transfers/") {
+        }
+        val allFileBoxItems = latestByKey(fileBoxBatch.valid, { it.id }, { it.updatedAt })
+        val transferBatch = recordsQuarantining(accountId, refs, "transfers/", "transfer") {
             DriveV1Json.format.decodeFromString<DriveV1Envelope<DriveV1Transfer>>(it).requireV1("transfer")
-        }, { it.id }, { it.updatedAt })
-        val conflicts = latestByKey(records(accountId, refs, "conflicts/") {
-            DriveV1Json.format.decodeFromString<DriveV1Conflict>(it).requireV1()
-        }, { it.id }, { it.detectedAt })
-        val tombstones = latestByKey(records(accountId, refs, "tombstones/") {
+        }
+        val allTransfers = latestByKey(transferBatch.valid, { it.id }, { it.updatedAt })
+        val quarantinedConflicts = entryBatch.conflicts + attachmentBatch.conflicts +
+            fileBoxBatch.conflicts + transferBatch.conflicts
+        val conflicts = latestByKey(
+            records(accountId, refs, "conflicts/") {
+                DriveV1Json.format.decodeFromString<DriveV1Conflict>(it).requireV1()
+            } + quarantinedConflicts,
+            { it.id },
+            { it.detectedAt },
+        )
+        val tombstones = latestTombstonesByTarget(records(accountId, refs, "tombstones/") {
             DriveV1Json.format.decodeFromString<DriveV1Tombstone>(it).requireV1()
-        }, { "${it.entityKind}\u0000${it.entityId}" }, { it.deletedAt })
+        })
 
         // Web v1 intentionally leaves stale entity files in Drive and applies tombstones to
         // the logical snapshot before writing manifest counts. Mirror that behavior here.
@@ -133,17 +152,21 @@ internal class DriveV1MetadataReader(private val drive: DriveRepository) {
                 transfer.fileBoxItemId in removedFileBoxItemIds
         }
 
-        require(manifest.entryCount == entries.size) {
-            "Drive manifest expected ${manifest.entryCount} entries but found ${entries.size}."
+        val observedEntryCount = entries.size + entryBatch.conflicts.size
+        val observedAttachmentCount = attachments.size + attachmentBatch.conflicts.size
+        val observedFileBoxCount = fileBoxItems.size + fileBoxBatch.conflicts.size
+        val observedTransferCount = transfers.size + transferBatch.conflicts.size
+        require(manifest.entryCount == observedEntryCount) {
+            "Drive manifest expected ${manifest.entryCount} entries but found $observedEntryCount."
         }
-        require(manifest.attachmentCount == attachments.size) {
-            "Drive manifest expected ${manifest.attachmentCount} attachments but found ${attachments.size}."
+        require(manifest.attachmentCount == observedAttachmentCount) {
+            "Drive manifest expected ${manifest.attachmentCount} attachments but found $observedAttachmentCount."
         }
-        require(manifest.fileBoxCount == fileBoxItems.size) {
-            "Drive manifest expected ${manifest.fileBoxCount} File Box items but found ${fileBoxItems.size}."
+        require(manifest.fileBoxCount == observedFileBoxCount) {
+            "Drive manifest expected ${manifest.fileBoxCount} File Box items but found $observedFileBoxCount."
         }
-        require(manifest.transferCount == transfers.size) {
-            "Drive manifest expected ${manifest.transferCount} transfers but found ${transfers.size}."
+        require(manifest.transferCount == observedTransferCount) {
+            "Drive manifest expected ${manifest.transferCount} transfers but found $observedTransferCount."
         }
 
         return DriveV1MetadataSnapshot(
@@ -178,6 +201,53 @@ internal class DriveV1MetadataReader(private val drive: DriveRepository) {
         }
     }
 
+    private suspend fun <T> recordsQuarantining(
+        accountId: AccountId,
+        refs: List<DriveFileRef>,
+        prefix: String,
+        entityKind: String,
+        decode: (String) -> T,
+    ): QuarantinedRecordBatch<T> {
+        val valid = mutableListOf<RemoteRecord<T>>()
+        val conflicts = mutableListOf<RemoteRecord<DriveV1Conflict>>()
+        refs.filter { it.path.startsWith(prefix) && it.path.endsWith(".json") }.forEach { ref ->
+            val raw = drive.readJson(accountId, ref.path).getOrThrow()
+                ?: throw IllegalArgumentException("Managed Drive file ${ref.path} disappeared during metadata pull.")
+            try {
+                valid += RemoteRecord(ref, decode(raw), raw)
+            } catch (error: SerializationException) {
+                conflicts += quarantinedConflict(ref, entityKind, raw, error)
+            } catch (error: IllegalArgumentException) {
+                conflicts += quarantinedConflict(ref, entityKind, raw, error)
+            }
+        }
+        return QuarantinedRecordBatch(valid, conflicts)
+    }
+
+    private fun quarantinedConflict(
+        ref: DriveFileRef,
+        entityKind: String,
+        rawJson: String,
+        error: Exception,
+    ): RemoteRecord<DriveV1Conflict> {
+        val conflict = DriveV1Conflict(
+            id = "conf-invalid-$entityKind-${ref.path}",
+            entityKind = entityKind,
+            entityId = ref.path,
+            localUpdatedAt = ref.updatedAt,
+            remoteUpdatedAt = ref.updatedAt,
+            detectedAt = ref.updatedAt,
+            resolution = "pending",
+            summary = "Remote $entityKind JSON was quarantined and not applied.",
+            remoteCopy = buildJsonObject {
+                put("path", ref.path)
+                put("rawJson", rawJson)
+                put("error", error.message ?: "Invalid Drive v1 JSON.")
+            },
+        ).requireV1()
+        return RemoteRecord(ref, conflict, rawJson, cacheAsBaseline = false)
+    }
+
     private fun isManagedPath(path: String): Boolean = MANAGED_PREFIXES.any(path::startsWith)
 
     private fun isManagedJsonPath(path: String): Boolean = isManagedPath(path) && path.endsWith(".json")
@@ -210,6 +280,30 @@ internal class DriveV1MetadataReader(private val drive: DriveRepository) {
         }
         latest
     }.values.sortedBy { it.ref.path }
+
+    private fun latestTombstonesByTarget(
+        records: List<RemoteRecord<DriveV1Tombstone>>,
+    ): List<RemoteRecord<DriveV1Tombstone>> =
+        records.fold(linkedMapOf<String, RemoteRecord<DriveV1Tombstone>>()) { latest, record ->
+            val value = record.value
+            val key = "${value.entityKind}\u0000${value.entityId}"
+            val previous = latest[key]
+            if (previous == null) {
+                latest[key] = record
+            } else {
+                val comparison = compareIsoTimestamps(value.deletedAt, previous.value.deletedAt)
+                when {
+                    comparison > 0 -> latest[key] = record
+                    comparison == 0 -> require(
+                        value.deletedByDeviceId == previous.value.deletedByDeviceId &&
+                            value.reason == previous.value.reason,
+                    ) {
+                        "Drive workspace contains conflicting tombstones for $key at ${value.deletedAt}."
+                    }
+                }
+            }
+            latest
+        }.values.sortedBy { it.ref.path }
 
     companion object {
         private val MANAGED_PREFIXES = listOf(
@@ -451,12 +545,28 @@ internal class DriveV1MetadataApplier(
             }
         }
         snapshot.conflicts.forEach {
-            dao.upsertDriveRawDocument(it.toRawDocument(accountId, "conflict", it.value.id))
+            if (it.cacheAsBaseline) {
+                dao.upsertDriveRawDocument(it.toRawDocument(accountId, "conflict", it.value.id))
+            }
         }
         snapshot.tombstones.forEach {
             val target = it.value.entityKind to it.value.entityId
             if (target !in pendingTargets) {
-                dao.upsertDriveRawDocument(it.toRawDocument(accountId, "tombstone", it.value.id))
+                val existingId = dao.tombstone(
+                    accountId.value,
+                    it.value.entityKind,
+                    it.value.entityId,
+                )?.id
+                val baselineRecord = if (existingId != null && existingId != it.value.id) {
+                    val lossless = DriveV1Json.decodeLossless<DriveV1Tombstone>(it.rawJson)
+                    lossless.value = lossless.value.copy(id = existingId).requireV1()
+                    it.copy(rawJson = lossless.encodePreservingUnknownFields())
+                } else {
+                    it
+                }
+                dao.upsertDriveRawDocument(
+                    baselineRecord.toRawDocument(accountId, "tombstone", existingId ?: it.value.id),
+                )
             }
         }
     }
