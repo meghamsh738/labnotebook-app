@@ -13,6 +13,7 @@ const expectedJsonFiles = [
   'malformed-json.json',
   'missing-record.json',
   'non-resurrection.json',
+  'offline-round-trip.json',
   'policy.json',
 ]
 
@@ -90,7 +91,7 @@ assert.equal(policy.driveContractVersion, 1)
 assert.equal(policy.writeGate, 'disabled-until-runtime-parity')
 assert.equal(policy.runtimeParity.status, 'blocked')
 assert.equal(policy.runtimeParity.nativeDriveWritesAllowed, false)
-assert.deepEqual([...blockers], ['web-versioned-cas'])
+assert.deepEqual([...blockers], ['live-versioned-cas-validation'])
 assert.deepEqual([...resolved].sort(), [
   'android-data-thumbnail',
   'android-unique-entry-path',
@@ -99,10 +100,13 @@ assert.deepEqual([...resolved].sort(), [
   'tombstone-target-normalization',
   'web-filebox-transfer-cascade',
   'web-payload-projection',
+  'web-versioned-cas',
 ])
 assert.deepEqual(policy.remoteVersion.existingRequires, ['fileId', 'version'])
 assert.equal(policy.remoteVersion.minimumVersion, 1)
 assert.equal(policy.remoteVersion.freshEtagBeforeMutation, true)
+assert.equal(policy.remoteVersion.webVersionedCas, 'implemented-offline-unwired')
+assert.equal(policy.remoteVersion.liveVersionedCasValidationPerformed, false)
 assert.equal(policy.remoteVersion.conditionalCreate, 'idempotent-create-only-offline')
 assert.equal(policy.deletions.cascade, 'parent-transitively-suppresses-descendants')
 assert.equal(policy.deletions.explicitChildTombstones, 'accepted-not-required')
@@ -111,7 +115,7 @@ assert.equal(policy.deletions.nonResurrection, true)
 
 const conditionalCreate = await fixture('conditional-create.json')
 assert.equal(conditionalCreate.precondition, 'must-not-exist')
-assert.equal(conditionalCreate.scope, 'offline-native-transaction-only')
+assert.equal(conditionalCreate.scope, 'offline-cross-client-transaction-only')
 assert.equal(conditionalCreate.identity.property, 'easylabCreateFingerprint')
 assert.equal(conditionalCreate.identity.deterministic, true)
 assert.equal(conditionalCreate.missingPath.overwriteAllowed, false)
@@ -133,6 +137,7 @@ assert.equal(conditionalCreate.existingPath.mismatch, 'precondition-conflict')
 assert.equal(conditionalCreate.existingPath.duplicates, 'precondition-conflict')
 assert.equal(conditionalCreate.ambiguousOutcome.otherwise, 'ambiguous-commit')
 assert.equal(conditionalCreate.runtime.productionWired, false)
+assert.equal(conditionalCreate.runtime.webProductionWired, false)
 assert.equal(conditionalCreate.runtime.nativeDriveWritesAllowed, false)
 assert.equal(conditionalCreate.runtime.liveDriveValidationPerformed, false)
 
@@ -237,6 +242,68 @@ assert.ok(resolved.has(canonicalization.attachmentPayload.resolvedIssueId))
 assert.equal(canonicalization.fileBoxPayload.webRuntimeParity, 'resolved')
 assert.ok(resolved.has(canonicalization.fileBoxPayload.resolvedIssueId))
 
+const offlineRoundTrip = await fixture('offline-round-trip.json')
+assert.equal(offlineRoundTrip.contractVersion, 1)
+assert.equal(offlineRoundTrip.liveDriveUsed, false)
+assert.equal(offlineRoundTrip.productionWritesEnabled, false)
+assert.equal(offlineRoundTrip.androidOrigin.entryPath, 'entries/2026-05-23.json')
+assert.equal(
+  offlineRoundTrip.androidOrigin.attachmentMetadataPath,
+  `${offlineRoundTrip.androidOrigin.attachmentBlobPath}.json`,
+)
+assert.match(offlineRoundTrip.androidOrigin.entryContentHash, /^[0-9a-f]{64}$/)
+assert.match(offlineRoundTrip.androidOrigin.attachmentMetadataHash, /^[0-9a-f]{64}$/)
+assert.match(offlineRoundTrip.webEdit.entryContentHash, /^[0-9a-f]{64}$/)
+assert.deepEqual(offlineRoundTrip.webEdit.precondition, {
+  kind: 'must-match',
+  fileId: offlineRoundTrip.webEdit.fileId,
+  version: offlineRoundTrip.webEdit.version,
+})
+assert.equal(offlineRoundTrip.webEdit.path, offlineRoundTrip.androidOrigin.entryPath)
+assert.equal(offlineRoundTrip.webEdit.verifiedExistingPathPreserved, true)
+assert.equal(
+  offlineRoundTrip.electronDelete.id,
+  `del-${offlineRoundTrip.electronDelete.entityKind}-${offlineRoundTrip.electronDelete.entityId}`,
+)
+assert.equal(
+  offlineRoundTrip.electronDelete.path,
+  `tombstones/${offlineRoundTrip.electronDelete.entityKind}--${offlineRoundTrip.electronDelete.entityId}.json`,
+)
+assert.equal(offlineRoundTrip.electronDelete.physicalDriveDeletion, false)
+assert.equal(
+  offlineRoundTrip.canonicalConflict.path,
+  `conflicts/${offlineRoundTrip.canonicalConflict.id}.json`,
+)
+assert.deepEqual(offlineRoundTrip.androidReturn.finalManifestCounts, {
+  entryCount: 0,
+  attachmentCount: 0,
+  fileBoxCount: 0,
+  transferCount: 0,
+})
+assert.equal(offlineRoundTrip.androidReturn.staleLiveRecordsResurrect, false)
+assert.equal(offlineRoundTrip.payloadProjection.unknownField.preserved, true)
+assert.equal(offlineRoundTrip.payloadProjection.localOnlyFieldsPublished, false)
+assert.equal(
+  offlineRoundTrip.transactionScenarios.smallCreateOnlyRetry.expected,
+  'exact-reconciliation-no-duplicate',
+)
+assert.equal(
+  offlineRoundTrip.transactionScenarios.largeResumableCreate.expected,
+  'same-operation-id-no-duplicate',
+)
+assert.equal(
+  offlineRoundTrip.transactionScenarios.largeResumableUpdate.expected,
+  'same-operation-id-conditional-update',
+)
+assert.equal(
+  offlineRoundTrip.transactionScenarios.partialPrerequisitesWithOldManifest.expected,
+  'repair-only-known-plan-paths-manifest-last',
+)
+assert.equal(
+  offlineRoundTrip.transactionScenarios.accountIsolation.expected,
+  'operation-and-cache-inaccessible-cross-account',
+)
+
 // These source-anchored checks ensure the assessment cannot silently claim parity
 // while the known client implementations still have the recorded blockers.
 const androidSerializer = await source(
@@ -254,6 +321,26 @@ const androidWriter = await source(
 const webSyncEngine = await source('web/src/sync/syncEngine.ts')
 const webDataCore = await source('web/src/sync/dataCore.ts')
 const webProvider = await source('web/src/sync/syncProvider.ts')
+const androidParityTest = await source(
+  'android/app/src/test/java/com/easylab/labnotebook/sync/DriveV1CrossClientParityGateTest.kt',
+)
+const webParityTest = await source('web/tests/drive-v1-contract.spec.ts')
+const androidWriteTransactionTest = await source(
+  'android/app/src/test/java/com/easylab/labnotebook/sync/DriveV1WriteTransactionTest.kt',
+)
+const androidWriteRepositoryTest = await source(
+  'android/app/src/test/java/com/easylab/labnotebook/sync/GoogleDriveWriteRepositoryTest.kt',
+)
+const androidDurableRecoveryTest = await source(
+  'android/app/src/test/java/com/easylab/labnotebook/sync/DriveV1DurableTransactionRecoveryTest.kt',
+)
+const androidRepairTest = await source(
+  'android/app/src/test/java/com/easylab/labnotebook/sync/DriveV1PlanRecoveryVerifierTest.kt',
+)
+const webConditionalTest = await source('web/tests/drive-conditional-provider.spec.ts')
+const webTransactionTest = await source('web/tests/sync-transaction.spec.ts')
+const webEngineTest = await source('web/tests/sync-engine.spec.ts')
+const webProviderTest = await source('web/tests/sync-provider.spec.ts')
 
 assert.match(androidSerializer, /requires a path selected from a complete same-day inventory/)
 assert.match(androidSerializer, /thumbnail = thumbnail\?\.takeUnless\(::isLocalCacheHint\)/)
@@ -298,6 +385,27 @@ assert.match(webDataCore, /buildEntryEnvelope[\s\S]*payload: projectEntryPayload
 assert.match(webDataCore, /buildAttachmentEnvelope[\s\S]*payload: projectAttachmentPayload\(attachment\)/)
 assert.match(webSyncEngine, /buildFileBoxEnvelope[\s\S]*payload: projectFileBoxPayload\(item\)/)
 assert.match(webSyncEngine, /rawJson: raw\?\.text/)
+assert.match(androidParityTest, /fixture\("offline-round-trip\.json"\)/)
+assert.match(webParityTest, /offline-round-trip\.json/)
+assert.match(webSyncEngine, /revalidateGuardedRemoteIdentity/)
+assert.match(webSyncEngine, /record\.plan\.writes\.at\(-1\)\?\.kind === 'manifest'/)
+assert.match(webProvider, /acquireTransactionGuard\(operationId: string\)/)
+assert.match(webProvider, /readonly supportsVersionedCas = false/)
+assert.match(androidWriteTransactionTest, /writesTombstonesThenBlobsBeforeEntityJsonAndPublishesManifestLast/)
+assert.match(androidWriteTransactionTest, /dispatchesLargeCreateOnlyBlobToGeneratedIdProtocol/)
+assert.match(androidWriteRepositoryTest, /lostCreateResponseReconcilesAndRetryDoesNotCreateADuplicate/)
+assert.match(androidWriteRepositoryTest, /resumableBlobInterruptionRetryAndStaleIdentityAreSafe/)
+assert.match(androidDurableRecoveryTest, /partialOlderTransactionIsRepairedBeforeNewerMutationIsPlanned/)
+assert.match(androidDurableRecoveryTest, /malformedMissingDuplicateAndDeleteEditPlansFailBeforeAnyWrite/)
+assert.match(androidRepairTest, /repairScopeRejectsDuplicatesMissingFilesAndUnplannedVersionChanges/)
+assert.match(webConditionalTest, /large resumable create survives a lost response/)
+assert.match(webConditionalTest, /interrupted resumable update is ambiguous without remote proof/)
+assert.match(webTransactionTest, /transaction plan gives every write a precondition and publishes manifest last/)
+assert.match(webTransactionTest, /lost manifest response reconciles before the local checkpoint is finalized/)
+assert.match(webTransactionTest, /missing baselines, count mismatches, duplicate paths, and stale update races/)
+assert.match(webEngineTest, /malformed remote JSON is quarantined without overwriting the source path/)
+assert.match(webEngineTest, /entry tombstones prevent stale Drive JSON from resurrecting deleted days/)
+assert.match(webProviderTest, /transactional workspace resolution rejects duplicate managed folders/)
 
 console.log(
   `Drive v1 parity assessment passed: ${actualJsonFiles.length} shared JSON fixtures; `

@@ -6,7 +6,7 @@
     "status": "blocked",
     "nativeDriveWritesAllowed": false,
     "blockingIssueIds": [
-      "web-versioned-cas"
+      "live-versioned-cas-validation"
     ],
     "resolvedIssueIds": [
       "android-unique-entry-path",
@@ -15,13 +15,16 @@
       "web-filebox-transfer-cascade",
       "malformed-json-quarantine",
       "web-payload-projection",
-      "native-idempotent-create-only"
+      "native-idempotent-create-only",
+      "web-versioned-cas"
     ]
   },
   "remoteVersion": {
     "existingRequires": ["fileId", "version"],
     "minimumVersion": 1,
     "freshEtagBeforeMutation": true,
+    "webVersionedCas": "implemented-offline-unwired",
+    "liveVersionedCasValidationPerformed": false,
     "missingWithBase": "blocked-without-tombstone",
     "conditionalCreate": "idempotent-create-only-offline"
   },

@@ -1,6 +1,6 @@
 {
   "precondition": "must-not-exist",
-  "scope": "offline-native-transaction-only",
+  "scope": "offline-cross-client-transaction-only",
   "identity": {
     "property": "easylabCreateFingerprint",
     "inputs": ["verifiedPath", "mimeType", "contentSha256", "canonicalAppProperties"],
@@ -44,6 +44,7 @@
   },
   "runtime": {
     "productionWired": false,
+    "webProductionWired": false,
     "nativeDriveWritesAllowed": false,
     "liveDriveValidationPerformed": false
   }

@@ -1,0 +1,136 @@
+{
+  "caseId": "android-web-electron-android-offline-round-trip",
+  "contractVersion": 1,
+  "liveDriveUsed": false,
+  "productionWritesEnabled": false,
+  "androidOrigin": {
+    "entryFixture": "entries/2026-05-23.json",
+    "attachmentFixture": "attachments/2026-05-23/att-contract-result.csv.json",
+    "entryPath": "entries/2026-05-23.json",
+    "attachmentBlobPath": "attachments/2026-05-23/att-contract-result.csv",
+    "attachmentMetadataPath": "attachments/2026-05-23/att-contract-result.csv.json",
+    "entryContentHash": "c2674d4e6ad545cdc38959c8a6f83db799b0aae9652b5f7beb79c0a1187bffd9",
+    "attachmentMetadataHash": "542946b85a5eb6cd2188eed3af31fe43578787f52919a1c06273cef2cd50bb05",
+    "manifestCounts": {
+      "entryCount": 1,
+      "attachmentCount": 1,
+      "fileBoxCount": 1,
+      "transferCount": 1
+    }
+  },
+  "webEdit": {
+    "fileId": "drive-entry-contract",
+    "version": 7,
+    "path": "entries/2026-05-23.json",
+    "title": "Web edit against Android baseline",
+    "updatedAt": "2026-05-23T10:30:00.000Z",
+    "updatedByDeviceId": "dev-web",
+    "entryContentHash": "8b23eea705f90ff972a3d3b7d3fa441e0587479a21bea2457a36da60d5c753f9",
+    "precondition": {
+      "kind": "must-match",
+      "fileId": "drive-entry-contract",
+      "version": 7
+    },
+    "verifiedExistingPathPreserved": true
+  },
+  "electronDelete": {
+    "id": "del-entry-entry-contract",
+    "entityKind": "entry",
+    "entityId": "entry-contract",
+    "deletedAt": "2026-05-23T11:00:00.000Z",
+    "deletedByDeviceId": "dev-electron",
+    "path": "tombstones/entry--entry-contract.json",
+    "physicalDriveDeletion": false
+  },
+  "androidReturn": {
+    "visibleEntryIds": [],
+    "visibleAttachmentIds": [],
+    "visibleFileBoxIds": [],
+    "visibleTransferIds": [],
+    "effectiveDeletedTargets": [
+      "attachment:att-contract",
+      "entry:entry-contract",
+      "fileBoxItem:filebox-contract",
+      "transfer:transfer-contract"
+    ],
+    "finalManifestCounts": {
+      "entryCount": 0,
+      "attachmentCount": 0,
+      "fileBoxCount": 0,
+      "transferCount": 0
+    },
+    "staleLiveRecordsResurrect": false
+  },
+  "canonicalConflict": {
+    "id": "conf-entry-entry-contract",
+    "path": "conflicts/conf-entry-entry-contract.json"
+  },
+  "payloadProjection": {
+    "unknownField": {
+      "key": "futureRemoteField",
+      "value": {
+        "preserve": true
+      },
+      "preserved": true
+    },
+    "localOnlyFields": [
+      "syncPath",
+      "cachedPath",
+      "cacheKey",
+      "thumbnail",
+      "localObjectUrl"
+    ],
+    "localOnlyFieldsPublished": false
+  },
+  "transactionScenarios": {
+    "smallCreateOnlyRetry": {
+      "maximumExclusiveBytes": 5242880,
+      "precondition": "must-not-exist",
+      "expected": "exact-reconciliation-no-duplicate"
+    },
+    "largeResumableCreate": {
+      "minimumInclusiveBytes": 5242880,
+      "target": "generated-file-id",
+      "expected": "same-operation-id-no-duplicate"
+    },
+    "largeResumableUpdate": {
+      "minimumInclusiveBytes": 5242880,
+      "target": "file-id-and-version",
+      "expected": "same-operation-id-conditional-update"
+    },
+    "interruptedOrAmbiguousUpload": {
+      "expected": "reconcile-exact-content-or-block"
+    },
+    "partialPrerequisitesWithOldManifest": {
+      "expected": "repair-only-known-plan-paths-manifest-last"
+    },
+    "manifestFailure": {
+      "expected": "local-checkpoint-unchanged-and-repairable"
+    },
+    "staleFileIdentity": {
+      "expected": "precondition-conflict"
+    },
+    "missingWithBaseline": {
+      "expected": "blocked-without-tombstone"
+    },
+    "duplicatePathsOrFolders": {
+      "expected": "blocked-before-mutation"
+    },
+    "malformedJson": {
+      "expected": "one-quarantine-conflict-zero-mutations"
+    },
+    "manifestCountMismatch": {
+      "expected": "blocked-before-mutation"
+    },
+    "deleteEditRace": {
+      "expected": "pending-conflict-no-remote-mutation"
+    },
+    "equalTargetTombstones": {
+      "identical": "converge",
+      "divergentSameInstant": "blocked"
+    },
+    "accountIsolation": {
+      "expected": "operation-and-cache-inaccessible-cross-account"
+    }
+  }
+}

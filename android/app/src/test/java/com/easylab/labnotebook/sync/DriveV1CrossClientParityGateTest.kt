@@ -37,7 +37,7 @@ class DriveV1CrossClientParityGateTest {
         assertEquals("blocked", runtimeParity.text("status"))
         assertFalse(runtimeParity.booleanValue("nativeDriveWritesAllowed"))
         assertEquals(
-            setOf("web-versioned-cas"),
+            setOf("live-versioned-cas-validation"),
             runtimeParity.arrayValue("blockingIssueIds").mapTo(hashSetOf()) {
                 it.jsonPrimitive.content
             },
@@ -51,6 +51,7 @@ class DriveV1CrossClientParityGateTest {
                 "malformed-json-quarantine",
                 "web-payload-projection",
                 "native-idempotent-create-only",
+                "web-versioned-cas",
             ),
             runtimeParity.arrayValue("resolvedIssueIds").mapTo(hashSetOf()) {
                 it.jsonPrimitive.content
@@ -62,6 +63,8 @@ class DriveV1CrossClientParityGateTest {
         )
         assertEquals(1L, remoteVersion.longValue("minimumVersion"))
         assertTrue(remoteVersion.booleanValue("freshEtagBeforeMutation"))
+        assertEquals("implemented-offline-unwired", remoteVersion.text("webVersionedCas"))
+        assertFalse(remoteVersion.booleanValue("liveVersionedCasValidationPerformed"))
         assertEquals("blocked-without-tombstone", remoteVersion.text("missingWithBase"))
         assertEquals("idempotent-create-only-offline", remoteVersion.text("conditionalCreate"))
         assertEquals("parent-transitively-suppresses-descendants", deletions.text("cascade"))
@@ -262,6 +265,160 @@ class DriveV1CrossClientParityGateTest {
         assertTrue(tombstones.any { it.id.startsWith("delete-") })
         assertEquals("resolved", expected.text("runtimeParity"))
         assertEquals("web-filebox-transfer-cascade", expected.text("resolvedIssueId"))
+    }
+
+    @Test
+    fun stagedAndroidWebElectronAndroidRoundTripLocksCrossClientOutputs() {
+        val case = fixture("offline-round-trip.json")
+        val origin = case.objectValue("androidOrigin")
+        val webEdit = case.objectValue("webEdit")
+        val electronDelete = case.objectValue("electronDelete")
+        val androidReturn = case.objectValue("androidReturn")
+        val entryEnvelope = json.decodeFromString<DriveV1Envelope<DriveV1Entry>>(
+            driveV1Fixture(origin.text("entryFixture")).readText(),
+        ).requireV1("entry")
+        val attachmentEnvelope = json.decodeFromString<DriveV1Envelope<DriveV1Attachment>>(
+            driveV1Fixture(origin.text("attachmentFixture")).readText(),
+        ).requireV1("attachment")
+        val fileBoxEnvelope = json.decodeFromString<DriveV1Envelope<DriveV1FileBoxItem>>(
+            driveV1Fixture("filebox/filebox-contract.json").readText(),
+        ).requireV1("fileBoxItem")
+        val transferEnvelope = json.decodeFromString<DriveV1Envelope<DriveV1Transfer>>(
+            driveV1Fixture("transfers/transfer-contract.json").readText(),
+        ).requireV1("transfer")
+        val device = json.decodeFromString<DriveV1Device>(
+            driveV1Fixture("devices/dev-contract.json").readText(),
+        ).requireV1()
+        val originManifest = json.decodeFromString<DriveV1Manifest>(
+            driveV1Fixture("manifest.json").readText(),
+        ).requireV1()
+
+        assertFalse(case.booleanValue("liveDriveUsed"))
+        assertFalse(case.booleanValue("productionWritesEnabled"))
+        assertEquals(
+            origin.text("entryPath"),
+            DriveV1Paths.entry(entryEnvelope.payload, mapOf(entryEnvelope.id to entryEnvelope.payload)),
+        )
+        assertEquals(
+            origin.text("attachmentBlobPath"),
+            DriveV1Paths.attachmentBlob(attachmentEnvelope.payload, entryEnvelope.payload),
+        )
+        assertEquals(
+            origin.text("attachmentMetadataPath"),
+            DriveV1Paths.attachmentMetadata(attachmentEnvelope.payload, entryEnvelope.payload),
+        )
+        assertEquals(origin.text("entryContentHash"), DriveV1Hashing.entryContentHash(entryEnvelope.payload))
+        assertEquals(
+            origin.text("attachmentMetadataHash"),
+            DriveV1Hashing.attachmentMetadataHash(attachmentEnvelope.payload),
+        )
+        val originCounts = origin.objectValue("manifestCounts")
+        assertEquals(originCounts.longValue("entryCount"), originManifest.entryCount.toLong())
+        assertEquals(originCounts.longValue("attachmentCount"), originManifest.attachmentCount.toLong())
+        assertEquals(originCounts.longValue("fileBoxCount"), originManifest.fileBoxCount.toLong())
+        assertEquals(originCounts.longValue("transferCount"), originManifest.transferCount.toLong())
+
+        val webEditedEntry = entryEnvelope.payload.copy(
+            title = webEdit.text("title"),
+            lastEditedDatetime = webEdit.text("updatedAt"),
+            updatedByDeviceId = webEdit.text("updatedByDeviceId"),
+        ).requireV1()
+        assertEquals(webEdit.text("entryContentHash"), DriveV1Hashing.entryContentHash(webEditedEntry))
+        assertEquals(origin.text("entryPath"), webEdit.text("path"))
+        assertTrue(webEdit.booleanValue("verifiedExistingPathPreserved"))
+        assertEquals("must-match", webEdit.objectValue("precondition").text("kind"))
+        assertEquals(webEdit.text("fileId"), webEdit.objectValue("precondition").text("fileId"))
+        assertEquals(webEdit.longValue("version"), webEdit.objectValue("precondition").longValue("version"))
+
+        val tombstone = json.decodeFromString<DriveV1Tombstone>(electronDelete.toString()).requireV1()
+        assertEquals("del-${tombstone.entityKind}-${tombstone.entityId}", tombstone.id)
+        assertEquals(
+            electronDelete.text("path"),
+            DriveV1Paths.tombstone(tombstone.entityKind, tombstone.entityId),
+        )
+        assertFalse(electronDelete.booleanValue("physicalDriveDeletion"))
+        val expectedConflict = case.objectValue("canonicalConflict")
+        assertEquals(expectedConflict.text("path"), DriveV1Paths.conflict(expectedConflict.text("id")))
+
+        val deletedEntries = mutableSetOf(tombstone.entityId)
+        val deletedAttachments = mutableSetOf<String>()
+        val deletedFileBoxItems = mutableSetOf<String>()
+        val deletedTransfers = mutableSetOf<String>()
+        if (attachmentEnvelope.payload.entryId in deletedEntries) {
+            deletedAttachments += attachmentEnvelope.id
+        }
+        if (
+            fileBoxEnvelope.payload.entryId in deletedEntries ||
+            fileBoxEnvelope.payload.attachmentId in deletedAttachments
+        ) {
+            deletedFileBoxItems += fileBoxEnvelope.id
+        }
+        if (
+            transferEnvelope.payload.entryId in deletedEntries ||
+            transferEnvelope.payload.attachmentId in deletedAttachments ||
+            transferEnvelope.payload.fileBoxItemId in deletedFileBoxItems
+        ) {
+            deletedTransfers += transferEnvelope.id
+        }
+        val effectiveTargets = buildList {
+            deletedAttachments.forEach { add("attachment:$it") }
+            deletedEntries.forEach { add("entry:$it") }
+            deletedFileBoxItems.forEach { add("fileBoxItem:$it") }
+            deletedTransfers.forEach { add("transfer:$it") }
+        }.sorted()
+        assertEquals(
+            androidReturn.arrayValue("effectiveDeletedTargets").map { it.jsonPrimitive.content },
+            effectiveTargets,
+        )
+        assertEquals(emptyList<String>(), androidReturn.arrayValue("visibleEntryIds").map { it.jsonPrimitive.content })
+        assertEquals(emptyList<String>(), androidReturn.arrayValue("visibleAttachmentIds").map { it.jsonPrimitive.content })
+        assertEquals(emptyList<String>(), androidReturn.arrayValue("visibleFileBoxIds").map { it.jsonPrimitive.content })
+        assertEquals(emptyList<String>(), androidReturn.arrayValue("visibleTransferIds").map { it.jsonPrimitive.content })
+        assertFalse(androidReturn.booleanValue("staleLiveRecordsResurrect"))
+
+        val finalCounts = androidReturn.objectValue("finalManifestCounts")
+        val manifestDocument = DriveV1LocalSerializer.serializeManifestProjection(
+            accountId = AccountId("account-parity-round-trip"),
+            updatedAt = "2026-05-23T11:05:00.000Z",
+            projection = DriveV1ManifestProjection(
+                devices = listOf(device),
+                entryCount = 0,
+                attachmentCount = 0,
+                fileBoxCount = 0,
+                transferCount = 0,
+            ),
+            createdAt = "2026-05-23T08:00:00.000Z",
+        )
+        val manifest = json.decodeFromString<DriveV1Manifest>(manifestDocument.json).requireV1()
+        assertEquals(finalCounts.longValue("entryCount"), manifest.entryCount.toLong())
+        assertEquals(finalCounts.longValue("attachmentCount"), manifest.attachmentCount.toLong())
+        assertEquals(finalCounts.longValue("fileBoxCount"), manifest.fileBoxCount.toLong())
+        assertEquals(finalCounts.longValue("transferCount"), manifest.transferCount.toLong())
+
+        val projection = case.objectValue("payloadProjection")
+        val unknown = projection.objectValue("unknownField")
+        val rawEntryObject = json.parseToJsonElement(
+            driveV1Fixture(origin.text("entryFixture")).readText(),
+        ).jsonObject
+        val rawPayload = rawEntryObject.getValue("payload").jsonObject
+        val rawWithUnknown = JsonObject(
+            rawEntryObject + ("payload" to JsonObject(rawPayload + (unknown.text("key") to unknown.getValue("value")))),
+        )
+        val lossless = DriveV1Json.decodeLossless<DriveV1Envelope<DriveV1Entry>>(rawWithUnknown.toString())
+        lossless.value = lossless.value.copy(payload = webEditedEntry)
+        val preservedPayload = json.parseToJsonElement(lossless.encodePreservingUnknownFields())
+            .jsonObject.getValue("payload").jsonObject
+        assertEquals(unknown.getValue("value"), preservedPayload[unknown.text("key")])
+        assertTrue(unknown.booleanValue("preserved"))
+        assertFalse(projection.booleanValue("localOnlyFieldsPublished"))
+
+        val scenarios = case.objectValue("transactionScenarios")
+        assertEquals("exact-reconciliation-no-duplicate", scenarios.objectValue("smallCreateOnlyRetry").text("expected"))
+        assertEquals("same-operation-id-no-duplicate", scenarios.objectValue("largeResumableCreate").text("expected"))
+        assertEquals("same-operation-id-conditional-update", scenarios.objectValue("largeResumableUpdate").text("expected"))
+        assertEquals("repair-only-known-plan-paths-manifest-last", scenarios.objectValue("partialPrerequisitesWithOldManifest").text("expected"))
+        assertEquals("blocked-before-mutation", scenarios.objectValue("duplicatePathsOrFolders").text("expected"))
+        assertEquals("operation-and-cache-inaccessible-cross-account", scenarios.objectValue("accountIsolation").text("expected"))
     }
 
     @Test

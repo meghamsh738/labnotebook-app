@@ -11,13 +11,13 @@ not enable writes, and does not authorize live Drive mutation testing.
 
 ## Current result
 
-Runtime parity remains **blocked only on production web versioned CAS**.
-Android's baseline-free daily-entry path and `data:` thumbnail projection,
-native/web tombstone target normalization, the web File Box-to-transfer
-cascade, malformed JSON quarantine, and web payload projection now have
-client-behavior tests. The web provider protocol and mock enforce version/ETag
-preconditions, but the real Google provider and sync engine remain deliberately
-unwired pending a separately reviewed, live-write-safe milestone.
+Offline transaction parity is implemented and tested for Android, web/PWA, and
+the shared Electron renderer. Runtime parity remains **blocked on isolated live
+versioned-CAS validation**. The low-level web Google client now has offline-tested
+fresh-ETag conditional writes, resumable recovery, and manifest-last transaction
+planning, but normal web construction still reports versioned CAS as disabled.
+Android production still constructs only the read-only Drive path. No fixture or
+passing offline test authorizes a real Drive mutation.
 
 ## Locked policies
 
@@ -41,6 +41,9 @@ unwired pending a separately reviewed, live-write-safe milestone.
   the same instant converge. Divergent records at the same instant block.
 - Stale live JSON or blobs never resurrect a tombstoned entity or descendant.
 - Malformed remote JSON is quarantined losslessly as a pending conflict.
+- The staged offline round trip locks Android-origin payloads, a guarded web
+  edit, an Electron tombstone, Android non-resurrection, and final manifest
+  counts to the same paths and semantic hashes.
 
 Changing the deletion cascade or canonical identity rules is a breaking contract
 change and requires explicit review before runtime behavior is modified.
