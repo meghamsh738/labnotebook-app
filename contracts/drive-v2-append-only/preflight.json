@@ -76,6 +76,7 @@
     { "name": "lone-surrogate-json", "mutation": "make-object-json-lone-surrogate", "expected": "invalid-unicode-scalar", "writerCalls": 0 },
     { "name": "noncanonical-json", "mutation": "make-object-json-noncanonical", "expected": "noncanonical-json-bytes", "writerCalls": 0 },
     { "name": "malformed-commit", "mutation": "remove-commit-field", "expected": "artifact-schema-mismatch", "writerCalls": 0 },
+    { "name": "floating-artifact-number", "mutation": "add-floating-payload-number", "expected": "unsupported-artifact-number", "writerCalls": 0 },
     { "name": "attachment-missing-entry-link", "mutation": "remove-attachment-entry-link", "expected": "missing-parent-linkage", "writerCalls": 0 },
     { "name": "file-box-missing-attachment-link", "mutation": "make-malformed-filebox-linkage", "expected": "missing-parent-linkage", "writerCalls": 0 },
     { "name": "transfer-missing-file-box-link", "mutation": "make-malformed-transfer-linkage", "expected": "missing-parent-linkage", "writerCalls": 0 },

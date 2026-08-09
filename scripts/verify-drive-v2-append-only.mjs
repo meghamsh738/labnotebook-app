@@ -182,6 +182,7 @@ function validateAppProperties(actual, workspaceId, kind, canonicalId, contentSh
 function validateObjectRecord(record, workspaceId = record.body.workspaceId) {
   const { body } = record
   requireExactArtifactFields(body, objectFields)
+  validateArtifactNumberDomain(body)
   assert.equal(body.protocol, protocol)
   assert.equal(body.schemaVersion, 2)
   assert.equal(body.workspaceId, workspaceId)
@@ -226,6 +227,7 @@ function validateObjectRecord(record, workspaceId = record.body.workspaceId) {
 function validateCommitRecord(record, workspaceId = record.body.workspaceId) {
   const { body } = record
   requireExactArtifactFields(body, commitFields)
+  validateArtifactNumberDomain(body)
   assert.equal(body.protocol, protocol)
   assert.equal(body.schemaVersion, 2)
   assert.equal(body.workspaceId, workspaceId)
@@ -299,6 +301,18 @@ function validateBlobRecord(record, workspaceId, expectedParentFolderDriveFileId
 function requireSortedUniqueOrEmpty(values) {
   if (!Array.isArray(values)) contractError('set-field-not-sorted-unique')
   if (values.length > 0) requireSortedUnique(values)
+}
+
+function validateArtifactNumberDomain(value) {
+  if (typeof value === 'number') {
+    if (!Number.isSafeInteger(value)) contractError('unsupported-artifact-number')
+    return
+  }
+  if (Array.isArray(value)) {
+    value.forEach(validateArtifactNumberDomain)
+    return
+  }
+  if (value && typeof value === 'object') Object.values(value).forEach(validateArtifactNumberDomain)
 }
 
 function rawGraphTips(graph) {
@@ -801,6 +815,12 @@ function applyPreflightMutation(snapshot, mutation) {
       setDownloadedJsonText(commit, canonicalJson(commit.body))
       return
     }
+    case 'add-floating-payload-number': {
+      const object = snapshot.artifacts.find((artifact) => artifact.kind === 'object')
+      object.body.payload.measurement = 0.5
+      setDownloadedJsonText(object, canonicalJson(object.body))
+      return
+    }
     case 'remove-attachment-entry-link': {
       const attachment = snapshot.artifacts.find((artifact) =>
         artifact.kind === 'object' && artifact.body.entityKind === 'attachment')
@@ -1123,6 +1143,13 @@ assert.deepEqual(policy.remoteSchemas.entityRelationships, {
   transfer: ['entryId', 'attachmentId', 'fileBoxItemId'],
   requiredIds: 'nonblank-and-reference-existing-reachable-targets-of-the-declared-kind',
   parentConsistency: 'all-referenced-parent-links-must-agree',
+})
+assert.deepEqual(policy.remoteSchemas.numberDomain, {
+  artifactNumbers: 'signed-safe-integers-only',
+  minimum: -9_007_199_254_740_991,
+  maximum: 9_007_199_254_740_991,
+  decimalMeasurements: 'canonical-decimal-strings',
+  unsupportedNumbers: 'block-before-remote-mutation',
 })
 assert.deepEqual(policy.remoteSchemas.commitBody.exactFields.toSorted(), commitFields)
 assert.deepEqual(policy.remoteSchemas.artifactAppProperties.required.toSorted(), appPropertyFields)

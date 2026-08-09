@@ -59,6 +59,12 @@ A commit references the exact objects and blobs it introduces, plus its parent
 commits. The content digest determines the logical ID and path; a Drive file ID
 is only a retry handle.
 
+Remote object and commit bodies permit numeric JSON primitives only for signed
+safe integers (`-9007199254740991` through `9007199254740991`). Decimal and
+scientific measurements are canonical decimal strings. This deliberately narrow
+cross-client domain prevents Android and ECMAScript number-formatting differences
+from producing different content IDs; unsupported numbers block before mutation.
+
 ## Commit graph and visibility
 
 A transaction creates blobs first, then object envelopes, then one commit. The

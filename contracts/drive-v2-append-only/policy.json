@@ -67,6 +67,13 @@
       "requiredIds": "nonblank-and-reference-existing-reachable-targets-of-the-declared-kind",
       "parentConsistency": "all-referenced-parent-links-must-agree"
     },
+    "numberDomain": {
+      "artifactNumbers": "signed-safe-integers-only",
+      "minimum": -9007199254740991,
+      "maximum": 9007199254740991,
+      "decimalMeasurements": "canonical-decimal-strings",
+      "unsupportedNumbers": "block-before-remote-mutation"
+    },
     "commitBody": {
       "exactFields": [
         "protocol",
