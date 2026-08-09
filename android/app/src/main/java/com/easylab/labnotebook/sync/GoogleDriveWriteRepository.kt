@@ -534,10 +534,12 @@ internal class GoogleDriveWriteRepository(
             } catch (error: DriveHttpException) {
                 if (error.statusCode == 404) null else throw error
             }
+            val savedRootIsAtDriveRoot = savedRoot != null &&
+                findChildren(token, "root", folderName).any { candidate -> candidate.id == savedId }
             if (
                 savedRoot != null && savedRoot.id == savedId &&
                 savedRoot.mimeType == FOLDER_MIME_TYPE && !savedRoot.trashed &&
-                savedRoot.name == folderName && "root" in savedRoot.parentIds
+                savedRoot.name == folderName && savedRootIsAtDriveRoot
             ) {
                 return savedId
             }
