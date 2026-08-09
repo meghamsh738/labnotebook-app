@@ -78,13 +78,15 @@ test('two isolated browser profiles sync entries and attachment blobs through th
     const pushed = await syncOnce({ provider, store: desktopStore, device: desktopDevice, blobStore: desktopBlobs })
     const pulled = await syncOnce({ provider, store: mobileStore, device: mobileDevice, blobStore: mobileBlobs })
     const mobileSnapshot = await mobileStore.getSnapshot()
-    const mobileBlob = await mobileBlobs.get('cache-att-image')
+    const mobileAttachment = mobileSnapshot.attachments.find((attachment) => attachment.id === 'att-image')
+    const mobileBlob = mobileAttachment?.cacheKey ? await mobileBlobs.get(mobileAttachment.cacheKey) : undefined
 
     return {
       pushed,
       pulled,
       entryTitle: mobileSnapshot.entries[entry.id]?.title,
       attachmentCount: mobileSnapshot.attachments.length,
+      mobileCacheKey: mobileAttachment?.cacheKey,
       blobText: await mobileBlob?.text(),
       mobileConflictCount: mobileSnapshot.conflicts.length,
       remotePaths: (await provider.listManagedFiles()).map((file) => file.path).sort(),
@@ -96,6 +98,7 @@ test('two isolated browser profiles sync entries and attachment blobs through th
   expect(result.pulled.downloadedBlobs).toBe(1)
   expect(result.entryTitle).toBe('Two profile sync')
   expect(result.attachmentCount).toBe(1)
+  expect(result.mobileCacheKey).toBe('attachment-att-image')
   expect(result.blobText).toBe('two profile image')
   expect(result.mobileConflictCount).toBe(0)
   expect(result.remotePaths).toContain('attachments/2026-05-24/att-image-image.png')

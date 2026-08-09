@@ -11,6 +11,16 @@ import type {
   TransferRecord,
   TransferStatus,
 } from '../domain/types'
+import {
+  DriveResumableOperationIdentityError,
+  DriveResumableOperationStore,
+  IndexedDbDriveResumableOperationPersistence,
+  isPositiveDriveVersion,
+  sha256Hex,
+  stableStringify,
+  type DriveResumableOperationIdentity,
+  type DriveResumableOperationRecord,
+} from './driveResumableOperations'
 
 export const DRIVE_SCOPE = 'openid email profile https://www.googleapis.com/auth/drive.file'
 export const DRIVE_ROOT_FOLDER = 'Easylab Lab Notebook'
@@ -27,6 +37,7 @@ const DRIVE_REQUEST_RETRY_COUNT = 2
 const GOOGLE_IDENTITY_LOAD_TIMEOUT_MS = 15_000
 const GOOGLE_AUTH_TIMEOUT_MS = 45_000
 const DRIVE_REQUEST_TIMEOUT_MS = 30_000
+const DRIVE_FILE_FIELDS = 'id,name,mimeType,modifiedTime,size,trashed,version,parents,appProperties'
 
 export type StorageMode = 'local-only' | 'google-drive'
 
@@ -86,6 +97,8 @@ export type SyncProvider = {
   ensureFolder(parentFolderId: string, name: string): Promise<string>
   uploadJson<T>(parentFolderId: string, name: string, data: T): Promise<string>
   uploadBlob(parentFolderId: string, name: string, blob: Blob, mimeType?: string, metadata?: DriveBlobMetadata): Promise<string>
+  conditionalUploadJson?<T>(request: DriveConditionalJsonWrite<T>): Promise<DriveFile>
+  conditionalUploadBlob?(request: DriveConditionalBlobWrite): Promise<DriveFile>
   downloadJson<T>(fileId: string): Promise<T>
   downloadText?(fileId: string): Promise<string>
   downloadBlob(fileId: string): Promise<Blob>
@@ -99,6 +112,34 @@ export type DriveBlobMetadata = {
   appProperties?: Record<string, unknown>
 }
 
+export type DriveWritePrecondition =
+  | { kind: 'must-match'; fileId: string; version: string }
+  | { kind: 'must-not-exist'; operationId: string }
+
+type DriveConditionalWriteBase = {
+  parentFolderId: string
+  path: string
+  name: string
+  precondition: DriveWritePrecondition
+  appProperties?: Record<string, string>
+  resumableOperationId?: string
+  signal?: AbortSignal
+}
+
+export type DriveConditionalJsonWrite<T = unknown> = DriveConditionalWriteBase & {
+  value: T
+}
+
+export type DriveConditionalBlobWrite = DriveConditionalWriteBase & {
+  blob: Blob
+  mimeType: string
+  sha256: string
+}
+
+export class DriveWritePreconditionConflictError extends Error {}
+
+export class DriveWriteAmbiguousCommitError extends Error {}
+
 export type DriveFile = {
   id: string
   name: string
@@ -106,6 +147,9 @@ export type DriveFile = {
   modifiedTime?: string
   size?: string
   trashed?: boolean
+  version?: string
+  parents?: string[]
+  appProperties?: Record<string, string>
 }
 
 type TokenResponse = {
@@ -552,6 +596,11 @@ function driveBlobAppProperties(metadata?: DriveBlobMetadata) {
     .map(([key, value]) => [key, String(value)] as const)
   const appProperties = Object.fromEntries(entries)
   if (metadata?.sha256) appProperties.sha256 = String(metadata.sha256)
+  validateDriveAppProperties(appProperties)
+  return Object.keys(appProperties).length > 0 ? appProperties : undefined
+}
+
+function validateDriveAppProperties(appProperties: Record<string, string>) {
   const normalizedEntries = Object.entries(appProperties)
   if (normalizedEntries.length > DRIVE_MAX_PRIVATE_APP_PROPERTIES) {
     throw new Error(`Google Drive supports at most ${DRIVE_MAX_PRIVATE_APP_PROPERTIES} private app properties per file.`)
@@ -562,7 +611,6 @@ function driveBlobAppProperties(metadata?: DriveBlobMetadata) {
       throw new Error(`Google Drive app property "${key}" exceeds the ${DRIVE_MAX_PROPERTY_BYTES}-byte UTF-8 limit.`)
     }
   }
-  return Object.keys(appProperties).length > 0 ? appProperties : undefined
 }
 
 class GoogleDriveRequestError extends Error {
@@ -582,15 +630,44 @@ function isRetryableDriveError(error: unknown) {
   return false
 }
 
+function isDriveRequestAbort(error: unknown) {
+  return error instanceof DOMException
+    ? error.name === 'AbortError'
+    : error instanceof Error && error.name === 'AbortError'
+}
+
+function throwIfDriveRequestAborted(signal?: AbortSignal | null): void {
+  if (!signal?.aborted) return
+  if (signal.reason instanceof Error) throw signal.reason
+  throw new DOMException('Google Drive request was cancelled.', 'AbortError')
+}
+
 export class GoogleDriveProvider implements SyncProvider {
   readonly kind = 'google-drive' as const
   private accessToken = ''
   private accountProfile: GoogleAccountProfile | undefined
   private tokenClient: TokenClient | null = null
-  private readonly options: { clientId: string; clientSecret?: string; folderName?: string; authPrompt?: string }
+  private readonly options: {
+    clientId: string
+    clientSecret?: string
+    folderName?: string
+    authPrompt?: string
+    resumableOperationStore?: DriveResumableOperationStore
+    testOnlyStorageScope?: string
+  }
+  private readonly resumableOperations: DriveResumableOperationStore
 
-  constructor(options: { clientId: string; clientSecret?: string; folderName?: string; authPrompt?: string }) {
+  constructor(options: {
+    clientId: string
+    clientSecret?: string
+    folderName?: string
+    authPrompt?: string
+    resumableOperationStore?: DriveResumableOperationStore
+    testOnlyStorageScope?: string
+  }) {
     this.options = options
+    this.resumableOperations = options.resumableOperationStore
+      ?? new DriveResumableOperationStore(new IndexedDbDriveResumableOperationPersistence())
   }
 
   async signIn(): Promise<GoogleAccountProfile | undefined> {
@@ -725,14 +802,14 @@ export class GoogleDriveProvider implements SyncProvider {
     const q = query ? `${base} and ${query}` : base
     const url = new URL('https://www.googleapis.com/drive/v3/files')
     url.searchParams.set('q', q)
-    url.searchParams.set('fields', 'files(id,name,mimeType,modifiedTime,size)')
+    url.searchParams.set('fields', 'files(id,name,mimeType,modifiedTime,size,trashed,version,parents,appProperties)')
     const result = await this.request<{ files?: DriveFile[] }>(url.toString())
     return result.files ?? []
   }
 
   async getFileMetadata(fileId: string): Promise<DriveFile> {
     const url = new URL(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}`)
-    url.searchParams.set('fields', 'id,name,mimeType,trashed')
+    url.searchParams.set('fields', 'id,name,mimeType,modifiedTime,size,trashed,version,parents,appProperties')
     return this.request<DriveFile>(url.toString())
   }
 
@@ -746,6 +823,351 @@ export class GoogleDriveProvider implements SyncProvider {
       resumable: normalizedBlob.size >= DRIVE_RESUMABLE_UPLOAD_THRESHOLD_BYTES,
       appProperties: driveBlobAppProperties(metadata),
     })
+  }
+
+  async conditionalUploadJson<T>(request: DriveConditionalJsonWrite<T>): Promise<DriveFile> {
+    const content = new Blob([JSON.stringify(request.value, null, 2)], { type: 'application/json' })
+    if (content.size >= DRIVE_RESUMABLE_UPLOAD_THRESHOLD_BYTES) {
+      throw new Error('Drive conditional JSON payload exceeds the multipart upload limit.')
+    }
+    return this.conditionalWrite({
+      ...request,
+      blob: content,
+      mimeType: 'application/json',
+      sha256: await sha256Hex(content),
+    })
+  }
+
+  async conditionalUploadBlob(request: DriveConditionalBlobWrite): Promise<DriveFile> {
+    const mimeType = request.mimeType.split(';')[0].trim().toLowerCase()
+    if (!mimeType.includes('/') || mimeType.startsWith('application/vnd.google-apps.')) {
+      throw new Error(`Drive blob MIME type is invalid: ${request.path}`)
+    }
+    const actualSha256 = await sha256Hex(request.blob)
+    if (actualSha256 !== request.sha256.toLowerCase()) {
+      throw new Error(`Drive blob SHA-256 does not match its bytes: ${request.path}`)
+    }
+    return this.conditionalWrite({ ...request, mimeType, sha256: actualSha256 })
+  }
+
+  private async conditionalWrite(request: DriveConditionalBlobWrite): Promise<DriveFile> {
+    throwIfDriveRequestAborted(request.signal)
+    if (!request.path.trim() || !request.name.trim()) throw new Error('Drive conditional path is invalid.')
+    const useResumable = request.blob.size >= DRIVE_RESUMABLE_UPLOAD_THRESHOLD_BYTES
+    const appProperties = {
+      ...(request.appProperties ?? {}),
+      sha256: request.sha256,
+    }
+    validateDriveAppProperties(appProperties)
+    const storageScope = useResumable ? this.requireResumableStorageScope() : undefined
+    const matches = await this.findExactPathOccupants(request.parentFolderId, request.name)
+    let identity: DriveResumableOperationIdentity | undefined
+
+    if (request.precondition.kind === 'must-match') {
+      if (!isPositiveDriveVersion(request.precondition.version)) {
+        throw new DriveWritePreconditionConflictError('Drive conditional update requires a positive version.')
+      }
+      if (matches.length !== 1 || matches[0].id !== request.precondition.fileId) {
+        throw new DriveWritePreconditionConflictError('Drive path no longer has the expected unique file.')
+      }
+      if (useResumable) {
+        const operationId = request.resumableOperationId?.trim()
+        if (!operationId) throw new Error('Drive resumable update requires a stable operation id.')
+        const previouslyBound = await this.resumableOperations.read(storageScope!, operationId)
+        identity = {
+          operationId,
+          path: request.path,
+          mimeType: request.mimeType,
+          byteSize: request.blob.size,
+          sha256: request.sha256,
+          appProperties,
+          target: {
+            kind: 'existing',
+            fileId: request.precondition.fileId,
+            expectedVersion: request.precondition.version,
+          },
+        }
+        const record = await this.resumableOperations.begin(storageScope!, identity)
+        if (previouslyBound || record.state === 'completed') {
+          const reconciled = await this.tryVerifyConditionalWrite({
+            ...request,
+            appProperties,
+            fileId: request.precondition.fileId,
+            minimumExclusiveVersion: request.precondition.version,
+          })
+          if (reconciled) {
+            await this.resumableOperations.markCompleted(storageScope!, identity, reconciled.version!)
+            return reconciled
+          }
+          if (record.state === 'completed') {
+            throw new DriveWritePreconditionConflictError('Completed Drive update no longer matches its file.')
+          }
+        }
+      } else if (request.resumableOperationId) {
+        throw new Error('Drive multipart update must not include a resumable operation id.')
+      }
+      return this.updateConditional(
+        { ...request, precondition: request.precondition },
+        appProperties,
+        identity,
+        storageScope,
+      )
+    }
+
+    if (!request.precondition.operationId.trim()) {
+      throw new Error('Drive create-only write requires a stable operation id.')
+    }
+    if (request.resumableOperationId && request.resumableOperationId !== request.precondition.operationId) {
+      throw new DriveResumableOperationIdentityError('Drive create-only resumable operation ids do not match.')
+    }
+    const fingerprint = await this.creationFingerprint(request, appProperties)
+    const intendedAppProperties = { ...appProperties, easylabCreateFingerprint: fingerprint }
+    validateDriveAppProperties(intendedAppProperties)
+    const reservationKey = `elcr_${(await sha256Hex(request.path)).slice(0, 24)}`
+    const reservationValue = await sha256Hex(`${request.precondition.operationId}\u0000${fingerprint}`)
+    let generatedFileId: string | undefined
+    let resumableRecord: DriveResumableOperationRecord | undefined
+    if (useResumable) {
+      const existing = await this.resumableOperations.read(storageScope!, request.precondition.operationId)
+      if (existing) {
+        if (existing.identity.target.kind !== 'new') {
+          throw new DriveResumableOperationIdentityError('Drive operation id is bound to an existing-file update.')
+        }
+        generatedFileId = existing.identity.target.fileId
+        identity = {
+          operationId: request.precondition.operationId,
+          path: request.path,
+          mimeType: request.mimeType,
+          byteSize: request.blob.size,
+          sha256: request.sha256,
+          appProperties: intendedAppProperties,
+          target: { kind: 'new', fileId: generatedFileId, creationFingerprint: fingerprint },
+        }
+        resumableRecord = await this.resumableOperations.begin(storageScope!, identity)
+      }
+    }
+    if (matches.length > 0) {
+      if (matches.length === 1 && (!useResumable || generatedFileId)) {
+        const reconciled = await this.reconcileCreatedWrite(request, intendedAppProperties, generatedFileId)
+        if (reconciled) {
+          if (identity) await this.resumableOperations.markCompleted(storageScope!, identity, reconciled.version!)
+          await this.releaseCreateReservation(request.parentFolderId, reservationKey, reservationValue)
+          return reconciled
+        }
+      }
+      throw new DriveWritePreconditionConflictError('Drive create-only path is already occupied.')
+    }
+
+    if (useResumable) {
+      if (!identity) {
+        generatedFileId = await this.generateFileId()
+        identity = {
+          operationId: request.precondition.operationId,
+          path: request.path,
+          mimeType: request.mimeType,
+          byteSize: request.blob.size,
+          sha256: request.sha256,
+          appProperties: intendedAppProperties,
+          target: { kind: 'new', fileId: generatedFileId, creationFingerprint: fingerprint },
+        }
+        resumableRecord = await this.resumableOperations.begin(storageScope!, identity)
+      }
+      if (resumableRecord?.state === 'completed') {
+        throw new DriveWritePreconditionConflictError('Completed Drive create operation no longer matches its file.')
+      }
+    } else if (request.resumableOperationId) {
+      throw new Error('Drive multipart creation must not include a resumable operation id.')
+    }
+    throwIfDriveRequestAborted(request.signal)
+    await this.acquireCreateReservation(request.parentFolderId, reservationKey, reservationValue)
+    try {
+      const created = await this.createConditional(
+        { ...request, precondition: request.precondition },
+        intendedAppProperties,
+        generatedFileId,
+        identity,
+        storageScope,
+      )
+      await this.releaseCreateReservation(request.parentFolderId, reservationKey, reservationValue)
+      return created
+    } catch (error) {
+      if (error instanceof DriveWritePreconditionConflictError) {
+        await this.releaseCreateReservation(request.parentFolderId, reservationKey, reservationValue)
+      }
+      throw error
+    }
+  }
+
+  private async updateConditional(
+    request: DriveConditionalBlobWrite & { precondition: Extract<DriveWritePrecondition, { kind: 'must-match' }> },
+    appProperties: Record<string, string>,
+    identity?: DriveResumableOperationIdentity,
+    storageScope?: string,
+  ) {
+    const fresh = await this.getMetadataSnapshot(request.precondition.fileId)
+    if (!this.matchesExpectedTarget(fresh.file, request, request.precondition.version)) {
+      throw new DriveWritePreconditionConflictError('Drive file changed before the conditional update.')
+    }
+    if (!fresh.etag) throw new Error('Drive metadata omitted the ETag required for a conditional update.')
+    const mergedAppProperties = { ...(fresh.file.appProperties ?? {}), ...appProperties }
+    const useResumable = request.blob.size >= DRIVE_RESUMABLE_UPLOAD_THRESHOLD_BYTES
+    let mutationStarted = false
+    let uploadSessionStarted = false
+    try {
+      throwIfDriveRequestAborted(request.signal)
+      mutationStarted = true
+      if (useResumable) {
+        const session = await this.requestRawNoRetry(
+          `https://www.googleapis.com/upload/drive/v3/files/${encodeURIComponent(request.precondition.fileId)}?uploadType=resumable&fields=${encodeURIComponent(DRIVE_FILE_FIELDS)}`,
+          {
+            method: 'PATCH',
+            headers: {
+              'Content-Type': 'application/json; charset=UTF-8',
+              'If-Match': fresh.etag,
+              'X-Upload-Content-Type': request.mimeType,
+              'X-Upload-Content-Length': String(request.blob.size),
+            },
+            body: JSON.stringify({ name: request.name, mimeType: request.mimeType, appProperties: mergedAppProperties }),
+            signal: request.signal,
+          },
+        )
+        const location = session.headers.get('Location')
+        if (!location) throw new Error('Google Drive did not return a resumable upload session URL.')
+        uploadSessionStarted = true
+        await this.requestRawNoRetry(location, {
+          method: 'PUT',
+          headers: { 'Content-Type': request.mimeType },
+          body: request.blob,
+          signal: request.signal,
+        })
+      } else {
+        const { body } = multipartBody({
+          name: request.name,
+          mimeType: request.mimeType,
+          appProperties: mergedAppProperties,
+        }, request.blob)
+        await this.requestRawNoRetry(
+          `https://www.googleapis.com/upload/drive/v3/files/${encodeURIComponent(request.precondition.fileId)}?uploadType=multipart&fields=${encodeURIComponent(DRIVE_FILE_FIELDS)}`,
+          { method: 'PATCH', headers: { 'If-Match': fresh.etag }, body, signal: request.signal },
+        )
+      }
+      const verified = await this.verifyConditionalWrite({
+        ...request,
+        appProperties: mergedAppProperties,
+        fileId: request.precondition.fileId,
+        minimumExclusiveVersion: request.precondition.version,
+      })
+      if (identity) await this.resumableOperations.markCompleted(storageScope!, identity, verified.version!)
+      return verified
+    } catch (error) {
+      if (this.isDrivePreconditionFailure(error) && !uploadSessionStarted) {
+        throw new DriveWritePreconditionConflictError('Drive rejected a stale conditional update.')
+      }
+      if (mutationStarted) {
+        const reconciled = await this.tryVerifyConditionalWrite({
+          ...request,
+          appProperties: mergedAppProperties,
+          fileId: request.precondition.fileId,
+          minimumExclusiveVersion: request.precondition.version,
+        })
+        if (reconciled) {
+          if (identity) await this.resumableOperations.markCompleted(storageScope!, identity, reconciled.version!)
+          return reconciled
+        }
+        if (identity) await this.resumableOperations.markAmbiguous(storageScope!, identity)
+        if (isDriveRequestAbort(error)) throw error
+        throw new DriveWriteAmbiguousCommitError(`Drive update may have committed but could not be verified: ${request.path}`)
+      }
+      throw error
+    }
+  }
+
+  private async createConditional(
+    request: DriveConditionalBlobWrite & { precondition: Extract<DriveWritePrecondition, { kind: 'must-not-exist' }> },
+    appProperties: Record<string, string>,
+    generatedFileId?: string,
+    identity?: DriveResumableOperationIdentity,
+    storageScope?: string,
+  ) {
+    if ((await this.findExactPathOccupants(request.parentFolderId, request.name)).length > 0) {
+      throw new DriveWritePreconditionConflictError('Drive create-only path became occupied before upload.')
+    }
+    const useResumable = request.blob.size >= DRIVE_RESUMABLE_UPLOAD_THRESHOLD_BYTES
+    let mutationStarted = false
+    let uploadSessionStarted = false
+    try {
+      throwIfDriveRequestAborted(request.signal)
+      mutationStarted = true
+      if (useResumable) {
+        const session = await this.requestRawNoRetry(
+          `https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&fields=${encodeURIComponent(DRIVE_FILE_FIELDS)}`,
+          {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json; charset=UTF-8',
+              'X-Upload-Content-Type': request.mimeType,
+              'X-Upload-Content-Length': String(request.blob.size),
+            },
+            body: JSON.stringify({
+              id: generatedFileId,
+              name: request.name,
+              mimeType: request.mimeType,
+              parents: [request.parentFolderId],
+              appProperties,
+            }),
+            signal: request.signal,
+          },
+        )
+        const location = session.headers.get('Location')
+        if (!location) throw new Error('Google Drive did not return a resumable upload session URL.')
+        uploadSessionStarted = true
+        await this.requestRawNoRetry(location, {
+          method: 'PUT',
+          headers: { 'Content-Type': request.mimeType },
+          body: request.blob,
+          signal: request.signal,
+        })
+      } else {
+        const { body } = multipartBody({
+          name: request.name,
+          mimeType: request.mimeType,
+          parents: [request.parentFolderId],
+          appProperties,
+        }, request.blob)
+        await this.requestRawNoRetry(
+          `https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=${encodeURIComponent(DRIVE_FILE_FIELDS)}`,
+          { method: 'POST', body, signal: request.signal },
+        )
+      }
+      const matches = await this.findExactPathOccupants(request.parentFolderId, request.name)
+      if (matches.length !== 1) throw new DriveWritePreconditionConflictError('Drive create did not produce one unique path occupant.')
+      if (generatedFileId && matches[0].id !== generatedFileId) {
+        throw new DriveWritePreconditionConflictError('Drive resumable creation used an unexpected file id.')
+      }
+      const verified = await this.verifyConditionalWrite({
+        ...request,
+        appProperties,
+        fileId: matches[0].id,
+        minimumExclusiveVersion: '0',
+      })
+      if (identity) await this.resumableOperations.markCompleted(storageScope!, identity, verified.version!)
+      return verified
+    } catch (error) {
+      if (this.isDrivePreconditionFailure(error) && !uploadSessionStarted) {
+        throw new DriveWritePreconditionConflictError('Drive rejected the create-only write.')
+      }
+      if (mutationStarted) {
+        const reconciled = await this.reconcileCreatedWrite(request, appProperties, generatedFileId)
+        if (reconciled) {
+          if (identity) await this.resumableOperations.markCompleted(storageScope!, identity, reconciled.version!)
+          return reconciled
+        }
+        if (identity) await this.resumableOperations.markAmbiguous(storageScope!, identity)
+        if (isDriveRequestAbort(error)) throw error
+        throw new DriveWriteAmbiguousCommitError(`Drive creation may have committed but could not be verified: ${request.path}`)
+      }
+      throw error
+    }
   }
 
   async downloadJson<T>(fileId: string): Promise<T> {
@@ -762,6 +1184,203 @@ export class GoogleDriveProvider implements SyncProvider {
   async downloadBlob(fileId: string): Promise<Blob> {
     const response = await this.requestRaw(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?alt=media`)
     return response.blob()
+  }
+
+  private requireResumableStorageScope() {
+    const testScope = this.options.testOnlyStorageScope?.trim()
+    if (testScope) return testScope
+    const pinned = this.accountProfile?.storageScope?.trim()
+    if (pinned) return pinned
+    const subject = this.accountProfile?.subject?.trim()
+    if (subject) return encodeURIComponent(subject.toLowerCase())
+    throw new Error('Drive resumable writes require an account-scoped local storage identity.')
+  }
+
+  private async findExactPathOccupants(parentFolderId: string, name: string) {
+    return this.listFolder(
+      parentFolderId,
+      `name = '${escapeDriveQuery(name)}' and mimeType != '${DRIVE_MIME_FOLDER}'`,
+    )
+  }
+
+  private async getMetadataSnapshot(fileId: string): Promise<{ file: DriveFile; etag: string }> {
+    const url = new URL(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}`)
+    url.searchParams.set('fields', DRIVE_FILE_FIELDS)
+    const response = await this.requestRawNoRetry(url.toString(), {
+      headers: { 'Cache-Control': 'no-cache' },
+    })
+    return {
+      file: await response.json() as DriveFile,
+      etag: response.headers.get('ETag')?.trim() ?? '',
+    }
+  }
+
+  private async acquireCreateReservation(parentFolderId: string, key: string, value: string) {
+    const snapshot = await this.getMetadataSnapshot(parentFolderId)
+    if (snapshot.file.mimeType !== DRIVE_MIME_FOLDER || snapshot.file.trashed === true || !snapshot.etag) {
+      throw new DriveWritePreconditionConflictError('Drive create reservation parent is not a verified active folder.')
+    }
+    const existing = snapshot.file.appProperties?.[key]
+    if (existing) {
+      if (existing === value) return
+      throw new DriveWritePreconditionConflictError('Drive path has another active create reservation.')
+    }
+    try {
+      await this.requestRawNoRetry(
+        `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(parentFolderId)}?fields=${encodeURIComponent(DRIVE_FILE_FIELDS)}`,
+        {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json', 'If-Match': snapshot.etag },
+          body: JSON.stringify({ appProperties: { ...(snapshot.file.appProperties ?? {}), [key]: value } }),
+        },
+      )
+    } catch (error) {
+      if (this.isDrivePreconditionFailure(error)) {
+        throw new DriveWritePreconditionConflictError('Drive create reservation raced with another folder update.')
+      }
+      throw error
+    }
+    const verified = await this.getMetadataSnapshot(parentFolderId)
+    if (verified.file.appProperties?.[key] !== value) {
+      throw new DriveWritePreconditionConflictError('Drive create reservation could not be verified.')
+    }
+  }
+
+  private async releaseCreateReservation(parentFolderId: string, key: string, value: string) {
+    const snapshot = await this.getMetadataSnapshot(parentFolderId)
+    const existing = snapshot.file.appProperties?.[key]
+    if (!existing) return
+    if (existing !== value || !snapshot.etag) {
+      throw new DriveWritePreconditionConflictError('Drive create reservation changed before release.')
+    }
+    try {
+      await this.requestRawNoRetry(
+        `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(parentFolderId)}?fields=${encodeURIComponent(DRIVE_FILE_FIELDS)}`,
+        {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json', 'If-Match': snapshot.etag },
+          body: JSON.stringify({ appProperties: { [key]: null } }),
+        },
+      )
+    } catch (error) {
+      if (this.isDrivePreconditionFailure(error)) {
+        throw new DriveWritePreconditionConflictError('Drive create reservation changed before release.')
+      }
+      throw error
+    }
+  }
+
+  private matchesExpectedTarget(
+    file: DriveFile,
+    request: DriveConditionalBlobWrite,
+    expectedVersion: string,
+  ) {
+    return file.id === (request.precondition.kind === 'must-match' ? request.precondition.fileId : file.id)
+      && file.name === request.name
+      && file.mimeType === request.mimeType
+      && file.trashed !== true
+      && file.version === expectedVersion
+      && file.parents?.length === 1
+      && file.parents[0] === request.parentFolderId
+  }
+
+  private async verifyConditionalWrite(request: DriveConditionalBlobWrite & {
+    appProperties: Record<string, string>
+    fileId: string
+    minimumExclusiveVersion: string
+  }) {
+    const matches = await this.findExactPathOccupants(request.parentFolderId, request.name)
+    if (matches.length !== 1 || matches[0].id !== request.fileId) {
+      throw new DriveWritePreconditionConflictError('Drive write verification found a missing or duplicate path.')
+    }
+    const first = await this.getMetadataSnapshot(request.fileId)
+    if (
+      first.file.id !== request.fileId
+      || first.file.name !== request.name
+      || first.file.mimeType !== request.mimeType
+      || first.file.trashed === true
+      || first.file.parents?.length !== 1
+      || first.file.parents[0] !== request.parentFolderId
+      || !isPositiveDriveVersion(first.file.version)
+      || BigInt(first.file.version) <= BigInt(request.minimumExclusiveVersion)
+    ) {
+      throw new DriveWritePreconditionConflictError('Drive write metadata did not match the intended target.')
+    }
+    for (const [key, value] of Object.entries(request.appProperties)) {
+      if (first.file.appProperties?.[key] !== value) {
+        throw new DriveWritePreconditionConflictError('Drive write app properties did not verify.')
+      }
+    }
+    const remoteBlob = await this.downloadBlob(request.fileId)
+    if (remoteBlob.size !== request.blob.size || await sha256Hex(remoteBlob) !== request.sha256) {
+      throw new DriveWritePreconditionConflictError('Drive write content did not verify.')
+    }
+    const second = await this.getMetadataSnapshot(request.fileId)
+    if (
+      second.file.version !== first.file.version
+      || second.file.modifiedTime !== first.file.modifiedTime
+      || stableStringify(second.file.appProperties ?? {}) !== stableStringify(first.file.appProperties ?? {})
+      || second.file.trashed === true
+    ) {
+      throw new DriveWritePreconditionConflictError('Drive metadata changed during post-write verification.')
+    }
+    return first.file
+  }
+
+  private async tryVerifyConditionalWrite(request: DriveConditionalBlobWrite & {
+    appProperties: Record<string, string>
+    fileId: string
+    minimumExclusiveVersion: string
+  }) {
+    try {
+      return await this.verifyConditionalWrite(request)
+    } catch {
+      return undefined
+    }
+  }
+
+  private async reconcileCreatedWrite(
+    request: DriveConditionalBlobWrite,
+    appProperties: Record<string, string>,
+    generatedFileId?: string,
+  ) {
+    const matches = await this.findExactPathOccupants(request.parentFolderId, request.name)
+    if (matches.length !== 1 || (generatedFileId && matches[0].id !== generatedFileId)) return undefined
+    return this.tryVerifyConditionalWrite({
+      ...request,
+      appProperties,
+      fileId: matches[0].id,
+      minimumExclusiveVersion: '0',
+    })
+  }
+
+  private creationFingerprint(
+    request: DriveConditionalBlobWrite,
+    appProperties: Record<string, string>,
+  ) {
+    return sha256Hex(stableStringify({
+      path: request.path,
+      mimeType: request.mimeType,
+      byteSize: request.blob.size,
+      sha256: request.sha256,
+      appProperties,
+    }))
+  }
+
+  private async generateFileId() {
+    const url = new URL('https://www.googleapis.com/drive/v3/files/generateIds')
+    url.searchParams.set('count', '1')
+    url.searchParams.set('space', 'drive')
+    url.searchParams.set('type', 'files')
+    const response = await this.requestRawNoRetry(url.toString())
+    const value = await response.json() as { ids?: string[] }
+    const id = value.ids?.[0]?.trim()
+    if (!id) throw new Error('Google Drive did not generate a file id for resumable creation.')
+    return id
+  }
+
+  private isDrivePreconditionFailure(error: unknown) {
+    return error instanceof GoogleDriveRequestError && [404, 409, 412].includes(error.status)
   }
 
   private async upsertFile(
@@ -827,29 +1446,45 @@ export class GoogleDriveProvider implements SyncProvider {
   }
 
   private async requestRaw(url: string, init: RequestInit = {}): Promise<Response> {
+    return this.withRequestRetry(() => this.requestRawNoRetry(url, init))
+  }
+
+  private async requestRawNoRetry(url: string, init: RequestInit = {}): Promise<Response> {
     if (!this.accessToken) throw new Error('Google Drive is not authorized.')
     const headers = new Headers(init.headers)
     headers.set('Authorization', `Bearer ${this.accessToken}`)
-    return this.withRequestRetry(async () => {
-      const controller = new AbortController()
-      const timeout = globalThis.setTimeout(() => controller.abort(), DRIVE_REQUEST_TIMEOUT_MS)
-      let response: Response
-      try {
-        response = await fetch(url, { ...init, headers, signal: controller.signal })
-      } catch (error) {
-        if (error instanceof DOMException && error.name === 'AbortError') {
-          throw new Error('Google Drive request timed out. Check your connection and try again.')
-        }
-        throw error
-      } finally {
-        globalThis.clearTimeout(timeout)
+    const controller = new AbortController()
+    const callerSignal = init.signal
+    let callerAborted = callerSignal?.aborted === true
+    const abortFromCaller = () => {
+      callerAborted = true
+      controller.abort(callerSignal?.reason)
+    }
+    if (callerSignal) {
+      if (callerSignal.aborted) abortFromCaller()
+      else callerSignal.addEventListener('abort', abortFromCaller, { once: true })
+    }
+    const timeout = globalThis.setTimeout(() => controller.abort(), DRIVE_REQUEST_TIMEOUT_MS)
+    let response: Response
+    try {
+      response = await fetch(url, { ...init, headers, signal: controller.signal })
+    } catch (error) {
+      if (isDriveRequestAbort(error) && callerAborted) {
+        throwIfDriveRequestAborted(callerSignal)
       }
-      if (!response.ok) {
-        const detail = await response.text().catch(() => '')
-        throw new GoogleDriveRequestError(response.status, detail || response.statusText)
+      if (isDriveRequestAbort(error)) {
+        throw new Error('Google Drive request timed out. Check your connection and try again.')
       }
-      return response
-    })
+      throw error
+    } finally {
+      globalThis.clearTimeout(timeout)
+      callerSignal?.removeEventListener('abort', abortFromCaller)
+    }
+    if (!response.ok) {
+      const detail = await response.text().catch(() => '')
+      throw new GoogleDriveRequestError(response.status, detail || response.statusText)
+    }
+    return response
   }
 
   private async withRequestRetry<T>(operation: () => Promise<T>): Promise<T> {

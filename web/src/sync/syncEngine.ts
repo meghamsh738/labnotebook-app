@@ -188,8 +188,24 @@ export class IndexedDbJournalStore implements LocalJournalStore {
 
 function snapshotReplacements(snapshot: JournalSnapshot, device: DeviceProfile): JournalStoreReplacements {
   return {
-    entries: Object.values(snapshot.entries).map((entry) => buildEntryEnvelope(entry, device)),
-    attachments: snapshot.attachments.map((attachment) => buildAttachmentEnvelope(attachment, device)),
+    // IndexedDB is the local journal, so retain local-only cache/provenance fields here.
+    // Drive projection remains confined to the remote writer calls below.
+    entries: Object.values(snapshot.entries).map((entry) => ({
+      id: entry.id,
+      kind: 'entry' as const,
+      version: 1 as const,
+      updatedAt: entry.lastEditedDatetime,
+      updatedByDeviceId: entry.updatedByDeviceId || device.id,
+      payload: entry,
+    })),
+    attachments: snapshot.attachments.map((attachment) => ({
+      id: attachment.id,
+      kind: 'attachment' as const,
+      version: 1 as const,
+      updatedAt: attachment.updatedAt || attachment.createdAt || nowIso(),
+      updatedByDeviceId: device.id,
+      payload: attachment,
+    })),
     fileBoxItems: snapshot.fileBoxItems,
     transfers: snapshot.transfers,
     conflicts: snapshot.conflicts,

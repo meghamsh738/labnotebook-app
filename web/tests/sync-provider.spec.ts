@@ -21,7 +21,7 @@ type FakeDriveNode = DriveFile & {
   blob?: Blob
 }
 
-test('Mock provider enforces exact file, version, and ETag preconditions', async () => {
+test('Mock provider enforces exact file and version preconditions', async () => {
   const provider = new MockSyncProvider()
   await provider.signIn()
   const created = await provider.putJson('entries/2026-05-24.json', { title: 'base' })
@@ -30,7 +30,6 @@ test('Mock provider enforces exact file, version, and ETag preconditions', async
     kind: 'must-match' as const,
     fileId: created.id,
     version: created.version!,
-    etag: created.etag!,
   }
 
   const updated = await provider.putJson(
@@ -157,7 +156,8 @@ class FakeFolderDriveClient implements FolderDriveClient {
     this.requireSignIn()
     const existing = [...this.nodes.values()].find((node) => node.parentId === parentFolderId && node.name === name && node.mimeType !== DRIVE_MIME_FOLDER)
     const id = existing?.id ?? this.nextId()
-    this.nodes.set(id, { id, name, parentId: parentFolderId, mimeType, modifiedTime: nowIso() })
+    const version = String(Number.parseInt(existing?.version ?? '0', 10) + 1)
+    this.nodes.set(id, { id, name, parentId: parentFolderId, mimeType, modifiedTime: nowIso(), version })
     return id
   }
 
@@ -179,6 +179,9 @@ function toDriveFile(node: FakeDriveNode): DriveFile {
     modifiedTime: node.modifiedTime,
     size: node.size,
     trashed: node.trashed,
+    version: node.version ?? '1',
+    parents: node.parentId ? [node.parentId] : [],
+    appProperties: node.appProperties,
   }
 }
 
@@ -238,12 +241,16 @@ function matchesDriveQuery(node: FakeDriveNode, query?: string) {
 
 test('GoogleDriveSyncProvider maps logical paths onto Drive folders and files', async () => {
   const client = new FakeFolderDriveClient()
-  const provider = new GoogleDriveSyncProvider({ clientId: 'test-client-id', client })
+  const provider = new GoogleDriveSyncProvider({
+    clientId: 'test-client-id',
+    client,
+    testOnlyAllowUnsafeSeeding: true,
+  })
 
   await provider.signIn()
   const workspace = await provider.ensureWorkspace()
-  await provider.putJson('entries/2026-05-24.json', { title: 'Daily entry' })
-  await provider.putBlob('attachments/2026-05-24/att-image.png', new Blob(['image bytes'], { type: 'image/png' }), {
+  await provider.seedJsonForTest('entries/2026-05-24.json', { title: 'Daily entry' })
+  await provider.seedBlobForTest('attachments/2026-05-24/att-image.png', new Blob(['image bytes'], { type: 'image/png' }), {
     mimeType: 'image/png',
     sha256: 'actual-image-sha256',
     byteSize: 11,
@@ -411,12 +418,13 @@ test('GoogleDriveSyncProvider recreates the workspace when a saved Drive folder 
     clientId: 'test-client-id',
     client,
     folderId: 'missing-root-folder',
+    testOnlyAllowUnsafeSeeding: true,
   })
 
   await provider.signIn()
   expect(await client.listFolder('missing-root-folder')).toEqual([])
   const workspace = await provider.ensureWorkspace()
-  const file = await provider.putJson('entries/recovered.json', { recovered: true })
+  const file = await provider.seedJsonForTest('entries/recovered.json', { recovered: true })
 
   expect(workspace.id).not.toBe('missing-root-folder')
   expect(workspace.rootPath).toBe('Easylab Lab Notebook')
@@ -478,6 +486,23 @@ test('GoogleDriveSyncProvider blocks sync before sign-in or workspace mutation w
 
   await expect(syncOnce({ provider, store, device: testDevice })).rejects.toThrow(/writes are disabled.*compare-and-swap/i)
   expect(client.rootFolders('Original notebook')).toHaveLength(0)
+})
+
+test('GoogleDriveSyncProvider rejects direct writes without the offline CAS capability and explicit precondition', async () => {
+  const client = new FakeFolderDriveClient()
+  const disabled = new GoogleDriveSyncProvider({ clientId: 'test-client-id', client })
+
+  await expect(disabled.putJson('entries/blocked.json', { blocked: true })).rejects.toThrow(/writes are disabled/i)
+  expect(client.rootFolders('Easylab Lab Notebook')).toHaveLength(0)
+
+  const testOnlyConditional = new GoogleDriveSyncProvider({
+    clientId: 'test-client-id',
+    client,
+    testOnlyEnableVersionedCas: true,
+  })
+  expect(testOnlyConditional.supportsVersionedCas).toBe(false)
+  await expect(testOnlyConditional.putJson('entries/blocked.json', { blocked: true })).rejects.toThrow(/explicit versioned precondition/i)
+  expect(client.rootFolders('Easylab Lab Notebook')).toHaveLength(0)
 })
 
 test('GoogleDriveSyncProvider remains disabled for custom workspace names', async () => {
@@ -568,11 +593,12 @@ test('GoogleDriveSyncProvider retries transient blob upload failures', async () 
     client,
     uploadRetryCount: 2,
     retryDelayMs: 0,
+    testOnlyAllowUnsafeSeeding: true,
   })
 
   await provider.signIn()
   await provider.ensureWorkspace()
-  const file = await provider.putBlob('attachments/2026-05-24/retry-image.png', new Blob(['retry bytes'], { type: 'image/png' }), {
+  const file = await provider.seedBlobForTest('attachments/2026-05-24/retry-image.png', new Blob(['retry bytes'], { type: 'image/png' }), {
     mimeType: 'image/png',
     byteSize: 11,
   })

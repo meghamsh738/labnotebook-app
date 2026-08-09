@@ -5,9 +5,11 @@ import {
   DRIVE_ROOT_FOLDER,
   GoogleDriveProvider,
   type GoogleAccountProfile,
+  type DriveWritePrecondition,
   type DriveFile,
   type SyncProvider as FolderDriveClient,
 } from './connectedSync'
+import { isPositiveDriveVersion } from './driveResumableOperations'
 
 export type AuthSession = {
   provider: 'mock' | 'google-drive'
@@ -27,8 +29,7 @@ export type RemoteFileRef = {
   mimeType?: string
   size?: number
   updatedAt: string
-  version?: string
-  etag?: string
+  version: string
   appProperties?: Record<string, string>
 }
 
@@ -50,14 +51,10 @@ export type BlobMetadata = {
 export type PutOptions = {
   appProperties?: Record<string, string>
   precondition?: WritePrecondition
+  resumableOperationId?: string
 }
 
-export type WritePrecondition = {
-  kind: 'must-match'
-  fileId: string
-  version: string
-  etag: string
-}
+export type WritePrecondition = DriveWritePrecondition
 
 export class WritePreconditionError extends Error {}
 
@@ -65,12 +62,10 @@ export function assertWritePrecondition(
   existing: RemoteFileRef | undefined,
   precondition: WritePrecondition,
 ) {
-  if (
-    !existing
-    || existing.id !== precondition.fileId
-    || existing.version !== precondition.version
-    || existing.etag !== precondition.etag
-  ) {
+  const valid = precondition.kind === 'must-not-exist'
+    ? !existing
+    : Boolean(existing && existing.id === precondition.fileId && existing.version === precondition.version)
+  if (!valid) {
     throw new WritePreconditionError('Remote file identity changed before the conditional write.')
   }
 }
@@ -97,10 +92,10 @@ export interface SyncProvider {
 
   getBlob(path: string): Promise<Blob | null>
   getBlobById?(fileId: string): Promise<Blob | null>
-  putBlob(path: string, blob: Blob, metadata: BlobMetadata): Promise<RemoteFileRef>
+  putBlob(path: string, blob: Blob, metadata: BlobMetadata, options?: PutOptions): Promise<RemoteFileRef>
 
   loadManifest<T = unknown>(): Promise<T | null>
-  putManifest<T>(manifest: T): Promise<RemoteFileRef>
+  putManifest<T>(manifest: T, options?: PutOptions): Promise<RemoteFileRef>
 
   listManagedFiles(options?: ListOptions): Promise<RemoteFileRef[]>
   listChanges?(token: string): Promise<ChangePage>
@@ -187,9 +182,10 @@ export class MockSyncProvider implements SyncProvider {
     return [...this.blobFiles.values()].find((record) => record.file.id === fileId)?.blob ?? null
   }
 
-  async putBlob(path: string, blob: Blob, metadata: BlobMetadata): Promise<RemoteFileRef> {
+  async putBlob(path: string, blob: Blob, metadata: BlobMetadata, options?: PutOptions): Promise<RemoteFileRef> {
     this.requireSignIn()
     const existing = this.blobFiles.get(path)?.file
+    if (options?.precondition) assertWritePrecondition(existing, options.precondition)
     const file = this.makeFile(path, metadata.mimeType || blob.type || 'application/octet-stream', existing, metadata.appProperties)
     file.size = metadata.byteSize ?? blob.size
     this.blobFiles.set(path, { file, blob })
@@ -201,8 +197,9 @@ export class MockSyncProvider implements SyncProvider {
     return (await this.getJson<T>('manifest.json'))?.value ?? null
   }
 
-  putManifest<T>(manifest: T) {
+  putManifest<T>(manifest: T, options?: PutOptions) {
     return this.putJson('manifest.json', manifest, {
+      ...options,
       appProperties: { entityType: 'manifest' },
     })
   }
@@ -252,6 +249,14 @@ export class MockSyncProvider implements SyncProvider {
     return file
   }
 
+  seedJsonForTest<T>(path: string, value: T, options?: PutOptions) {
+    return this.putJson(path, value, options)
+  }
+
+  seedBlobForTest(path: string, blob: Blob, metadata: BlobMetadata, options?: PutOptions) {
+    return this.putBlob(path, blob, metadata, options)
+  }
+
   private requireSignIn() {
     if (!this.signedIn) throw new Error('Mock sync provider is not signed in.')
   }
@@ -271,7 +276,6 @@ export class MockSyncProvider implements SyncProvider {
       mimeType,
       updatedAt: nowIso(),
       version,
-      etag: `"${id}-v${version}"`,
       appProperties,
     }
   }
@@ -290,6 +294,10 @@ export type GoogleDriveSyncProviderOptions = {
   client?: FolderDriveClient
   uploadRetryCount?: number
   retryDelayMs?: number
+  /** Offline tests only. Normal application construction must leave this false. */
+  testOnlyEnableVersionedCas?: boolean
+  /** Explicit escape hatch for fixture seeding; never used by syncOnce. */
+  testOnlyAllowUnsafeSeeding?: boolean
 }
 
 function pathSegments(path: string) {
@@ -313,6 +321,9 @@ function parseDriveSize(size?: string) {
 }
 
 function driveFileToRemoteRef(path: string, file: DriveFile): RemoteFileRef {
+  if (!isPositiveDriveVersion(file.version)) {
+    throw new WritePreconditionError(`Drive managed file omitted a positive version: ${path}`)
+  }
   return {
     id: file.id,
     path,
@@ -320,6 +331,8 @@ function driveFileToRemoteRef(path: string, file: DriveFile): RemoteFileRef {
     mimeType: file.mimeType,
     size: parseDriveSize(file.size),
     updatedAt: file.modifiedTime || nowIso(),
+    version: file.version,
+    appProperties: file.appProperties ? { ...file.appProperties } : undefined,
   }
 }
 
@@ -329,6 +342,8 @@ export class GoogleDriveSyncProvider implements SyncProvider {
   private readonly folderName: string
   private readonly uploadRetryCount: number
   private readonly retryDelayMs: number
+  private readonly testOnlyEnableVersionedCas: boolean
+  private readonly testOnlyAllowUnsafeSeeding: boolean
   private rootFolderId = ''
   private rootFolderVerified = false
   private readonly folderIds = new Map<string, string>()
@@ -338,6 +353,8 @@ export class GoogleDriveSyncProvider implements SyncProvider {
     this.rootFolderId = options.folderId || ''
     this.uploadRetryCount = options.uploadRetryCount ?? 2
     this.retryDelayMs = options.retryDelayMs ?? 350
+    this.testOnlyEnableVersionedCas = options.testOnlyEnableVersionedCas === true
+    this.testOnlyAllowUnsafeSeeding = options.testOnlyAllowUnsafeSeeding === true
     this.client = options.client ?? new GoogleDriveProvider({
       clientId: options.clientId,
       clientSecret: options.clientSecret,
@@ -362,7 +379,9 @@ export class GoogleDriveSyncProvider implements SyncProvider {
   }
 
   async ensureDeviceRecord(device: DeviceProfile) {
-    await this.putJson(`devices/${safeDriveSegment(device.id, 'device')}.json`, device)
+    throw new WritePreconditionError(
+      `Device ${safeDriveSegment(device.id, 'device')} must be written through a preflighted transaction.`,
+    )
   }
 
   async getJson<T>(path: string): Promise<RemoteJson<T> | null> {
@@ -381,18 +400,22 @@ export class GoogleDriveSyncProvider implements SyncProvider {
     return { ...driveFileToRemoteRef(path, file), text }
   }
 
-  async putJson<T>(path: string, value: T): Promise<RemoteFileRef> {
+  async putJson<T>(path: string, value: T, options?: PutOptions): Promise<RemoteFileRef> {
+    const precondition = this.requireConditionalWrite(options)
     const { folderPath, fileName } = this.splitFilePath(path)
-    const parentFolderId = await this.ensureFolderPath(folderPath)
-    const fileId = await this.withUploadRetry(() => this.client.uploadJson(parentFolderId, fileName, value))
-    const file = await this.findFile(path)
-    return file ? driveFileToRemoteRef(path, file) : {
-      id: fileId,
+    const parentFolderId = await this.resolveFolderPath(folderPath)
+    if (!parentFolderId) throw new WritePreconditionError(`Drive managed folder is missing: ${folderPath}`)
+    if (!this.client.conditionalUploadJson) throw new WritePreconditionError('Drive client has no conditional JSON capability.')
+    const file = await this.client.conditionalUploadJson({
+      parentFolderId,
       path,
       name: fileName,
-      mimeType: 'application/json',
-      updatedAt: nowIso(),
-    }
+      value,
+      precondition,
+      appProperties: options?.appProperties,
+      resumableOperationId: options?.resumableOperationId,
+    })
+    return driveFileToRemoteRef(path, file)
   }
 
   async getBlob(path: string): Promise<Blob | null> {
@@ -410,7 +433,51 @@ export class GoogleDriveSyncProvider implements SyncProvider {
     }
   }
 
-  async putBlob(path: string, blob: Blob, metadata: BlobMetadata): Promise<RemoteFileRef> {
+  async putBlob(path: string, blob: Blob, metadata: BlobMetadata, options?: PutOptions): Promise<RemoteFileRef> {
+    const precondition = this.requireConditionalWrite(options)
+    const { folderPath, fileName } = this.splitFilePath(path)
+    const parentFolderId = await this.resolveFolderPath(folderPath)
+    if (!parentFolderId) throw new WritePreconditionError(`Drive managed folder is missing: ${folderPath}`)
+    if (!this.client.conditionalUploadBlob) throw new WritePreconditionError('Drive client has no conditional blob capability.')
+    const sha256 = metadata.sha256?.toLowerCase()
+    if (!sha256) throw new WritePreconditionError('Drive conditional blob write requires a SHA-256.')
+    const file = await this.client.conditionalUploadBlob({
+      parentFolderId,
+      path,
+      name: fileName,
+      blob,
+      mimeType: metadata.mimeType || blob.type || 'application/octet-stream',
+      sha256,
+      precondition,
+      appProperties: metadata.appProperties,
+      resumableOperationId: options?.resumableOperationId,
+    })
+    return driveFileToRemoteRef(path, file)
+  }
+
+  async loadManifest<T = unknown>() {
+    return (await this.getJson<T>('manifest.json'))?.value ?? null
+  }
+
+  putManifest<T>(manifest: T, options?: PutOptions) {
+    return this.putJson('manifest.json', manifest, {
+      ...options,
+      appProperties: { ...options?.appProperties, entityType: 'manifest' },
+    })
+  }
+
+  async seedJsonForTest<T>(path: string, value: T, appProperties?: Record<string, string>) {
+    this.requireUnsafeTestSeeding()
+    const { folderPath, fileName } = this.splitFilePath(path)
+    const parentFolderId = await this.ensureFolderPath(folderPath)
+    const fileId = await this.withUploadRetry(() => this.client.uploadJson(parentFolderId, fileName, value))
+    const file = await this.findFile(path)
+    if (!file || file.id !== fileId) throw new Error('Test JSON seed did not produce one exact Drive file.')
+    return driveFileToRemoteRef(path, { ...file, appProperties: appProperties ?? file.appProperties })
+  }
+
+  async seedBlobForTest(path: string, blob: Blob, metadata: BlobMetadata) {
+    this.requireUnsafeTestSeeding()
     const { folderPath, fileName } = this.splitFilePath(path)
     const parentFolderId = await this.ensureFolderPath(folderPath)
     const fileId = await this.withUploadRetry(() => this.client.uploadBlob(parentFolderId, fileName, blob, metadata.mimeType, {
@@ -418,22 +485,8 @@ export class GoogleDriveSyncProvider implements SyncProvider {
       appProperties: metadata.appProperties,
     }))
     const file = await this.findFile(path)
-    return file ? driveFileToRemoteRef(path, file) : {
-      id: fileId,
-      path,
-      name: fileName,
-      mimeType: metadata.mimeType || blob.type || 'application/octet-stream',
-      size: metadata.byteSize ?? blob.size,
-      updatedAt: nowIso(),
-    }
-  }
-
-  async loadManifest<T = unknown>() {
-    return (await this.getJson<T>('manifest.json'))?.value ?? null
-  }
-
-  putManifest<T>(manifest: T) {
-    return this.putJson('manifest.json', manifest)
+    if (!file || file.id !== fileId) throw new Error('Test blob seed did not produce one exact Drive file.')
+    return driveFileToRemoteRef(path, file)
   }
 
   async listManagedFiles(options: ListOptions = {}) {
@@ -449,6 +502,22 @@ export class GoogleDriveSyncProvider implements SyncProvider {
     const fileName = segments.pop()
     if (!fileName) throw new Error('Drive path must include a file name.')
     return { folderPath: segments.join('/'), fileName }
+  }
+
+  private requireConditionalWrite(options?: PutOptions) {
+    if (!this.testOnlyEnableVersionedCas) {
+      throw new WritePreconditionError('Google Drive writes are disabled outside the offline conditional-write harness.')
+    }
+    if (!options?.precondition) {
+      throw new WritePreconditionError('Every Google Drive write requires an explicit versioned precondition.')
+    }
+    return options.precondition
+  }
+
+  private requireUnsafeTestSeeding() {
+    if (!this.testOnlyAllowUnsafeSeeding) {
+      throw new WritePreconditionError('Unsafe Drive fixture seeding is disabled.')
+    }
   }
 
   private async ensureFolderPath(folderPath: string) {
@@ -483,6 +552,7 @@ export class GoogleDriveSyncProvider implements SyncProvider {
         continue
       }
       const matches = await this.client.listFolder(parentFolderId, `name = '${escapeDriveQuery(segment)}' and mimeType = '${DRIVE_MIME_FOLDER}'`)
+      if (matches.length > 1) throw new Error(`Drive managed folder path is ambiguous: ${key}`)
       const folderId = matches[0]?.id
       if (!folderId) return undefined
       this.folderIds.set(key, folderId)
@@ -496,6 +566,7 @@ export class GoogleDriveSyncProvider implements SyncProvider {
     const folderId = await this.resolveFolderPath(folderPath)
     if (!folderId) return undefined
     const matches = await this.client.listFolder(folderId, `name = '${escapeDriveQuery(fileName)}' and mimeType != '${DRIVE_MIME_FOLDER}'`)
+    if (matches.length > 1) throw new Error(`Drive managed file path is ambiguous: ${path}`)
     return matches[0]
   }
 
