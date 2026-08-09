@@ -13,9 +13,12 @@ import {
   assertLocalLiveAuthorization,
   assertSafeLocalIgnoredPath,
   assertSafeRemoteValidationWorkspace,
+  assertSelectedAccountAllowed,
+  assertSelectedDriveAccountAllowed,
   assertValidationPlan,
   collectPaginatedDriveFiles,
   createValidationPlan,
+  normalizeForbiddenAccountHashes,
   publicValidationEvidence,
 } from './drive-v1-live-validation-gate.mjs'
 
@@ -118,6 +121,48 @@ test('effective access-token scope is verified as drive.file only', async () => 
   )
 })
 
+test('selected-account exclusions are mandatory and compare only in-memory SHA-256 identities', async () => {
+  const forbiddenHash = '3973d882d7a3499ff02e0ca3910ca05a31e9f1495b6a31546dc030ecf99dc2e1'
+  assert.deepEqual(normalizeForbiddenAccountHashes(` ${forbiddenHash},${forbiddenHash} `), [forbiddenHash])
+  assert.equal(assertSelectedAccountAllowed('allowed@example.test', [forbiddenHash]), true)
+  assert.throws(
+    () => assertSelectedAccountAllowed('excluded@example.test', [forbiddenHash]),
+    (error) => error instanceof LiveValidationGateError && error.code === 'forbidden-validation-account',
+  )
+  assert.throws(
+    () => normalizeForbiddenAccountHashes('not-a-hash'),
+    (error) => error instanceof LiveValidationGateError && error.code === 'invalid-forbidden-account',
+  )
+  assert.throws(
+    () => normalizeForbiddenAccountHashes(''),
+    (error) => error instanceof LiveValidationGateError && error.code === 'missing-forbidden-account',
+  )
+  let identityReadAttempted = false
+  await assert.rejects(
+    () => assertSelectedDriveAccountAllowed('', async () => {
+      identityReadAttempted = true
+      return { me: true, emailAddress: 'allowed@example.test' }
+    }),
+    (error) => error instanceof LiveValidationGateError && error.code === 'missing-forbidden-account',
+  )
+  assert.equal(identityReadAttempted, false)
+  await assert.rejects(
+    () => assertSelectedDriveAccountAllowed([forbiddenHash], async () => ({ me: false })),
+    (error) => error instanceof LiveValidationGateError && error.code === 'invalid-selected-account',
+  )
+  await assert.rejects(
+    () => assertSelectedDriveAccountAllowed([forbiddenHash], async () => ({
+      me: true,
+      emailAddress: 'excluded@example.test',
+    })),
+    (error) => error instanceof LiveValidationGateError && error.code === 'forbidden-validation-account',
+  )
+  assert.equal(await assertSelectedDriveAccountAllowed([forbiddenHash], async () => ({
+    me: true,
+    emailAddress: 'allowed@example.test',
+  })), true)
+})
+
 test('Drive inventory pagination is exhausted and repeated tokens fail closed', async () => {
   const requestedTokens = []
   const files = await collectPaginatedDriveFiles(async (pageToken) => {
@@ -179,6 +224,18 @@ test('live validation operation identities remain memory-only', () => {
   assert.doesNotMatch(workerSource, /EASYLAB_DRIVE_V1_OPERATION_DIRECTORY/)
   assert.match(nativeSource, /MemoryResumableOperationPersistence/)
   assert.doesNotMatch(nativeSource, /FileResumableOperationPersistence/)
+  const newTokenCheck = workerSource.indexOf(
+    'const forbiddenAccountExcluded = await verifySelectedValidationAccount(String(tokenPayload.access_token))',
+  )
+  const tokenCacheWrite = workerSource.indexOf('writePrivateJson(tokenCachePath', newTokenCheck)
+  const executionStart = workerSource.indexOf('export async function runLiveDriveV1Validation')
+  const executionAccountCheck = workerSource.indexOf(
+    'const forbiddenAccountExcluded = await verifySelectedValidationAccount(accessToken)',
+    executionStart,
+  )
+  const workspaceProvision = workerSource.indexOf('const workspace = await provisionOrResumeWorkspace', executionStart)
+  assert.ok(newTokenCheck >= 0 && tokenCacheWrite > newTokenCheck)
+  assert.ok(executionAccountCheck >= executionStart && workspaceProvision > executionAccountCheck)
 })
 
 test('remote workspace checks allow only a marked exact validation tree', () => {

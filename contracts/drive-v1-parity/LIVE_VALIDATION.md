@@ -15,12 +15,15 @@ The first live mutation remains impossible until all of these are true at the sa
 - evidence stays in the exact ignored run directory
 - OAuth requests use only `https://www.googleapis.com/auth/drive.file`
 - the refreshed access token is independently introspected and its effective scope is exactly `drive.file`
+- at least one excluded account is supplied only as a SHA-256 hash and checked through Drive `about.get` before token storage or mutation
 
 The remote gate exhausts every Drive listing page and accepts either no matching folder or one exact validation folder carrying this run's private validation marker. Duplicate roots, unknown files, duplicate paths, repeated page tokens, or the normal notebook folder fail closed. An unmarked file is accepted only when its path and immutable native entity/hash properties match the prepared validation plan. The harness never trashes or deletes the validation folder.
 
 Resumable operation identity is memory-only in both native and browser validation code. It survives the deliberate retry within one validation process but does not persist Drive file identifiers, ETags, or session URLs to disk or IndexedDB.
 
 Public evidence is allowlisted. It records booleans, the generated folder name, source commit, and test outcomes, but no account identity, OAuth token, Drive file/folder identifier, resumable session URL, or notebook content.
+
+When `EASYLAB_DRIVE_V1_FORBIDDEN_ACCOUNT_SHA256` is set, the selected Drive account email is read once into memory, normalized, hashed, and compared. The plain email and its hash are never written to evidence or the operation journal. A match or missing identity stops the run before any Drive mutation.
 
 The operator must pause after `prepare` and obtain explicit user confirmation for the generated folder before running `execute`.
 

@@ -13,8 +13,10 @@ import {
   assertLocalLiveAuthorization,
   assertSafeLocalIgnoredPath,
   assertSafeRemoteValidationWorkspace,
+  assertSelectedDriveAccountAllowed,
   assertValidationPlan,
   collectPaginatedDriveFiles,
+  normalizeForbiddenAccountHashes,
   publicValidationEvidence,
 } from './drive-v1-live-validation-gate.mjs'
 
@@ -79,6 +81,7 @@ function assertWorkerAuthorization({ plan, planFile, evidenceDir, repoRoot, oaut
   ignoredPathInput(evidenceDir, 'Live evidence directory')
   ignoredPathInput(oauthConfigPath, 'OAuth configuration')
   ignoredPathInput(tokenCachePath, 'OAuth token cache')
+  normalizeForbiddenAccountHashes(process.env.EASYLAB_DRIVE_V1_FORBIDDEN_ACCOUNT_SHA256)
   assertLocalLiveAuthorization({
     plan: suppliedPlan,
     env: process.env,
@@ -235,10 +238,13 @@ export async function authorizeLiveDriveV1Validation({
   assertWorkerAuthorization({ plan, planFile, evidenceDir, repoRoot, oauthConfigPath, tokenCachePath })
   const { clientId, clientSecret } = readOAuthConfig(oauthConfigPath)
   if (fs.existsSync(tokenCachePath)) {
-    readRefreshToken(tokenCachePath, clientId)
+    const refreshToken = readRefreshToken(tokenCachePath, clientId)
+    const accessToken = await refreshAccessToken({ clientId, clientSecret, refreshToken })
+    const forbiddenAccountExcluded = await verifySelectedValidationAccount(accessToken)
     console.log(JSON.stringify({
       authorized: true,
       reusedIgnoredTokenCache: true,
+      forbiddenAccountExcluded,
       liveDriveMutationMade: false,
       rootFolderName: plan.rootFolderName,
     }, null, 2))
@@ -274,6 +280,7 @@ export async function authorizeLiveDriveV1Validation({
     verifier,
     redirectUri: listener.redirectUri,
   })
+  const forbiddenAccountExcluded = await verifySelectedValidationAccount(String(tokenPayload.access_token))
   writePrivateJson(tokenCachePath, {
     client_id: clientId,
     refresh_token: tokenPayload.refresh_token,
@@ -287,6 +294,7 @@ export async function authorizeLiveDriveV1Validation({
     outcome: 'prepared',
     checks: {
       driveFileOnlyConsentCompleted: true,
+      forbiddenAccountExcluded,
       tokenCacheIgnored: true,
       liveDriveMutationMade: false,
     },
@@ -306,6 +314,20 @@ async function driveRequest(accessToken, url, init = {}) {
   const response = await fetch(url, { ...init, headers })
   if (!response.ok) throw new Error(`Drive validation request failed with status ${response.status}.`)
   return response
+}
+
+async function verifySelectedValidationAccount(accessToken) {
+  const forbiddenHashes = normalizeForbiddenAccountHashes(
+    process.env.EASYLAB_DRIVE_V1_FORBIDDEN_ACCOUNT_SHA256,
+  )
+  return assertSelectedDriveAccountAllowed(forbiddenHashes, async () => {
+    const response = await driveRequest(
+      accessToken,
+      `${DRIVE_API}/about?fields=user(emailAddress,me)`,
+    )
+    const payload = await response.json()
+    return payload?.user
+  })
 }
 
 function escapeDriveQuery(value) {
@@ -822,6 +844,7 @@ export async function runLiveDriveV1Validation({
     const { clientId, clientSecret } = readOAuthConfig(oauthConfigPath)
     const refreshToken = readRefreshToken(tokenCachePath, clientId)
     const accessToken = await refreshAccessToken({ clientId, clientSecret, refreshToken })
+    const forbiddenAccountExcluded = await verifySelectedValidationAccount(accessToken)
     const workspace = await provisionOrResumeWorkspace({
       accessToken,
       plan,
@@ -878,6 +901,7 @@ export async function runLiveDriveV1Validation({
       outcome: 'passed',
       checks: {
         isolatedWorkspaceVerified: true,
+        forbiddenAccountExcluded,
         nativeManifestLastTransactionPassed: true,
         ...browserChecks,
         nativeReadOnlyNonResurrectionPassed: true,

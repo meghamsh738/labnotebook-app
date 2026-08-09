@@ -28,6 +28,7 @@ const PUBLIC_CHECK_KEYS = new Set([
   'ignoredTokenCache',
   'userConfirmationPresent',
   'driveFileOnlyConsentCompleted',
+  'forbiddenAccountExcluded',
   'tokenCacheIgnored',
   'liveDriveMutationMade',
   'isolatedWorkspaceVerified',
@@ -110,6 +111,43 @@ export function assertDriveFileOnlyScope(scope) {
     fail('The effective Google access token must grant only the drive.file scope.', 'invalid-oauth-scope')
   }
   return DRIVE_FILE_SCOPE
+}
+
+export function normalizeForbiddenAccountHashes(value) {
+  const hashes = Array.isArray(value)
+    ? value
+    : String(value || '').split(/[\s,]+/)
+  const normalized = [...new Set(hashes.map((entry) => String(entry).trim().toLowerCase()).filter(Boolean))]
+  if (normalized.length === 0) {
+    fail('Live validation requires at least one forbidden-account SHA-256 hash.', 'missing-forbidden-account')
+  }
+  return normalized.map((hash) => {
+    if (!SHA256_PATTERN.test(hash)) {
+      fail('Forbidden validation accounts must be supplied as SHA-256 hashes.', 'invalid-forbidden-account')
+    }
+    return hash
+  })
+}
+
+export async function assertSelectedDriveAccountAllowed(forbiddenAccountHashes, loadSelectedUser) {
+  const forbidden = normalizeForbiddenAccountHashes(forbiddenAccountHashes)
+  const user = await loadSelectedUser()
+  if (user?.me !== true) {
+    fail('Drive did not identify the selected validation account as the requesting user.', 'invalid-selected-account')
+  }
+  return assertSelectedAccountAllowed(user.emailAddress, forbidden)
+}
+
+export function assertSelectedAccountAllowed(emailAddress, forbiddenAccountHashes) {
+  const email = String(emailAddress || '').trim().toLowerCase()
+  if (!email || !email.includes('@')) {
+    fail('Drive did not return a verifiable selected-account identity.', 'invalid-selected-account')
+  }
+  const forbidden = new Set(normalizeForbiddenAccountHashes(forbiddenAccountHashes))
+  if (forbidden.has(sha256(email))) {
+    fail('The selected Google account is excluded from this validation run.', 'forbidden-validation-account')
+  }
+  return true
 }
 
 export async function assertEffectiveDriveFileOnlyAccessToken(accessToken, fetchImpl = globalThis.fetch) {
