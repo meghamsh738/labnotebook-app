@@ -1,0 +1,326 @@
+{
+  "workspaceId": "ws-v2-33333333333333333333333333333333",
+  "liveDriveUsed": false,
+  "productionWritesEnabled": false,
+  "blobs": [{
+    "driveFileId": "fixture-cross-client-blob-drive-id",
+    "parentFolderDriveFileId": "fixture-v2-cross-client-blobs-folder-id",
+    "bytesBase64": "Y3Jvc3MtY2xpZW50LXYyLWF0dGFjaG1lbnQK",
+    "mimeType": "text/csv",
+    "byteCount": 27,
+    "expectedId": "blob-v2-8dde810ea6d4d3d4d6fd66d6357923dbe9765ff1be78964e00c77ea8f47e7d4d",
+    "expectedContentSha256": "8dde810ea6d4d3d4d6fd66d6357923dbe9765ff1be78964e00c77ea8f47e7d4d",
+    "path": "blobs/blob-v2-8dde810ea6d4d3d4d6fd66d6357923dbe9765ff1be78964e00c77ea8f47e7d4d.bin",
+    "appProperties": {
+      "easylabDriveProtocol": "v2-append-only",
+      "easylabWorkspaceId": "ws-v2-33333333333333333333333333333333",
+      "easylabArtifactKind": "blob",
+      "easylabCanonicalId": "blob-v2-8dde810ea6d4d3d4d6fd66d6357923dbe9765ff1be78964e00c77ea8f47e7d4d",
+      "easylabContentSha256": "8dde810ea6d4d3d4d6fd66d6357923dbe9765ff1be78964e00c77ea8f47e7d4d"
+    }
+  }],
+  "objects": [
+    {
+      "origin": "android",
+      "body": {
+        "protocol": "easylab-drive-v2-append-only", "schemaVersion": 2,
+        "workspaceId": "ws-v2-33333333333333333333333333333333",
+        "entityKind": "entry", "entityId": "entry-cross-v2", "operation": "upsert",
+        "baseObjectIds": [], "blobIds": [],
+        "payload": {
+          "id": "entry-cross-v2", "title": "Android origin",
+          "updatedAt": "2026-08-09T14:00:00.000Z", "updatedByDeviceId": "device-android",
+          "futureRemote": { "format": "v3-preview", "value": "preserve-me" }
+        },
+        "tombstone": null, "resolutionOf": []
+      },
+      "expectedId": "obj-v2-0d69cb2acef1904f0099b2d853b52f512f3cc68c384f0b4a6cfe85814501ea71",
+      "expectedContentSha256": "0d69cb2acef1904f0099b2d853b52f512f3cc68c384f0b4a6cfe85814501ea71",
+      "expectedPath": "objects/obj-v2-0d69cb2acef1904f0099b2d853b52f512f3cc68c384f0b4a6cfe85814501ea71.json"
+    },
+    {
+      "origin": "android",
+      "body": {
+        "protocol": "easylab-drive-v2-append-only", "schemaVersion": 2,
+        "workspaceId": "ws-v2-33333333333333333333333333333333",
+        "entityKind": "attachment", "entityId": "attachment-cross-v2", "operation": "upsert",
+        "baseObjectIds": [],
+        "blobIds": ["blob-v2-8dde810ea6d4d3d4d6fd66d6357923dbe9765ff1be78964e00c77ea8f47e7d4d"],
+        "payload": {
+          "id": "attachment-cross-v2", "entryId": "entry-cross-v2",
+          "blobId": "blob-v2-8dde810ea6d4d3d4d6fd66d6357923dbe9765ff1be78964e00c77ea8f47e7d4d",
+          "name": "result.csv", "mimeType": "text/csv",
+          "sha256": "8dde810ea6d4d3d4d6fd66d6357923dbe9765ff1be78964e00c77ea8f47e7d4d"
+        },
+        "tombstone": null, "resolutionOf": []
+      },
+      "expectedId": "obj-v2-255a1bb32272269c939aa558860ef84b5ab4d3da9ed7582ca2bdd211f04ff4bd",
+      "expectedContentSha256": "255a1bb32272269c939aa558860ef84b5ab4d3da9ed7582ca2bdd211f04ff4bd",
+      "expectedPath": "objects/obj-v2-255a1bb32272269c939aa558860ef84b5ab4d3da9ed7582ca2bdd211f04ff4bd.json"
+    },
+    {
+      "origin": "android",
+      "body": {
+        "protocol": "easylab-drive-v2-append-only", "schemaVersion": 2,
+        "workspaceId": "ws-v2-33333333333333333333333333333333",
+        "entityKind": "fileBoxItem", "entityId": "filebox-cross-v2", "operation": "upsert",
+        "baseObjectIds": [], "blobIds": [],
+        "payload": {
+          "id": "filebox-cross-v2", "entryId": "entry-cross-v2",
+          "attachmentId": "attachment-cross-v2", "label": "Result file"
+        },
+        "tombstone": null, "resolutionOf": []
+      },
+      "expectedId": "obj-v2-9c63d943ec8baaed5013bc84f75100f95be5d4ced3ce5b85dd0d55f4cafb76f1",
+      "expectedContentSha256": "9c63d943ec8baaed5013bc84f75100f95be5d4ced3ce5b85dd0d55f4cafb76f1",
+      "expectedPath": "objects/obj-v2-9c63d943ec8baaed5013bc84f75100f95be5d4ced3ce5b85dd0d55f4cafb76f1.json"
+    },
+    {
+      "origin": "android",
+      "body": {
+        "protocol": "easylab-drive-v2-append-only", "schemaVersion": 2,
+        "workspaceId": "ws-v2-33333333333333333333333333333333",
+        "entityKind": "transfer", "entityId": "transfer-cross-v2", "operation": "upsert",
+        "baseObjectIds": [], "blobIds": [],
+        "payload": {
+          "id": "transfer-cross-v2", "entryId": "entry-cross-v2",
+          "attachmentId": "attachment-cross-v2", "fileBoxItemId": "filebox-cross-v2",
+          "status": "complete"
+        },
+        "tombstone": null, "resolutionOf": []
+      },
+      "expectedId": "obj-v2-16d9997c43f7474c034f03bf99437093a5278d6793205c4db61cb3603d250f8b",
+      "expectedContentSha256": "16d9997c43f7474c034f03bf99437093a5278d6793205c4db61cb3603d250f8b",
+      "expectedPath": "objects/obj-v2-16d9997c43f7474c034f03bf99437093a5278d6793205c4db61cb3603d250f8b.json"
+    },
+    {
+      "origin": "web",
+      "body": {
+        "protocol": "easylab-drive-v2-append-only", "schemaVersion": 2,
+        "workspaceId": "ws-v2-33333333333333333333333333333333",
+        "entityKind": "entry", "entityId": "entry-cross-v2", "operation": "upsert",
+        "baseObjectIds": ["obj-v2-0d69cb2acef1904f0099b2d853b52f512f3cc68c384f0b4a6cfe85814501ea71"],
+        "blobIds": [],
+        "payload": {
+          "id": "entry-cross-v2", "title": "Web edit",
+          "updatedAt": "2026-08-09T14:01:00.000Z", "updatedByDeviceId": "device-web",
+          "futureRemote": { "format": "v3-preview", "value": "preserve-me" }
+        },
+        "tombstone": null, "resolutionOf": []
+      },
+      "expectedId": "obj-v2-f88c8a6e3d22fe87ab7d7a15ff22686c1d697841a6abdb3655772f782c74f9be",
+      "expectedContentSha256": "f88c8a6e3d22fe87ab7d7a15ff22686c1d697841a6abdb3655772f782c74f9be",
+      "expectedPath": "objects/obj-v2-f88c8a6e3d22fe87ab7d7a15ff22686c1d697841a6abdb3655772f782c74f9be.json"
+    },
+    {
+      "origin": "electron",
+      "body": {
+        "protocol": "easylab-drive-v2-append-only", "schemaVersion": 2,
+        "workspaceId": "ws-v2-33333333333333333333333333333333",
+        "entityKind": "entry", "entityId": "entry-cross-v2", "operation": "tombstone",
+        "baseObjectIds": ["obj-v2-f88c8a6e3d22fe87ab7d7a15ff22686c1d697841a6abdb3655772f782c74f9be"],
+        "blobIds": [], "payload": null,
+        "tombstone": {
+          "deletedAt": "2026-08-09T14:02:00.000Z", "deletedByDeviceId": "device-electron"
+        },
+        "resolutionOf": []
+      },
+      "expectedId": "obj-v2-a109c57bd0fd56b32c75757e0ba5ff877ef70ee41321315b065167c0a5d683b2",
+      "expectedContentSha256": "a109c57bd0fd56b32c75757e0ba5ff877ef70ee41321315b065167c0a5d683b2",
+      "expectedPath": "objects/obj-v2-a109c57bd0fd56b32c75757e0ba5ff877ef70ee41321315b065167c0a5d683b2.json"
+    },
+    {
+      "origin": "android-uncommitted",
+      "body": {
+        "protocol": "easylab-drive-v2-append-only", "schemaVersion": 2,
+        "workspaceId": "ws-v2-33333333333333333333333333333333",
+        "entityKind": "entry", "entityId": "entry-cross-v2", "operation": "upsert",
+        "baseObjectIds": ["obj-v2-0d69cb2acef1904f0099b2d853b52f512f3cc68c384f0b4a6cfe85814501ea71"],
+        "blobIds": [],
+        "payload": {
+          "id": "entry-cross-v2", "title": "Stale offline Android edit",
+          "updatedAt": "2026-08-09T14:00:30.000Z", "updatedByDeviceId": "device-android-stale",
+          "futureRemote": { "format": "v3-preview", "value": "preserve-me" }
+        },
+        "tombstone": null, "resolutionOf": []
+      },
+      "expectedId": "obj-v2-cd03919f3546123eab5fba78e6dbfb56672f3d438f22ac5f5f579f78075d867e",
+      "expectedContentSha256": "cd03919f3546123eab5fba78e6dbfb56672f3d438f22ac5f5f579f78075d867e",
+      "expectedPath": "objects/obj-v2-cd03919f3546123eab5fba78e6dbfb56672f3d438f22ac5f5f579f78075d867e.json"
+    }
+  ],
+  "commits": [
+    {
+      "origin": "android",
+      "body": {
+        "protocol": "easylab-drive-v2-append-only", "schemaVersion": 2,
+        "workspaceId": "ws-v2-33333333333333333333333333333333",
+        "operationId": "op-v2-android-origin", "createdAt": "2026-08-09T14:00:01.000Z",
+        "parentCommitIds": [],
+        "objectIds": [
+          "obj-v2-0d69cb2acef1904f0099b2d853b52f512f3cc68c384f0b4a6cfe85814501ea71",
+          "obj-v2-16d9997c43f7474c034f03bf99437093a5278d6793205c4db61cb3603d250f8b",
+          "obj-v2-255a1bb32272269c939aa558860ef84b5ab4d3da9ed7582ca2bdd211f04ff4bd",
+          "obj-v2-9c63d943ec8baaed5013bc84f75100f95be5d4ced3ce5b85dd0d55f4cafb76f1"
+        ],
+        "blobIds": ["blob-v2-8dde810ea6d4d3d4d6fd66d6357923dbe9765ff1be78964e00c77ea8f47e7d4d"]
+      },
+      "expectedId": "commit-v2-b187446b5f2223cf80978de4dc8e7dda6c43606fc2363976b1da4633ee9fff79",
+      "expectedContentSha256": "b187446b5f2223cf80978de4dc8e7dda6c43606fc2363976b1da4633ee9fff79",
+      "expectedPath": "commits/commit-v2-b187446b5f2223cf80978de4dc8e7dda6c43606fc2363976b1da4633ee9fff79.json"
+    },
+    {
+      "origin": "web",
+      "body": {
+        "protocol": "easylab-drive-v2-append-only", "schemaVersion": 2,
+        "workspaceId": "ws-v2-33333333333333333333333333333333",
+        "operationId": "op-v2-web-edit", "createdAt": "2026-08-09T14:01:01.000Z",
+        "parentCommitIds": ["commit-v2-b187446b5f2223cf80978de4dc8e7dda6c43606fc2363976b1da4633ee9fff79"],
+        "objectIds": ["obj-v2-f88c8a6e3d22fe87ab7d7a15ff22686c1d697841a6abdb3655772f782c74f9be"],
+        "blobIds": []
+      },
+      "expectedId": "commit-v2-39e313e2e3d18fc207e041870fb6791e6513056fd2250d4715a774c8454d3a32",
+      "expectedContentSha256": "39e313e2e3d18fc207e041870fb6791e6513056fd2250d4715a774c8454d3a32",
+      "expectedPath": "commits/commit-v2-39e313e2e3d18fc207e041870fb6791e6513056fd2250d4715a774c8454d3a32.json"
+    },
+    {
+      "origin": "electron",
+      "body": {
+        "protocol": "easylab-drive-v2-append-only", "schemaVersion": 2,
+        "workspaceId": "ws-v2-33333333333333333333333333333333",
+        "operationId": "op-v2-electron-delete", "createdAt": "2026-08-09T14:02:01.000Z",
+        "parentCommitIds": ["commit-v2-39e313e2e3d18fc207e041870fb6791e6513056fd2250d4715a774c8454d3a32"],
+        "objectIds": ["obj-v2-a109c57bd0fd56b32c75757e0ba5ff877ef70ee41321315b065167c0a5d683b2"],
+        "blobIds": []
+      },
+      "expectedId": "commit-v2-c44dc30b94e717003226ac8f2bd80153b44632e72228fb1dc50fa46036447a0c",
+      "expectedContentSha256": "c44dc30b94e717003226ac8f2bd80153b44632e72228fb1dc50fa46036447a0c",
+      "expectedPath": "commits/commit-v2-c44dc30b94e717003226ac8f2bd80153b44632e72228fb1dc50fa46036447a0c.json"
+    }
+  ],
+  "stages": [
+    {
+      "name": "android-origin", "client": "android",
+      "commitIds": ["commit-v2-b187446b5f2223cf80978de4dc8e7dda6c43606fc2363976b1da4633ee9fff79"],
+      "expected": {
+        "tips": ["commit-v2-b187446b5f2223cf80978de4dc8e7dda6c43606fc2363976b1da4633ee9fff79"],
+        "frontiers": {
+          "attachment:attachment-cross-v2": ["obj-v2-255a1bb32272269c939aa558860ef84b5ab4d3da9ed7582ca2bdd211f04ff4bd"],
+          "entry:entry-cross-v2": ["obj-v2-0d69cb2acef1904f0099b2d853b52f512f3cc68c384f0b4a6cfe85814501ea71"],
+          "fileBoxItem:filebox-cross-v2": ["obj-v2-9c63d943ec8baaed5013bc84f75100f95be5d4ced3ce5b85dd0d55f4cafb76f1"],
+          "transfer:transfer-cross-v2": ["obj-v2-16d9997c43f7474c034f03bf99437093a5278d6793205c4db61cb3603d250f8b"]
+        },
+        "visibleTargets": [
+          "attachment:attachment-cross-v2", "entry:entry-cross-v2",
+          "fileBoxItem:filebox-cross-v2", "transfer:transfer-cross-v2"
+        ],
+        "suppressedTargets": []
+      }
+    },
+    {
+      "name": "web-edit", "client": "web",
+      "commitIds": [
+        "commit-v2-b187446b5f2223cf80978de4dc8e7dda6c43606fc2363976b1da4633ee9fff79",
+        "commit-v2-39e313e2e3d18fc207e041870fb6791e6513056fd2250d4715a774c8454d3a32"
+      ],
+      "expected": {
+        "tips": ["commit-v2-39e313e2e3d18fc207e041870fb6791e6513056fd2250d4715a774c8454d3a32"],
+        "frontiers": {
+          "attachment:attachment-cross-v2": ["obj-v2-255a1bb32272269c939aa558860ef84b5ab4d3da9ed7582ca2bdd211f04ff4bd"],
+          "entry:entry-cross-v2": ["obj-v2-f88c8a6e3d22fe87ab7d7a15ff22686c1d697841a6abdb3655772f782c74f9be"],
+          "fileBoxItem:filebox-cross-v2": ["obj-v2-9c63d943ec8baaed5013bc84f75100f95be5d4ced3ce5b85dd0d55f4cafb76f1"],
+          "transfer:transfer-cross-v2": ["obj-v2-16d9997c43f7474c034f03bf99437093a5278d6793205c4db61cb3603d250f8b"]
+        },
+        "visibleTargets": [
+          "attachment:attachment-cross-v2", "entry:entry-cross-v2",
+          "fileBoxItem:filebox-cross-v2", "transfer:transfer-cross-v2"
+        ],
+        "suppressedTargets": []
+      }
+    },
+    {
+      "name": "electron-delete", "client": "electron",
+      "commitIds": [
+        "commit-v2-b187446b5f2223cf80978de4dc8e7dda6c43606fc2363976b1da4633ee9fff79",
+        "commit-v2-39e313e2e3d18fc207e041870fb6791e6513056fd2250d4715a774c8454d3a32",
+        "commit-v2-c44dc30b94e717003226ac8f2bd80153b44632e72228fb1dc50fa46036447a0c"
+      ],
+      "expected": {
+        "tips": ["commit-v2-c44dc30b94e717003226ac8f2bd80153b44632e72228fb1dc50fa46036447a0c"],
+        "frontiers": {
+          "attachment:attachment-cross-v2": ["obj-v2-255a1bb32272269c939aa558860ef84b5ab4d3da9ed7582ca2bdd211f04ff4bd"],
+          "entry:entry-cross-v2": ["obj-v2-a109c57bd0fd56b32c75757e0ba5ff877ef70ee41321315b065167c0a5d683b2"],
+          "fileBoxItem:filebox-cross-v2": ["obj-v2-9c63d943ec8baaed5013bc84f75100f95be5d4ced3ce5b85dd0d55f4cafb76f1"],
+          "transfer:transfer-cross-v2": ["obj-v2-16d9997c43f7474c034f03bf99437093a5278d6793205c4db61cb3603d250f8b"]
+        },
+        "visibleTargets": [],
+        "suppressedTargets": [
+          "attachment:attachment-cross-v2", "entry:entry-cross-v2",
+          "fileBoxItem:filebox-cross-v2", "transfer:transfer-cross-v2"
+        ]
+      }
+    },
+    {
+      "name": "android-return", "client": "android",
+      "commitIds": [
+        "commit-v2-b187446b5f2223cf80978de4dc8e7dda6c43606fc2363976b1da4633ee9fff79",
+        "commit-v2-39e313e2e3d18fc207e041870fb6791e6513056fd2250d4715a774c8454d3a32",
+        "commit-v2-c44dc30b94e717003226ac8f2bd80153b44632e72228fb1dc50fa46036447a0c"
+      ],
+      "expected": {
+        "tips": ["commit-v2-c44dc30b94e717003226ac8f2bd80153b44632e72228fb1dc50fa46036447a0c"],
+        "frontiers": {
+          "attachment:attachment-cross-v2": ["obj-v2-255a1bb32272269c939aa558860ef84b5ab4d3da9ed7582ca2bdd211f04ff4bd"],
+          "entry:entry-cross-v2": ["obj-v2-a109c57bd0fd56b32c75757e0ba5ff877ef70ee41321315b065167c0a5d683b2"],
+          "fileBoxItem:filebox-cross-v2": ["obj-v2-9c63d943ec8baaed5013bc84f75100f95be5d4ced3ce5b85dd0d55f4cafb76f1"],
+          "transfer:transfer-cross-v2": ["obj-v2-16d9997c43f7474c034f03bf99437093a5278d6793205c4db61cb3603d250f8b"]
+        },
+        "visibleTargets": [],
+        "suppressedTargets": [
+          "attachment:attachment-cross-v2", "entry:entry-cross-v2",
+          "fileBoxItem:filebox-cross-v2", "transfer:transfer-cross-v2"
+        ]
+      }
+    }
+  ],
+  "transactions": [
+    {
+      "client": "android", "operationId": "op-v2-android-origin",
+      "writeOrder": [
+        "blobs/blob-v2-8dde810ea6d4d3d4d6fd66d6357923dbe9765ff1be78964e00c77ea8f47e7d4d.bin",
+        "objects/obj-v2-0d69cb2acef1904f0099b2d853b52f512f3cc68c384f0b4a6cfe85814501ea71.json",
+        "objects/obj-v2-16d9997c43f7474c034f03bf99437093a5278d6793205c4db61cb3603d250f8b.json",
+        "objects/obj-v2-255a1bb32272269c939aa558860ef84b5ab4d3da9ed7582ca2bdd211f04ff4bd.json",
+        "objects/obj-v2-9c63d943ec8baaed5013bc84f75100f95be5d4ced3ce5b85dd0d55f4cafb76f1.json",
+        "commits/commit-v2-b187446b5f2223cf80978de4dc8e7dda6c43606fc2363976b1da4633ee9fff79.json"
+      ],
+      "commitLast": true
+    },
+    {
+      "client": "web", "operationId": "op-v2-web-edit",
+      "writeOrder": [
+        "objects/obj-v2-f88c8a6e3d22fe87ab7d7a15ff22686c1d697841a6abdb3655772f782c74f9be.json",
+        "commits/commit-v2-39e313e2e3d18fc207e041870fb6791e6513056fd2250d4715a774c8454d3a32.json"
+      ],
+      "commitLast": true
+    },
+    {
+      "client": "electron", "operationId": "op-v2-electron-delete",
+      "writeOrder": [
+        "objects/obj-v2-a109c57bd0fd56b32c75757e0ba5ff877ef70ee41321315b065167c0a5d683b2.json",
+        "commits/commit-v2-c44dc30b94e717003226ac8f2bd80153b44632e72228fb1dc50fa46036447a0c.json"
+      ],
+      "commitLast": true
+    }
+  ],
+  "recovery": {
+    "uncommittedObjectId": "obj-v2-cd03919f3546123eab5fba78e6dbfb56672f3d438f22ac5f5f579f78075d867e",
+    "uncommittedObjectPath": "objects/obj-v2-cd03919f3546123eab5fba78e6dbfb56672f3d438f22ac5f5f579f78075d867e.json",
+    "orphanVisible": false,
+    "resurrectionAllowed": false,
+    "physicalDeletionCount": 0,
+    "unknownRemoteField": "futureRemote",
+    "unknownRemoteFieldPreserved": true,
+    "localOnlyFieldsAbsent": ["cachedUri", "localDraftState"]
+  }
+}

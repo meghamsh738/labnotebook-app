@@ -102,6 +102,89 @@ class DriveV2OfflinePrimitivesTest {
     }
 
     @Test
+    fun sharedCrossClientRoundTripPreservesCanonicalIdentityAndPreventsResurrection() {
+        val fixture = fixture("cross-client-round-trip.json")
+        assertFalse(fixture.booleanValue("liveDriveUsed"))
+        assertFalse(fixture.booleanValue("productionWritesEnabled"))
+
+        val blob = fixture.arrayValue("blobs").single().jsonObject
+        val blobBytes = Base64.getDecoder().decode(blob.text("bytesBase64"))
+        assertEquals(blob.longValue("byteCount"), blobBytes.size.toLong())
+        assertEquals(blob.text("expectedId"), DriveV2Contract.blobId(blobBytes))
+        assertEquals(blob.text("expectedContentSha256"), DriveV2CanonicalJson.sha256(blobBytes))
+        assertEquals(blob.text("path"), DriveV2Contract.blobPath(blob.text("expectedId")))
+
+        val objectFixtures = fixture.arrayValue("objects").map { it.jsonObject }
+        val objectsById = objectFixtures.associateBy { it.text("expectedId") }
+        objectFixtures.forEach { record ->
+            val body = record.objectValue("body")
+            assertEquals(record.text("expectedId"), DriveV2Contract.objectId(body))
+            assertEquals(record.text("expectedContentSha256"), DriveV2CanonicalJson.sha256(body))
+            assertEquals(record.text("expectedPath"), DriveV2Contract.objectPath(record.text("expectedId")))
+        }
+
+        val commitFixtures = fixture.arrayValue("commits").map { it.jsonObject }
+        commitFixtures.forEach { record ->
+            val body = record.objectValue("body")
+            assertEquals(record.text("expectedId"), DriveV2Contract.commitId(body))
+            assertEquals(record.text("expectedContentSha256"), DriveV2CanonicalJson.sha256(body))
+            assertEquals(record.text("expectedPath"), DriveV2Contract.commitPath(record.text("expectedId")))
+        }
+
+        fixture.arrayValue("stages").forEach { element ->
+            val stage = element.jsonObject
+            val state = validateFixture(fixture, stage.stringList("commitIds").toSet())
+            val projection = DriveV2GraphValidator.project(state)
+            val expected = stage.objectValue("expected")
+            val expectedFrontiers = expected.objectValue("frontiers").mapValues { (_, ids) ->
+                ids.jsonArray.map { it.jsonPrimitive.content }
+            }
+            assertEquals(expected.stringList("tips"), state.tips)
+            assertEquals(expectedFrontiers, state.frontiers)
+            assertEquals(expected.stringList("visibleTargets"), projection.visibleTargets)
+            assertEquals(expected.stringList("suppressedTargets"), projection.suppressedTargets)
+        }
+
+        fixture.arrayValue("transactions").forEach { element ->
+            val transaction = element.jsonObject
+            val commit = commitFixtures.single {
+                it.objectValue("body").text("operationId") == transaction.text("operationId")
+            }
+            val body = commit.objectValue("body")
+            val expectedOrder = buildList {
+                body.stringList("blobIds").forEach { add(DriveV2Contract.blobPath(it)) }
+                body.stringList("objectIds").forEach { add(objectsById.getValue(it).text("expectedPath")) }
+                add(commit.text("expectedPath"))
+            }
+            assertEquals(transaction.text("client"), commit.text("origin"))
+            assertEquals(expectedOrder, transaction.stringList("writeOrder"))
+            assertTrue(transaction.booleanValue("commitLast"))
+            assertEquals(commit.text("expectedPath"), transaction.stringList("writeOrder").last())
+        }
+
+        val recovery = fixture.objectValue("recovery")
+        val finalStage = fixture.arrayValue("stages").single {
+            it.jsonObject.text("name") == "android-return"
+        }.jsonObject
+        val finalState = validateFixture(fixture, finalStage.stringList("commitIds").toSet())
+        assertEquals(
+            recovery.booleanValue("orphanVisible"),
+            recovery.text("uncommittedObjectId") in finalState.visibleObjectIds,
+        )
+        assertFalse(recovery.booleanValue("resurrectionAllowed"))
+        assertEquals(0L, recovery.longValue("physicalDeletionCount"))
+        val entryPayloads = objectFixtures.mapNotNull { record ->
+            val body = record.objectValue("body")
+            if (body.text("entityKind") == "entry") body["payload"] as? JsonObject else null
+        }
+        assertTrue(entryPayloads.all { recovery.text("unknownRemoteField") in it })
+        assertTrue(recovery.booleanValue("unknownRemoteFieldPreserved"))
+        recovery.stringList("localOnlyFieldsAbsent").forEach { field ->
+            assertTrue(entryPayloads.all { field !in it })
+        }
+    }
+
+    @Test
     fun relationshipValidationBlocksMissingAndInconsistentParents() {
         val workspaceId = "ws-v2-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         val missingAttachment = objectRecord(
@@ -488,7 +571,14 @@ class DriveV2OfflinePrimitivesTest {
         DriveV2GraphValidator.validateWorkspace(
             workspaceId = fixture.text("workspaceId"),
             objects = fixture.objects("objects"),
-            blobs = emptyList(),
+            blobs = fixture["blobs"]?.jsonArray?.map { element ->
+                val record = element.jsonObject
+                DriveV2BlobRecord(
+                    expectedId = record.text("expectedId"),
+                    bytes = Base64.getDecoder().decode(record.text("bytesBase64")),
+                    mimeType = record.text("mimeType"),
+                )
+            }.orEmpty(),
             commits = fixture.commits("commits").filter { commitIds == null || it.expectedId in commitIds },
         )
 

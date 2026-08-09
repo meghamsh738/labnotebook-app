@@ -20,6 +20,8 @@ import {
   driveV2BlobPath,
   driveV2CommitId,
   driveV2CommitPath,
+  driveV2ObjectId,
+  driveV2ObjectPath,
   projectDriveV2Workspace,
   validateDriveV2Commit,
   validateDriveV2Object,
@@ -273,6 +275,132 @@ test('web independently derives shared conflicts, delete-edit hiding, and descen
     const projection = await projectDriveV2Workspace(state)
     expect(projection.visibleTargets).toEqual(snapshot.expected.visibleTargets)
     expect(projection.suppressedTargets).toEqual(snapshot.expected.suppressedTargets)
+  }
+})
+
+test('web independently reproduces the staged Android, web, Electron, and Android return fixture', async () => {
+  type CrossClientRecord = {
+    origin: string
+    body: DriveV2JsonObject
+    expectedId: string
+    expectedContentSha256: string
+    expectedPath: string
+  }
+  type CrossClientFixture = {
+    workspaceId: string
+    liveDriveUsed: boolean
+    productionWritesEnabled: boolean
+    blobs: Array<{
+      bytesBase64: string
+      mimeType: string
+      byteCount: number
+      expectedId: string
+      expectedContentSha256: string
+      path: string
+    }>
+    objects: CrossClientRecord[]
+    commits: CrossClientRecord[]
+    stages: Array<{
+      name: string
+      client: string
+      commitIds: string[]
+      expected: {
+        tips: string[]
+        frontiers: Record<string, string[]>
+        visibleTargets: string[]
+        suppressedTargets: string[]
+      }
+    }>
+    transactions: Array<{
+      client: string
+      operationId: string
+      writeOrder: string[]
+      commitLast: boolean
+    }>
+    recovery: {
+      uncommittedObjectId: string
+      orphanVisible: boolean
+      resurrectionAllowed: boolean
+      physicalDeletionCount: number
+      unknownRemoteField: string
+      unknownRemoteFieldPreserved: boolean
+      localOnlyFieldsAbsent: string[]
+    }
+  }
+
+  const shared = await fixture<CrossClientFixture>('cross-client-round-trip.json')
+  expect(shared.liveDriveUsed).toBe(false)
+  expect(shared.productionWritesEnabled).toBe(false)
+
+  const sharedBlob = shared.blobs[0]
+  const blobBytes = base64Bytes(sharedBlob.bytesBase64)
+  expect(blobBytes.byteLength).toBe(sharedBlob.byteCount)
+  expect(await driveV2Sha256(blobBytes)).toBe(sharedBlob.expectedContentSha256)
+  expect(await driveV2BlobId(blobBytes)).toBe(sharedBlob.expectedId)
+  expect(driveV2BlobPath(sharedBlob.expectedId)).toBe(sharedBlob.path)
+
+  for (const record of shared.objects) {
+    expect(await driveV2ObjectId(record.body)).toBe(record.expectedId)
+    expect(await driveV2CanonicalSha256(record.body)).toBe(record.expectedContentSha256)
+    expect(driveV2ObjectPath(record.expectedId)).toBe(record.expectedPath)
+  }
+  for (const record of shared.commits) {
+    expect(await driveV2CommitId(record.body)).toBe(record.expectedId)
+    expect(await driveV2CanonicalSha256(record.body)).toBe(record.expectedContentSha256)
+    expect(driveV2CommitPath(record.expectedId)).toBe(record.expectedPath)
+  }
+
+  const blobRecords = shared.blobs.map((record) => ({
+    expectedId: record.expectedId,
+    bytes: base64Bytes(record.bytesBase64),
+    mimeType: record.mimeType,
+  }))
+  for (const stage of shared.stages) {
+    const state = await validateDriveV2Workspace(
+      shared.workspaceId,
+      shared.objects,
+      blobRecords,
+      shared.commits.filter((record) => stage.commitIds.includes(record.expectedId)),
+    )
+    const projection = await projectDriveV2Workspace(state)
+    expect(state.tips).toEqual(stage.expected.tips)
+    expect(state.frontiers).toEqual(stage.expected.frontiers)
+    expect(projection.visibleTargets).toEqual(stage.expected.visibleTargets)
+    expect(projection.suppressedTargets).toEqual(stage.expected.suppressedTargets)
+  }
+
+  const objectsById = new Map(shared.objects.map((record) => [record.expectedId, record]))
+  for (const transaction of shared.transactions) {
+    const commit = shared.commits.find((record) => record.body.operationId === transaction.operationId)!
+    const expectedOrder = [
+      ...(commit.body.blobIds as string[]).map(driveV2BlobPath),
+      ...(commit.body.objectIds as string[]).map((id) => objectsById.get(id)!.expectedPath),
+      commit.expectedPath,
+    ]
+    expect(commit.origin).toBe(transaction.client)
+    expect(transaction.writeOrder).toEqual(expectedOrder)
+    expect(transaction.commitLast).toBe(true)
+    expect(transaction.writeOrder.at(-1)).toBe(commit.expectedPath)
+  }
+
+  const finalStage = shared.stages.find((stage) => stage.name === 'android-return')!
+  const finalState = await validateDriveV2Workspace(
+    shared.workspaceId,
+    shared.objects,
+    blobRecords,
+    shared.commits.filter((record) => finalStage.commitIds.includes(record.expectedId)),
+  )
+  expect(finalState.visibleObjectIds.includes(shared.recovery.uncommittedObjectId))
+    .toBe(shared.recovery.orphanVisible)
+  expect(shared.recovery.resurrectionAllowed).toBe(false)
+  expect(shared.recovery.physicalDeletionCount).toBe(0)
+  const entryPayloads = shared.objects
+    .filter((record) => record.body.entityKind === 'entry' && record.body.payload !== null)
+    .map((record) => record.body.payload as DriveV2JsonObject)
+  expect(entryPayloads.every((payload) => shared.recovery.unknownRemoteField in payload)).toBe(true)
+  expect(shared.recovery.unknownRemoteFieldPreserved).toBe(true)
+  for (const localOnlyField of shared.recovery.localOnlyFieldsAbsent) {
+    expect(entryPayloads.every((payload) => !(localOnlyField in payload))).toBe(true)
   }
 })
 

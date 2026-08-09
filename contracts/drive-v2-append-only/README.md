@@ -104,6 +104,15 @@ chains, and the derived projection before it can return a plan. All
 malformed/switched snapshots are sent through that same gate with a writer spy
 proving zero mutation calls.
 
+`cross-client-round-trip.json` is the staged offline parity gate. Android
+publishes an entry, attachment, File Box item, transfer, and blob; web descends
+from that exact entry object; Electron publishes a tombstone; and Android reads
+the result again. Both implementations independently derive every content ID,
+path, commit frontier, and projection. The fixture also leaves a stale Android
+object as an uncommitted orphan, proving that commit-last visibility, transitive
+descendant suppression, unknown-field preservation, and non-resurrection are
+the same across clients without performing a Drive request.
+
 ## Runtime gate
 
 This directory is an offline contract only. Android production must continue to

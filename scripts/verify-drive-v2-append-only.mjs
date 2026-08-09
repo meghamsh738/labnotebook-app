@@ -11,6 +11,7 @@ const protocol = 'easylab-drive-v2-append-only'
 const expectedJsonFiles = [
   'canonicalization.json',
   'concurrent-edits.json',
+  'cross-client-round-trip.json',
   'delete-edit-race.json',
   'duplicate-artifacts.json',
   'frontier-preservation.json',
@@ -1214,6 +1215,72 @@ assert.equal(
 )
 assert.equal(concurrent.expected.winner, null)
 assert.equal(concurrent.expected.remoteOverwriteAllowed, false)
+
+const crossClient = await fixture('cross-client-round-trip.json')
+assert.equal(crossClient.liveDriveUsed, false)
+assert.equal(crossClient.productionWritesEnabled, false)
+assert.equal(crossClient.blobs.length, 1)
+const crossClientBlob = crossClient.blobs[0]
+const crossClientBlobBytes = Buffer.from(crossClientBlob.bytesBase64, 'base64')
+assert.equal(crossClientBlobBytes.toString('base64'), crossClientBlob.bytesBase64)
+assert.equal(crossClientBlob.byteCount, crossClientBlobBytes.length)
+assert.equal(crossClientBlob.expectedContentSha256, sha256Bytes(crossClientBlobBytes))
+assert.equal(crossClientBlob.expectedId, blobId(crossClientBlobBytes))
+assert.equal(crossClientBlob.path, `blobs/${crossClientBlob.expectedId}.bin`)
+validateBlobRecord(crossClientBlob, crossClient.workspaceId)
+for (const record of crossClient.objects) {
+  validateObjectRecord(record, crossClient.workspaceId)
+  assert.equal(record.expectedContentSha256, sha256Canonical(record.body))
+  assert.equal(record.expectedPath, `objects/${record.expectedId}.json`)
+}
+for (const record of crossClient.commits) {
+  validateCommitRecord(record, crossClient.workspaceId)
+  assert.equal(record.expectedContentSha256, sha256Canonical(record.body))
+  assert.equal(record.expectedPath, `commits/${record.expectedId}.json`)
+}
+const crossClientObjects = new Map(crossClient.objects.map((record) => [record.expectedId, record]))
+const crossClientCommits = new Map(crossClient.commits.map((record) => [record.expectedId, record]))
+for (const stage of crossClient.stages) {
+  assert.ok(['android', 'web', 'electron'].includes(stage.client))
+  const state = validateWorkspaceSnapshot(crossClient, stage.commitIds)
+  const projection = projectFrontiers(state.frontiers, state.objectMap)
+  assert.deepEqual(state.tips, stage.expected.tips)
+  assert.deepEqual(state.frontiers, stage.expected.frontiers)
+  assert.deepEqual(projection.visibleTargets, stage.expected.visibleTargets)
+  assert.deepEqual(projection.suppressedTargets, stage.expected.suppressedTargets)
+}
+for (const transaction of crossClient.transactions) {
+  const commit = [...crossClientCommits.values()].find(
+    (record) => record.body.operationId === transaction.operationId,
+  )
+  assert.ok(commit)
+  assert.equal(commit.origin, transaction.client)
+  const expectedOrder = [
+    ...commit.body.blobIds.map((id) => `blobs/${id}.bin`),
+    ...commit.body.objectIds.map((id) => crossClientObjects.get(id).expectedPath),
+    commit.expectedPath,
+  ]
+  assert.deepEqual(transaction.writeOrder, expectedOrder)
+  assert.equal(transaction.commitLast, true)
+  assert.equal(transaction.writeOrder.at(-1), commit.expectedPath)
+}
+const finalCrossClientStage = crossClient.stages.find((stage) => stage.name === 'android-return')
+assert.ok(finalCrossClientStage)
+const finalCrossClientState = validateWorkspaceSnapshot(crossClient, finalCrossClientStage.commitIds)
+assert.equal(
+  finalCrossClientState.visibleObjectIds.includes(crossClient.recovery.uncommittedObjectId),
+  crossClient.recovery.orphanVisible,
+)
+assert.equal(crossClient.recovery.resurrectionAllowed, false)
+assert.equal(crossClient.recovery.physicalDeletionCount, 0)
+const preservedPayloads = crossClient.objects
+  .filter((record) => record.body.payload !== null && record.body.entityKind === 'entry')
+  .map((record) => record.body.payload)
+assert.ok(preservedPayloads.every((payload) => Object.hasOwn(payload, crossClient.recovery.unknownRemoteField)))
+assert.equal(crossClient.recovery.unknownRemoteFieldPreserved, true)
+for (const localOnlyField of crossClient.recovery.localOnlyFieldsAbsent) {
+  assert.ok(preservedPayloads.every((payload) => !Object.hasOwn(payload, localOnlyField)))
+}
 
 const frontierFixture = await fixture('frontier-preservation.json')
 const frontierState = validateWorkspaceSnapshot(frontierFixture)
