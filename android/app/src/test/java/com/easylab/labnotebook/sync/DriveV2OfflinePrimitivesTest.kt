@@ -66,7 +66,7 @@ class DriveV2OfflinePrimitivesTest {
         val fixture = fixture("concurrent-edits.json")
         val state = validateFixture(fixture)
         val target = fixture.objects("objects").first().body
-        val key = "${target.text("entityKind")}:${target.text("entityId")}" 
+        val key = "${target.text("entityKind")}:${target.text("entityId")}"
         val expected = fixture.objectValue("expected")
 
         assertEquals(expected.stringList("tips"), state.tips)
@@ -85,7 +85,7 @@ class DriveV2OfflinePrimitivesTest {
         val raceProjection = DriveV2GraphValidator.project(raceState)
         val expectedRace = race.objectValue("expected")
         val target = fixture.objectValue("target")
-        val key = "${target.text("entityKind")}:${target.text("entityId")}" 
+        val key = "${target.text("entityKind")}:${target.text("entityId")}"
 
         assertEquals(expectedRace.stringList("frontier"), raceState.frontiers.getValue(key))
         assertEquals(expectedRace.stringList("visibleTargets"), raceProjection.visibleTargets)

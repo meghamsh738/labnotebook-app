@@ -402,7 +402,7 @@ internal object DriveV2GraphValidator {
         }
     }
 
-    private fun targetKey(body: JsonObject): String = "${body.text("entityKind")}:${body.text("entityId")}" 
+    private fun targetKey(body: JsonObject): String = "${body.text("entityKind")}:${body.text("entityId")}"
 
     private fun requireWorkspace(actual: String, expected: String) {
         require(DriveV2Contract.WORKSPACE_ID.matches(actual) && actual == expected, "workspace-marker-switch")
