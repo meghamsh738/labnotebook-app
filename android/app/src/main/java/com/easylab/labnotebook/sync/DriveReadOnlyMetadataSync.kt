@@ -47,6 +47,8 @@ internal data class DriveV1MetadataSnapshot(
     val transfers: List<RemoteRecord<DriveV1Envelope<DriveV1Transfer>>>,
     val conflicts: List<RemoteRecord<DriveV1Conflict>>,
     val tombstones: List<RemoteRecord<DriveV1Tombstone>>,
+    /** Complete verified listing, including attachment blob identities and versions. */
+    val managedFiles: List<DriveFileRef> = emptyList(),
 ) {
     val recordCount: Int
         get() = devices.size + entries.size + attachments.size + fileBoxItems.size +
@@ -180,6 +182,7 @@ internal class DriveV1MetadataReader(private val drive: DriveRepository) {
             transfers = transfers,
             conflicts = conflicts,
             tombstones = tombstones,
+            managedFiles = listedRefs,
         )
     }
 
@@ -515,6 +518,7 @@ internal class DriveV1MetadataApplier(
                 entityId = "manifest",
                 path = snapshot.manifestRef.path,
                 driveFileId = snapshot.manifestRef.id,
+                driveVersion = snapshot.manifestRef.version?.takeIf { it > 0L },
                 driveModifiedAt = snapshot.manifestRef.updatedAt,
                 rawJson = snapshot.manifestRawJson,
             ),
@@ -734,6 +738,7 @@ private fun <T> RemoteRecord<T>.toRawDocument(
     entityId = entityId,
     path = ref.path,
     driveFileId = ref.id,
+    driveVersion = ref.version?.takeIf { it > 0L },
     driveModifiedAt = ref.updatedAt,
     rawJson = rawJson,
 )

@@ -139,7 +139,7 @@ internal class GoogleDriveWriteRepository(
     private val maxBlobBytes: Int = DEFAULT_MAX_BLOB_BYTES,
     private val resumableChunkBytes: Int = DEFAULT_RESUMABLE_CHUNK_BYTES,
     private val boundaryFactory: () -> String = { "easylab-${UUID.randomUUID()}" },
-) : DriveRepository, DriveConditionalWriteClient {
+) : DriveRepository, DriveConditionalWriteClient, DriveV1RemoteContentHasher {
     private val writeMutex = Mutex()
     private val reader = GoogleDriveReadOnlyRepository(
         authRepository = authRepository,
@@ -168,6 +168,13 @@ internal class GoogleDriveWriteRepository(
 
     override suspend fun readJson(accountId: AccountId, path: String): Result<String?> =
         reader.readJson(accountId, path)
+
+    override suspend fun sha256(accountId: AccountId, file: DriveFileRef): Result<String> = driveResult {
+        val size = file.size ?: throw DriveProtocolException(
+            "Drive repair cannot hash media without a verified byte count: ${file.path}",
+        )
+        sha256RemoteMedia(accessToken(accountId), file.id, size)
+    }
 
     override suspend fun putJson(
         accountId: AccountId,

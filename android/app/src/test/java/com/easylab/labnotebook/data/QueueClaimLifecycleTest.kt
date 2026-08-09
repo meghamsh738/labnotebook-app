@@ -4,10 +4,13 @@ import android.content.Context
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import com.easylab.labnotebook.data.local.AccountEntity
+import com.easylab.labnotebook.data.local.AttachmentEntity
+import com.easylab.labnotebook.data.local.FileBoxItemEntity
 import com.easylab.labnotebook.data.local.JournalEntryEntity
 import com.easylab.labnotebook.data.local.LabNotebookDao
 import com.easylab.labnotebook.data.local.LabNotebookDatabase
 import com.easylab.labnotebook.data.local.SyncQueueEntity
+import com.easylab.labnotebook.data.local.TransferEntity
 import com.easylab.labnotebook.data.local.upsertQueueEventId
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
@@ -26,6 +29,160 @@ import org.robolectric.annotation.Config
 @Config(sdk = [35])
 class QueueClaimLifecycleTest {
     @Test
+    fun durableEntryCascadeClaimsChildrenBeforeTheirParent() = runTest {
+        val database = database()
+        try {
+            val dao = database.dao()
+            seedAccount(dao, ACCOUNT_A)
+            val deletedAt = "2026-07-17T09:00:00.000Z"
+            val entry = entry(version = 1, updatedAt = deletedAt)
+            dao.upsertEntry(entry)
+            dao.upsertAttachment(
+                AttachmentEntity(
+                    accountId = ACCOUNT_A,
+                    id = "cascade-attachment",
+                    entryId = entry.id,
+                    type = "file",
+                    filename = "cascade.bin",
+                    displaySize = "1 B",
+                    byteSize = 1,
+                    storagePath = "attachments/2026-07-17/cascade.bin",
+                    mimeType = "application/octet-stream",
+                    createdAt = deletedAt,
+                    updatedAt = deletedAt,
+                ),
+            )
+            dao.upsertFileBoxItem(
+                FileBoxItemEntity(
+                    accountId = ACCOUNT_A,
+                    id = "cascade-file-box",
+                    entryId = entry.id,
+                    attachmentId = "cascade-attachment",
+                    filename = "cascade.bin",
+                    filesize = "1 B",
+                    sourceDeviceId = "queue-test",
+                    sourceDeviceName = "Queue Test",
+                    status = "available",
+                    createdAt = deletedAt,
+                    updatedAt = deletedAt,
+                ),
+            )
+            dao.upsertTransfer(
+                TransferEntity(
+                    accountId = ACCOUNT_A,
+                    id = "cascade-transfer",
+                    fileBoxItemId = "cascade-file-box",
+                    entryId = entry.id,
+                    attachmentId = "cascade-attachment",
+                    filename = "cascade.bin",
+                    fromDeviceId = "queue-test",
+                    fromDeviceName = "Queue Test",
+                    provider = "google-drive",
+                    status = "available",
+                    createdAt = deletedAt,
+                    updatedAt = deletedAt,
+                ),
+            )
+
+            assertTrue(
+                dao.deleteEntryDurably(
+                    ACCOUNT_A,
+                    entry.id,
+                    deletedAt,
+                    "queue-test",
+                    "cascade-order-test",
+                ),
+            )
+
+            val claimedKinds = mutableListOf<String>()
+            repeat(4) { index ->
+                val token = "cascade-claim-$index"
+                val claimed = requireNotNull(
+                    dao.claimNextQueueItem(ACCOUNT_A, token, CLAIM_AT, LEASE_EXPIRES_AT),
+                )
+                claimedKinds += claimed.entityKind
+                assertNull(
+                    dao.claimNextQueueItem(
+                        ACCOUNT_A,
+                        "concurrent-cascade-claim-$index",
+                        CLAIM_AT,
+                        LEASE_EXPIRES_AT,
+                    ),
+                )
+                assertEquals(1, dao.completeQueueClaim(ACCOUNT_A, claimed.id, token))
+            }
+            assertEquals(listOf("transfer", "fileBoxItem", "attachment", "entry"), claimedKinds)
+            assertEquals(4, dao.tombstones(ACCOUNT_A).size)
+        } finally {
+            database.close()
+        }
+    }
+
+    @Test
+    fun leaseRenewalRequiresCurrentTokenMutationAndAccount() = runTest {
+        val database = database()
+        try {
+            val dao = database.dao()
+            seedAccount(dao, ACCOUNT_A)
+            seedAccount(dao, ACCOUNT_B)
+            val queuedAt = "2026-07-17T10:00:00.000Z"
+            dao.insertQueueItemIfAbsent(queue(ACCOUNT_A, "renewable", queuedAt))
+            requireNotNull(
+                dao.claimNextQueueItem(
+                    ACCOUNT_A,
+                    "current-token",
+                    "2026-07-17T10:05:00.000Z",
+                    "2026-07-17T11:05:00.000Z",
+                ),
+            )
+
+            assertTrue(
+                dao.renewQueueClaim(
+                    ACCOUNT_A,
+                    "renewable",
+                    "current-token",
+                    queuedAt,
+                    "2026-07-17T10:30:00.000Z",
+                    "2026-07-17T11:30:00.000Z",
+                ),
+            )
+            assertEquals("2026-07-17T11:30:00.000Z", dao.queueItem(ACCOUNT_A, "renewable")?.leaseExpiresAt)
+            assertTrue(
+                !dao.renewQueueClaim(
+                    ACCOUNT_A,
+                    "renewable",
+                    "stale-token",
+                    queuedAt,
+                    "2026-07-17T10:31:00.000Z",
+                    "2026-07-17T11:31:00.000Z",
+                ),
+            )
+            assertTrue(
+                !dao.renewQueueClaim(
+                    ACCOUNT_B,
+                    "renewable",
+                    "current-token",
+                    queuedAt,
+                    "2026-07-17T10:31:00.000Z",
+                    "2026-07-17T11:31:00.000Z",
+                ),
+            )
+            assertTrue(
+                !dao.renewQueueClaim(
+                    ACCOUNT_A,
+                    "renewable",
+                    "current-token",
+                    "2026-07-17T10:00:01.000Z",
+                    "2026-07-17T10:31:00.000Z",
+                    "2026-07-17T11:31:00.000Z",
+                ),
+            )
+        } finally {
+            database.close()
+        }
+    }
+
+    @Test
     fun claimsAreAtomicFifoAndAccountScoped() = runTest {
         val database = database()
         try {
@@ -38,11 +195,8 @@ class QueueClaimLifecycleTest {
             dao.insertQueueItemIfAbsent(queue(ACCOUNT_B, "b-first", "2026-07-17T09:00:00.000Z"))
             dao.insertQueueItemIfAbsent(queue("inactive-account", "orphan", "2026-07-17T08:00:00.000Z"))
 
-            val first = dao.claimNextQueueItem(ACCOUNT_A, "claim-1", CLAIM_AT, LEASE_EXPIRES_AT)
-            assertEquals("a-first", first?.id)
-
             val gate = CompletableDeferred<Unit>()
-            val concurrent = listOf("claim-2", "claim-3").map { token ->
+            val concurrent = listOf("claim-1", "claim-2").map { token ->
                 async(Dispatchers.IO) {
                     gate.await()
                     dao.claimNextQueueItem(ACCOUNT_A, token, CLAIM_AT, LEASE_EXPIRES_AT)
@@ -50,9 +204,13 @@ class QueueClaimLifecycleTest {
             }
             gate.complete(Unit)
             val claimed = concurrent.awaitAll()
-            assertEquals(setOf("a-middle", "a-last"), claimed.mapNotNull { it?.id }.toSet())
-            assertEquals(2, claimed.mapNotNull { it?.claimToken }.toSet().size)
-            assertTrue(dao.pendingQueue(ACCOUNT_A).all { it.status == "syncing" && it.attemptCount == 1 })
+            val first = claimed.single { it != null }
+            assertEquals("a-first", first?.id)
+            assertEquals(1, claimed.count { it != null })
+            assertEquals(1, dao.pendingQueue(ACCOUNT_A).count { it.status == "syncing" })
+            assertEquals(1, dao.completeQueueClaim(ACCOUNT_A, requireNotNull(first).id, requireNotNull(first.claimToken)))
+            val second = dao.claimNextQueueItem(ACCOUNT_A, "claim-3", CLAIM_AT, LEASE_EXPIRES_AT)
+            assertEquals("a-middle", second?.id)
             assertEquals("queued", dao.queueItem(ACCOUNT_B, "b-first")?.status)
             assertNull(dao.claimNextQueueItem("inactive-account", "orphan-claim", CLAIM_AT, LEASE_EXPIRES_AT))
         } finally {

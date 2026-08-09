@@ -14,7 +14,6 @@ import com.easylab.labnotebook.data.local.AccountId
 import com.easylab.labnotebook.data.local.AttachmentEntity
 import com.easylab.labnotebook.data.local.ConflictEntity
 import com.easylab.labnotebook.data.local.DeviceEntity
-import com.easylab.labnotebook.data.local.DriveRawDocumentEntity
 import com.easylab.labnotebook.data.local.FileBoxItemEntity
 import com.easylab.labnotebook.data.local.JournalEntryEntity
 import com.easylab.labnotebook.data.local.LabNotebookDatabase
@@ -58,18 +57,33 @@ data class LegacyProtocolSyncQueueEntity(
     val lastError: String? = null,
 )
 
+@Entity(
+    tableName = "drive_raw_documents",
+    primaryKeys = ["accountId", "entityKind", "entityId"],
+    indices = [Index(value = ["accountId", "path"], unique = true)],
+)
+data class LegacyProtocolDriveRawDocumentEntity(
+    val accountId: String,
+    val entityKind: String,
+    val entityId: String,
+    val path: String,
+    val driveFileId: String,
+    val driveModifiedAt: String,
+    val rawJson: String,
+)
+
 @Dao
 interface LegacyV3ProtocolMigrationDao {
     @Insert suspend fun insertAccount(account: AccountEntity)
     @Insert suspend fun insertEntry(entry: JournalEntryEntity)
-    @Insert suspend fun insertRawDocument(document: DriveRawDocumentEntity)
+    @Insert suspend fun insertRawDocument(document: LegacyProtocolDriveRawDocumentEntity)
 }
 
 @Database(
     entities = [
         AccountEntity::class, JournalEntryEntity::class, AttachmentEntity::class, DeviceEntity::class,
         FileBoxItemEntity::class, TransferEntity::class, ConflictEntity::class, TombstoneEntity::class,
-        LegacyProtocolSyncQueueEntity::class, SyncStateEntity::class, DriveRawDocumentEntity::class,
+        LegacyProtocolSyncQueueEntity::class, SyncStateEntity::class, LegacyProtocolDriveRawDocumentEntity::class,
     ],
     version = 3,
     exportSchema = false,
@@ -100,7 +114,11 @@ class ProtocolRepositoryTest {
             }
 
         val migrated = Room.databaseBuilder(context, LabNotebookDatabase::class.java, databaseName)
-            .addMigrations(LabNotebookDatabase.MIGRATION_3_4, LabNotebookDatabase.MIGRATION_4_5)
+            .addMigrations(
+                LabNotebookDatabase.MIGRATION_3_4,
+                LabNotebookDatabase.MIGRATION_4_5,
+                LabNotebookDatabase.MIGRATION_5_6,
+            )
             .allowMainThreadQueries()
             .build()
         try {
@@ -308,7 +326,7 @@ class ProtocolRepositoryTest {
         updatedByDeviceId = "migration-test",
     )
 
-    private fun rawDocument(accountId: AccountId) = DriveRawDocumentEntity(
+    private fun rawDocument(accountId: AccountId) = LegacyProtocolDriveRawDocumentEntity(
         accountId = accountId.value,
         entityKind = "entry",
         entityId = "entry-before-v4",

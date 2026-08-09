@@ -63,6 +63,24 @@ internal data class DriveV1ManifestInventory(
     val transfers: Collection<TransferEntity>,
 )
 
+internal data class DriveV1ManifestProjection(
+    val devices: Collection<DriveV1Device>,
+    val entryCount: Int,
+    val attachmentCount: Int,
+    val fileBoxCount: Int,
+    val transferCount: Int,
+) {
+    init {
+        require(listOf(entryCount, attachmentCount, fileBoxCount, transferCount).all { it >= 0 }) {
+            "Projected Drive manifest counts must be non-negative."
+        }
+        devices.forEach { it.requireV1() }
+        require(devices.map { it.id }.toSet().size == devices.size) {
+            "Projected Drive manifest device ids must be unique."
+        }
+    }
+}
+
 /**
  * Pure Room-to-Drive v1 serialization. This class does not perform I/O and is intentionally
  * independent from the production sync wiring until write parity is proven.
@@ -262,16 +280,43 @@ internal object DriveV1LocalSerializer {
         val currentDevices = inventory.devices.map { it.toDriveV1().requireV1() }
         val currentDeviceIds = currentDevices.mapTo(hashSetOf()) { it.id }
         val devices = original?.value?.devices.orEmpty().filterNot { it.id in currentDeviceIds } + currentDevices
+        return serializeManifestProjection(
+            accountId = accountId,
+            updatedAt = updatedAt,
+            projection = DriveV1ManifestProjection(
+                devices = devices,
+                entryCount = inventory.entries.size,
+                attachmentCount = inventory.attachments.size,
+                fileBoxCount = inventory.fileBoxItems.size,
+                transferCount = inventory.transfers.size,
+            ),
+            createdAt = createdAt,
+            rootFolderName = rootFolderName,
+            rawBaseline = rawBaseline,
+        )
+    }
+
+    fun serializeManifestProjection(
+        accountId: AccountId,
+        updatedAt: String,
+        projection: DriveV1ManifestProjection,
+        createdAt: String? = null,
+        rootFolderName: String? = null,
+        rawBaseline: DriveRawDocumentEntity? = null,
+    ): DriveV1SerializedDocument {
+        val original = rawBaseline?.let {
+            decodeBaseline<DriveV1Manifest>(accountId, "manifest", "manifest", it)
+        }
         val value = DriveV1Manifest(
             rootFolderName = rootFolderName ?: original?.value?.rootFolderName ?: "Easylab Lab Notebook",
             createdAt = createdAt ?: original?.value?.createdAt
                 ?: throw IllegalArgumentException("A new manifest requires createdAt."),
             updatedAt = updatedAt,
-            devices = devices,
-            entryCount = inventory.entries.size,
-            attachmentCount = inventory.attachments.size,
-            fileBoxCount = inventory.fileBoxItems.size,
-            transferCount = inventory.transfers.size,
+            devices = projection.devices.toList(),
+            entryCount = projection.entryCount,
+            attachmentCount = projection.attachmentCount,
+            fileBoxCount = projection.fileBoxCount,
+            transferCount = projection.transferCount,
         ).requireV1()
         return serialized(
             accountId,

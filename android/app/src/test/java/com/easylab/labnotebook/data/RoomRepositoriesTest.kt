@@ -367,6 +367,7 @@ class RoomRepositoriesTest {
                 LabNotebookDatabase.MIGRATION_2_3,
                 LabNotebookDatabase.MIGRATION_3_4,
                 LabNotebookDatabase.MIGRATION_4_5,
+                LabNotebookDatabase.MIGRATION_5_6,
             )
             .allowMainThreadQueries()
             .build()

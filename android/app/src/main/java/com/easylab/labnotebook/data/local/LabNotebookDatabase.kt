@@ -13,8 +13,9 @@ import androidx.room.withTransaction
         AccountEntity::class, JournalEntryEntity::class, AttachmentEntity::class, DeviceEntity::class,
         FileBoxItemEntity::class, TransferEntity::class, ConflictEntity::class, TombstoneEntity::class,
         SyncQueueEntity::class, SyncStateEntity::class, DriveRawDocumentEntity::class, ProtocolEntity::class,
+        DriveWriteOperationEntity::class, DriveWritePayloadEntity::class,
     ],
-    version = 5,
+    version = 6,
     exportSchema = true,
 )
 abstract class LabNotebookDatabase : RoomDatabase() {
@@ -23,6 +24,8 @@ abstract class LabNotebookDatabase : RoomDatabase() {
     suspend fun clearAccount(accountId: AccountId) = withTransaction {
         dao().clearProtocols(accountId.value)
         dao().clearDriveRawDocuments(accountId.value)
+        dao().clearDriveWriteOperations(accountId.value)
+        dao().clearDriveWritePayloads(accountId.value)
         dao().clearTombstones(accountId.value)
         dao().clearConflicts(accountId.value)
         dao().clearTransfers(accountId.value)
@@ -111,11 +114,42 @@ abstract class LabNotebookDatabase : RoomDatabase() {
                 )
             }
         }
+        val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE drive_raw_documents ADD COLUMN driveVersion INTEGER")
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS drive_write_operations (" +
+                        "accountId TEXT NOT NULL, operationId TEXT NOT NULL, queueRecordId TEXT NOT NULL, " +
+                        "queueMutationAt TEXT NOT NULL, entityKind TEXT NOT NULL, entityId TEXT NOT NULL, " +
+                        "planHash TEXT NOT NULL, planJson TEXT NOT NULL, state TEXT NOT NULL, " +
+                        "receiptsJson TEXT NOT NULL, revision INTEGER NOT NULL, " +
+                        "createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL, " +
+                        "PRIMARY KEY(accountId, operationId))",
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_drive_write_operations_accountId_state_updatedAt " +
+                        "ON drive_write_operations(accountId, state, updatedAt)",
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_drive_write_operations_accountId_queueRecordId_queueMutationAt " +
+                        "ON drive_write_operations(accountId, queueRecordId, queueMutationAt)",
+                )
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS drive_write_payloads (" +
+                        "accountId TEXT NOT NULL, payloadKey TEXT NOT NULL, contentSha256 TEXT NOT NULL, " +
+                        "payloadJson TEXT NOT NULL, createdAt TEXT NOT NULL, PRIMARY KEY(accountId, payloadKey))",
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_drive_write_payloads_accountId_contentSha256 " +
+                        "ON drive_write_payloads(accountId, contentSha256)",
+                )
+            }
+        }
 
 
         fun get(context: Context): LabNotebookDatabase = instance ?: synchronized(this) {
             instance ?: Room.databaseBuilder(context.applicationContext, LabNotebookDatabase::class.java, "easylab-native-journal.db")
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
                 .build().also { instance = it }
         }
     }

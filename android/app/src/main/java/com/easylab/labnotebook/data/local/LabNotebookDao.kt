@@ -54,6 +54,79 @@ interface LabNotebookDao {
     @Query("SELECT * FROM drive_raw_documents WHERE accountId = :accountId ORDER BY path")
     suspend fun driveRawDocuments(accountId: String): List<DriveRawDocumentEntity>
 
+    @Insert(onConflict = OnConflictStrategy.ABORT)
+    suspend fun insertDriveWriteOperationUnchecked(operation: DriveWriteOperationEntity)
+    @Query(
+        "SELECT * FROM drive_write_operations WHERE accountId = :accountId " +
+            "AND operationId = :operationId LIMIT 1",
+    )
+    suspend fun driveWriteOperation(accountId: String, operationId: String): DriveWriteOperationEntity?
+    @Query(
+        "SELECT * FROM drive_write_operations WHERE accountId = :accountId " +
+            "AND state NOT IN ('completed', 'superseded') ORDER BY createdAt, operationId",
+    )
+    suspend fun recoverableDriveWriteOperations(accountId: String): List<DriveWriteOperationEntity>
+    @Query(
+        "SELECT * FROM drive_write_operations WHERE accountId = :accountId " +
+            "AND queueRecordId = :queueRecordId AND queueMutationAt = :queueMutationAt " +
+            "ORDER BY createdAt DESC, operationId DESC LIMIT 1",
+    )
+    suspend fun driveWriteOperationForQueueMutation(
+        accountId: String,
+        queueRecordId: String,
+        queueMutationAt: String,
+    ): DriveWriteOperationEntity?
+    @Query(
+        "SELECT * FROM drive_write_operations WHERE accountId = :accountId " +
+            "AND queueRecordId = :queueRecordId AND queueMutationAt = :queueMutationAt " +
+            "AND state != 'superseded' ORDER BY createdAt DESC, operationId DESC LIMIT 1",
+    )
+    suspend fun activeDriveWriteOperationForQueueMutation(
+        accountId: String,
+        queueRecordId: String,
+        queueMutationAt: String,
+    ): DriveWriteOperationEntity?
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertDriveWritePayloadIfAbsent(payload: DriveWritePayloadEntity): Long
+    @Query(
+        "SELECT * FROM drive_write_payloads WHERE accountId = :accountId AND payloadKey = :payloadKey LIMIT 1",
+    )
+    suspend fun driveWritePayload(accountId: String, payloadKey: String): DriveWritePayloadEntity?
+    @Query("DELETE FROM drive_write_payloads WHERE accountId = :accountId AND payloadKey IN (:payloadKeys)")
+    suspend fun deleteDriveWritePayloads(accountId: String, payloadKeys: List<String>): Int
+
+    @Transaction
+    suspend fun insertDriveWriteOperationWithPayloads(
+        operation: DriveWriteOperationEntity,
+        payloads: List<DriveWritePayloadEntity>,
+    ) {
+        payloads.forEach { payload ->
+            require(payload.accountId == operation.accountId) {
+                "A Drive write payload belongs to a different operation account."
+            }
+            insertDriveWritePayloadIfAbsent(payload)
+            check(driveWritePayload(operation.accountId, payload.payloadKey) == payload) {
+                "A durable JSON payload key is already bound to different content."
+            }
+        }
+        insertDriveWriteOperationUnchecked(operation)
+    }
+    @Query(
+        "UPDATE drive_write_operations SET state = :newState, receiptsJson = :receiptsJson, revision = revision + 1, " +
+            "updatedAt = :updatedAt WHERE accountId = :accountId AND operationId = :operationId " +
+            "AND planHash = :planHash AND state = :expectedState AND revision = :expectedRevision",
+    )
+    suspend fun compareAndSetDriveWriteOperation(
+        accountId: String,
+        operationId: String,
+        planHash: String,
+        expectedState: String,
+        expectedRevision: Long,
+        newState: String,
+        receiptsJson: String,
+        updatedAt: String,
+    ): Int
+
     @Query("SELECT * FROM protocols WHERE accountId = :accountId ORDER BY updatedAt DESC, title COLLATE NOCASE")
     fun observeProtocols(accountId: String): Flow<List<ProtocolEntity>>
     @Query("SELECT * FROM protocols WHERE accountId = :accountId AND id = :protocolId LIMIT 1")
@@ -101,6 +174,8 @@ interface LabNotebookDao {
     )
     fun observeEntries(accountId: String): Flow<List<JournalEntryEntity>>
     @Query("SELECT COUNT(*) FROM journal_entries WHERE accountId = :accountId") suspend fun entryCount(accountId: String): Int
+    @Query("SELECT * FROM journal_entries WHERE accountId = :accountId ORDER BY dateBucket, id")
+    suspend fun entries(accountId: String): List<JournalEntryEntity>
     @Query("SELECT * FROM journal_entries WHERE accountId = :accountId AND id = :entryId LIMIT 1") suspend fun entry(accountId: String, entryId: String): JournalEntryEntity?
     @Query(
         "SELECT * FROM journal_entries AS entry WHERE entry.accountId = :accountId AND entry.id = :entryId " +
@@ -151,6 +226,8 @@ interface LabNotebookDao {
     )
     fun observeVisibleAttachments(accountId: String): Flow<List<AttachmentEntity>>
     @Query("SELECT COUNT(*) FROM attachments WHERE accountId = :accountId") suspend fun attachmentCount(accountId: String): Int
+    @Query("SELECT * FROM attachments WHERE accountId = :accountId ORDER BY entryId, id")
+    suspend fun attachments(accountId: String): List<AttachmentEntity>
     @Query("SELECT * FROM attachments WHERE accountId = :accountId AND entryId = :entryId") suspend fun attachmentsForEntry(accountId: String, entryId: String): List<AttachmentEntity>
     @Query("SELECT * FROM attachments WHERE accountId = :accountId AND id = :attachmentId LIMIT 1") suspend fun attachment(accountId: String, attachmentId: String): AttachmentEntity?
     @Query(
@@ -175,6 +252,8 @@ interface LabNotebookDao {
     @Upsert suspend fun upsertFileBoxItem(item: FileBoxItemEntity)
     @Query("SELECT COUNT(*) FROM file_box_items WHERE accountId = :accountId") suspend fun fileBoxItemCount(accountId: String): Int
     @Query("SELECT * FROM file_box_items WHERE accountId = :accountId ORDER BY updatedAt DESC") suspend fun fileBoxItems(accountId: String): List<FileBoxItemEntity>
+    @Query("SELECT * FROM file_box_items WHERE accountId = :accountId AND id = :itemId LIMIT 1")
+    suspend fun fileBoxItem(accountId: String, itemId: String): FileBoxItemEntity?
     @Query(
         "SELECT * FROM file_box_items AS item WHERE item.accountId = :accountId " +
             "AND item.status NOT IN ('attached', 'rejected', 'removed') " +
@@ -194,6 +273,8 @@ interface LabNotebookDao {
     @Upsert suspend fun upsertTransfer(transfer: TransferEntity)
     @Query("SELECT COUNT(*) FROM transfers WHERE accountId = :accountId") suspend fun transferCount(accountId: String): Int
     @Query("SELECT * FROM transfers WHERE accountId = :accountId ORDER BY updatedAt DESC") suspend fun transfers(accountId: String): List<TransferEntity>
+    @Query("SELECT * FROM transfers WHERE accountId = :accountId AND id = :transferId LIMIT 1")
+    suspend fun transfer(accountId: String, transferId: String): TransferEntity?
     @Query(
         "SELECT * FROM transfers AS transfer WHERE transfer.accountId = :accountId " +
             "AND transfer.status != 'removed' " +
@@ -259,9 +340,15 @@ interface LabNotebookDao {
             "(status IN ('queued', 'failed') OR (status = 'syncing' AND " +
             "(leaseExpiresAt IS NULL OR (strftime('%Y-%m-%dT%H:%M:%fZ', leaseExpiresAt) = leaseExpiresAt " +
             "AND leaseExpiresAt <= :claimAt)))) AND " +
+            "NOT EXISTS (SELECT 1 FROM sync_queue AS active WHERE active.accountId = :accountId " +
+            "AND active.status = 'syncing' AND active.id != sync_queue.id AND active.leaseExpiresAt IS NOT NULL " +
+            "AND (strftime('%Y-%m-%dT%H:%M:%fZ', active.leaseExpiresAt) != active.leaseExpiresAt " +
+            "OR active.leaseExpiresAt > :claimAt)) AND " +
             "strftime('%Y-%m-%dT%H:%M:%fZ', :claimAt) = :claimAt AND EXISTS " +
             "(SELECT 1 FROM accounts WHERE accounts.accountId = :accountId) " +
-            "ORDER BY queuedAt, id LIMIT 1",
+            "ORDER BY queuedAt, CASE WHEN operation = 'delete' THEN CASE entityKind " +
+            "WHEN 'transfer' THEN 0 WHEN 'fileBoxItem' THEN 1 WHEN 'attachment' THEN 2 " +
+            "WHEN 'entry' THEN 3 ELSE 4 END ELSE 5 END, id LIMIT 1",
     )
     suspend fun nextClaimableQueueItem(accountId: String, claimAt: String): SyncQueueEntity?
     @Query(
@@ -284,12 +371,54 @@ interface LabNotebookDao {
         leaseExpiresAt: String,
     ): Int
     @Query(
+        "UPDATE sync_queue SET leaseExpiresAt = :leaseExpiresAt WHERE accountId = :accountId " +
+            "AND id = :recordId AND status = 'syncing' AND claimToken = :claimToken " +
+            "AND updatedAt = :queueMutationAt AND :claimToken <> '' " +
+            "AND strftime('%Y-%m-%dT%H:%M:%fZ', :renewedAt) = :renewedAt " +
+            "AND strftime('%Y-%m-%dT%H:%M:%fZ', :leaseExpiresAt) = :leaseExpiresAt " +
+            "AND leaseExpiresAt > :renewedAt AND :leaseExpiresAt > :renewedAt AND EXISTS " +
+            "(SELECT 1 FROM accounts WHERE accounts.accountId = :accountId)",
+    )
+    suspend fun renewQueueClaimUnchecked(
+        accountId: String,
+        recordId: String,
+        claimToken: String,
+        queueMutationAt: String,
+        renewedAt: String,
+        leaseExpiresAt: String,
+    ): Int
+    @Query(
         "UPDATE sync_queue SET status = 'completed', claimToken = NULL, claimedAt = NULL, " +
             "leaseExpiresAt = NULL, lastError = NULL WHERE accountId = :accountId AND id = :recordId " +
             "AND status = 'syncing' AND claimToken = :claimToken AND :claimToken <> '' AND EXISTS " +
             "(SELECT 1 FROM accounts WHERE accounts.accountId = :accountId)",
     )
     suspend fun completeQueueClaim(accountId: String, recordId: String, claimToken: String): Int
+    @Query(
+        "UPDATE sync_queue SET status = 'completed', claimToken = NULL, claimedAt = NULL, " +
+            "leaseExpiresAt = NULL, lastError = NULL WHERE accountId = :accountId AND id = :recordId " +
+            "AND updatedAt = :queueMutationAt AND status = 'syncing' AND claimToken = :claimToken " +
+            "AND :claimToken <> '' AND EXISTS " +
+            "(SELECT 1 FROM accounts WHERE accounts.accountId = :accountId)",
+    )
+    suspend fun completeQueueClaimForMutation(
+        accountId: String,
+        recordId: String,
+        queueMutationAt: String,
+        claimToken: String,
+    ): Int
+    @Query(
+        "SELECT COUNT(*) FROM sync_queue WHERE accountId = :accountId AND id = :recordId " +
+            "AND updatedAt = :queueMutationAt AND status = 'syncing' AND claimToken = :claimToken " +
+            "AND :claimToken <> '' AND EXISTS " +
+            "(SELECT 1 FROM accounts WHERE accounts.accountId = :accountId)",
+    )
+    suspend fun currentQueueClaimCount(
+        accountId: String,
+        recordId: String,
+        queueMutationAt: String,
+        claimToken: String,
+    ): Int
     @Query(
         "UPDATE sync_queue SET status = 'failed', claimToken = NULL, claimedAt = NULL, " +
             "leaseExpiresAt = NULL, lastError = :lastError WHERE accountId = :accountId AND id = :recordId " +
@@ -338,6 +467,124 @@ interface LabNotebookDao {
         require(accountId.isNotBlank()) { "Queue recovery account id must not be blank." }
         requireCanonicalQueueTimestamp(now, "Queue recovery timestamp")
         return recoverExpiredQueueClaimsUnchecked(accountId, now)
+    }
+
+    @Transaction
+    suspend fun renewQueueClaim(
+        accountId: String,
+        recordId: String,
+        claimToken: String,
+        queueMutationAt: String,
+        renewedAt: String,
+        leaseExpiresAt: String,
+    ): Boolean {
+        require(accountId.isNotBlank()) { "Queue renewal account id must not be blank." }
+        require(recordId.isNotBlank()) { "Queue renewal record id must not be blank." }
+        require(claimToken.isNotBlank()) { "Queue renewal token must not be blank." }
+        requireCanonicalQueueTimestamp(queueMutationAt, "Queue mutation timestamp")
+        requireCanonicalQueueTimestamp(renewedAt, "Queue lease renewal timestamp")
+        requireCanonicalQueueTimestamp(leaseExpiresAt, "Queue renewed lease expiry")
+        require(leaseExpiresAt > renewedAt) { "Renewed queue lease must expire after renewal." }
+        return renewQueueClaimUnchecked(
+            accountId,
+            recordId,
+            claimToken,
+            queueMutationAt,
+            renewedAt,
+            leaseExpiresAt,
+        ) == 1
+    }
+
+    @Transaction
+    suspend fun finalizeDriveWriteOperation(
+        operation: DriveWriteOperationEntity,
+        claimToken: String,
+        baselines: List<DriveRawDocumentEntity>,
+        payloadKeys: List<String>,
+        completedAt: String,
+    ) {
+        requireCanonicalQueueTimestamp(completedAt, "Drive operation completion timestamp")
+        require(operation.state == "manifest-committed") {
+            "Only a manifest-committed Drive operation can complete locally."
+        }
+        require(claimToken.isNotBlank()) { "Queue completion token must not be blank." }
+        baselines.forEach { baseline ->
+            require(baseline.accountId == operation.accountId) {
+                "A Drive operation baseline belongs to a different account."
+            }
+            require(baseline.driveVersion != null && baseline.driveVersion > 0L) {
+                "A completed Drive operation baseline requires a positive remote version."
+            }
+            upsertDriveRawDocument(baseline)
+        }
+        check(
+            completeQueueClaimForMutation(
+                accountId = operation.accountId,
+                recordId = operation.queueRecordId,
+                queueMutationAt = operation.queueMutationAt,
+                claimToken = claimToken,
+            ) == 1,
+        ) { "Queue claim changed before the Drive operation could complete locally." }
+        check(
+            compareAndSetDriveWriteOperation(
+                accountId = operation.accountId,
+                operationId = operation.operationId,
+                planHash = operation.planHash,
+                expectedState = operation.state,
+                expectedRevision = operation.revision,
+                newState = "completed",
+                receiptsJson = operation.receiptsJson,
+                updatedAt = completedAt,
+            ) == 1,
+        ) { "Drive operation journal changed before local completion." }
+        if (payloadKeys.isNotEmpty()) deleteDriveWritePayloads(operation.accountId, payloadKeys)
+    }
+
+    @Transaction
+    suspend fun finalizeSupersededDriveWriteOperation(
+        operation: DriveWriteOperationEntity,
+        currentQueueMutationAt: String,
+        claimToken: String,
+        baselines: List<DriveRawDocumentEntity>,
+        payloadKeys: List<String>,
+        completedAt: String,
+    ) {
+        requireCanonicalQueueTimestamp(currentQueueMutationAt, "Current queue mutation timestamp")
+        requireCanonicalQueueTimestamp(completedAt, "Superseded Drive operation completion timestamp")
+        require(operation.state == "manifest-committed") {
+            "Only a manifest-committed Drive operation can be superseded after repair."
+        }
+        require(claimToken.isNotBlank()) { "Queue repair token must not be blank." }
+        check(
+            currentQueueClaimCount(
+                operation.accountId,
+                operation.queueRecordId,
+                currentQueueMutationAt,
+                claimToken,
+            ) == 1,
+        ) { "Current queue claim changed before the older Drive operation was repaired." }
+        baselines.forEach { baseline ->
+            require(baseline.accountId == operation.accountId) {
+                "A repaired Drive baseline belongs to a different account."
+            }
+            require(baseline.driveVersion != null && baseline.driveVersion > 0L) {
+                "A repaired Drive baseline requires a positive remote version."
+            }
+            upsertDriveRawDocument(baseline)
+        }
+        check(
+            compareAndSetDriveWriteOperation(
+                accountId = operation.accountId,
+                operationId = operation.operationId,
+                planHash = operation.planHash,
+                expectedState = operation.state,
+                expectedRevision = operation.revision,
+                newState = "superseded",
+                receiptsJson = operation.receiptsJson,
+                updatedAt = completedAt,
+            ) == 1,
+        ) { "Older Drive operation changed before superseded repair completion." }
+        if (payloadKeys.isNotEmpty()) deleteDriveWritePayloads(operation.accountId, payloadKeys)
     }
 
     @Transaction
@@ -651,5 +898,7 @@ interface LabNotebookDao {
     @Query("DELETE FROM sync_queue WHERE accountId = :accountId") suspend fun clearQueue(accountId: String)
     @Query("DELETE FROM sync_state WHERE accountId = :accountId") suspend fun clearSyncState(accountId: String)
     @Query("DELETE FROM drive_raw_documents WHERE accountId = :accountId") suspend fun clearDriveRawDocuments(accountId: String)
+    @Query("DELETE FROM drive_write_operations WHERE accountId = :accountId") suspend fun clearDriveWriteOperations(accountId: String)
+    @Query("DELETE FROM drive_write_payloads WHERE accountId = :accountId") suspend fun clearDriveWritePayloads(accountId: String)
     @Query("DELETE FROM protocols WHERE accountId = :accountId") suspend fun clearProtocols(accountId: String)
 }

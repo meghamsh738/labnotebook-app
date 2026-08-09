@@ -117,8 +117,47 @@ data class DriveRawDocumentEntity(
     val entityId: String,
     val path: String,
     val driveFileId: String,
+    /** Remote provenance only; every mutation must still refresh Drive metadata. */
+    val driveVersion: Long? = null,
     val driveModifiedAt: String,
     val rawJson: String,
+)
+
+@Entity(
+    tableName = "drive_write_operations",
+    primaryKeys = ["accountId", "operationId"],
+    indices = [
+        Index(value = ["accountId", "state", "updatedAt"]),
+        Index(value = ["accountId", "queueRecordId", "queueMutationAt"]),
+    ],
+)
+data class DriveWriteOperationEntity(
+    val accountId: String,
+    val operationId: String,
+    val queueRecordId: String,
+    val queueMutationAt: String,
+    val entityKind: String,
+    val entityId: String,
+    val planHash: String,
+    val planJson: String,
+    val state: String,
+    val receiptsJson: String = "[]",
+    val revision: Long = 0,
+    val createdAt: String,
+    val updatedAt: String,
+)
+
+@Entity(
+    tableName = "drive_write_payloads",
+    primaryKeys = ["accountId", "payloadKey"],
+    indices = [Index(value = ["accountId", "contentSha256"])],
+)
+data class DriveWritePayloadEntity(
+    val accountId: String,
+    val payloadKey: String,
+    val contentSha256: String,
+    val payloadJson: String,
+    val createdAt: String,
 )
 
 /**
