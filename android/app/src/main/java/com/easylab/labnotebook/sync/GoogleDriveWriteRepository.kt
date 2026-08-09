@@ -277,7 +277,7 @@ internal class GoogleDriveWriteRepository(
                 throw DriveProtocolException("Drive managed JSON must contain an object: $path")
             }
             val token = accessToken(accountId)
-            val rootId = requireExistingRoot(accountId, path)
+            val rootId = requireExistingRoot(accountId, token, path)
             val parentId = requireExistingFolders(token, rootId, segments.dropLast(1), path)
             conditionalUpsertMedia(
                 token = token,
@@ -445,7 +445,7 @@ internal class GoogleDriveWriteRepository(
                 null
             }
             val token = accessToken(accountId)
-            val rootId = requireExistingRoot(accountId, path)
+            val rootId = requireExistingRoot(accountId, token, path)
             val parentId = requireExistingFolders(token, rootId, segments.dropLast(1), path)
             if (useResumable && precondition is DriveWritePrecondition.MustNotExist) {
                 return@withLock conditionalCreateResumableMedia(
@@ -523,11 +523,33 @@ internal class GoogleDriveWriteRepository(
         return parentId
     }
 
-    private suspend fun requireExistingRoot(accountId: AccountId, path: String): String =
-        reader.resolveExistingRootFolderId(accountId)
+    private suspend fun requireExistingRoot(
+        accountId: AccountId,
+        token: String,
+        path: String,
+    ): String {
+        rootFolderIds.get(accountId)?.let { savedId ->
+            val savedRoot = try {
+                getMetadata(token, savedId)
+            } catch (error: DriveHttpException) {
+                if (error.statusCode == 404) null else throw error
+            }
+            if (
+                savedRoot != null && savedRoot.id == savedId &&
+                savedRoot.mimeType == FOLDER_MIME_TYPE && !savedRoot.trashed &&
+                savedRoot.name == folderName && "root" in savedRoot.parentIds
+            ) {
+                return savedId
+            }
+            throw DriveWritePreconditionConflictException(
+                "Saved Drive workspace changed before conditional update: $path",
+            )
+        }
+        return reader.resolveExistingRootFolderId(accountId)
             ?: throw DriveWritePreconditionConflictException(
                 "Drive workspace no longer exists for conditional update: $path",
             )
+    }
 
     private suspend fun requireExistingFolders(
         token: String,

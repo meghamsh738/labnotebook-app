@@ -347,6 +347,43 @@ class GoogleDriveWriteRepositoryTest {
     }
 
     @Test
+    fun conditionalCreateHonorsFreshExactSavedRootWithPrecreatedNestedFolder() = runTest {
+        val fixture = Fixture()
+        fixture.addUninitializedEntryTree()
+
+        val result = fixture.repository.putJsonConditional(
+            ACCOUNT_A,
+            ENTRY_PATH,
+            ENTRY_JSON,
+            DriveWritePrecondition.MustNotExist,
+        ).getOrThrow()
+
+        assertEquals(ENTRY_PATH, result.path)
+        assertEquals("root-a", fixture.store.get(ACCOUNT_A))
+        assertEquals(1, fixture.transport.requests.count { it.method == "POST" && it.url.contains("/upload/") })
+        assertFalse(fixture.transport.createdFolders.isNotEmpty())
+    }
+
+    @Test
+    fun conditionalCreateRejectsMovedSavedRootWithoutSwitchingWorkspaces() = runTest {
+        val fixture = Fixture()
+        fixture.addMovedSavedRootAndSeparateValidRoot()
+
+        val errors = List(2) {
+            fixture.repository.putJsonConditional(
+                ACCOUNT_A,
+                ENTRY_PATH,
+                ENTRY_JSON,
+                DriveWritePrecondition.MustNotExist,
+            ).exceptionOrNull()
+        }
+
+        assertTrue(errors.all { it is DriveWritePreconditionConflictException })
+        assertEquals("root-a", fixture.store.get(ACCOUNT_A))
+        assertFalse(fixture.transport.requests.any { it.method in setOf("POST", "PATCH") })
+    }
+
+    @Test
     fun lostCreateResponseReconcilesAndRetryDoesNotCreateADuplicate() = runTest {
         val fixture = Fixture()
         fixture.addEmptyEntryTree()
@@ -988,6 +1025,30 @@ class GoogleDriveWriteRepositoryTest {
             addExistingRoot()
             transport.add(FakeNode.folder("entries", "entries", parentId = "root-a"))
             transport.add(FakeNode.folder("day", "2026-07-16", parentId = "entries"))
+        }
+
+        fun addUninitializedEntryTree() {
+            store.set(ACCOUNT_A, "root-a")
+            transport.add(FakeNode.folder("root-a", "Easylab Lab Notebook", parentId = "root"))
+            transport.add(FakeNode.folder("entries", "entries", parentId = "root-a"))
+            transport.add(FakeNode.folder("day", "2026-07-16", parentId = "entries"))
+        }
+
+        fun addMovedSavedRootAndSeparateValidRoot() {
+            store.set(ACCOUNT_A, "root-a")
+            transport.add(FakeNode.folder("root-a", "Easylab Lab Notebook", parentId = "other-parent"))
+            transport.add(FakeNode.folder("root-b", "Easylab Lab Notebook", parentId = "root"))
+            transport.add(FakeNode.folder("entries-b", "entries", parentId = "root-b"))
+            transport.add(FakeNode.folder("day-b", "2026-07-16", parentId = "entries-b"))
+            transport.add(
+                FakeNode.file(
+                    id = "manifest-b",
+                    name = "manifest.json",
+                    parentId = "root-b",
+                    mimeType = "application/json",
+                    body = MANIFEST_JSON.toByteArray(),
+                ),
+            )
         }
 
         fun addEmptyAttachmentTree() {
