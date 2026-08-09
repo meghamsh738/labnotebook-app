@@ -50,8 +50,12 @@ export type BlobMetadata = {
 
 export type PutOptions = {
   appProperties?: Record<string, string>
-  precondition?: WritePrecondition
+  precondition: WritePrecondition
   resumableOperationId?: string
+}
+
+type TestSeedOptions = {
+  appProperties?: Record<string, string>
 }
 
 export type WritePrecondition = DriveWritePrecondition
@@ -83,19 +87,22 @@ export interface SyncProvider {
   readonly supportsVersionedCas?: boolean
   signIn(): Promise<AuthSession>
   signOut(): Promise<void>
+  currentAccountScope?(): string | undefined
   ensureWorkspace(): Promise<WorkspaceRef>
-  ensureDeviceRecord(device: DeviceProfile): Promise<void>
+  resolveWorkspace(): Promise<WorkspaceRef>
+  acquireTransactionGuard(operationId: string): Promise<void>
+  releaseTransactionGuard(operationId: string): Promise<void>
 
   getJson<T>(path: string): Promise<RemoteJson<T> | null>
   getJsonText?(path: string): Promise<RemoteJsonText | null>
-  putJson<T>(path: string, value: T, options?: PutOptions): Promise<RemoteFileRef>
+  putJson<T>(path: string, value: T, options: PutOptions): Promise<RemoteFileRef>
 
   getBlob(path: string): Promise<Blob | null>
   getBlobById?(fileId: string): Promise<Blob | null>
-  putBlob(path: string, blob: Blob, metadata: BlobMetadata, options?: PutOptions): Promise<RemoteFileRef>
+  putBlob(path: string, blob: Blob, metadata: BlobMetadata, options: PutOptions): Promise<RemoteFileRef>
 
   loadManifest<T = unknown>(): Promise<T | null>
-  putManifest<T>(manifest: T, options?: PutOptions): Promise<RemoteFileRef>
+  putManifest<T>(manifest: T, options: PutOptions): Promise<RemoteFileRef>
 
   listManagedFiles(options?: ListOptions): Promise<RemoteFileRef[]>
   listChanges?(token: string): Promise<ChangePage>
@@ -123,6 +130,8 @@ function clone<T>(value: T): T {
   return typeof structuredClone === 'function' ? structuredClone(value) : JSON.parse(JSON.stringify(value)) as T
 }
 
+const MOCK_TRANSACTION_GUARD_LEASE_MS = 24 * 60 * 60 * 1000
+
 export class MockSyncProvider implements SyncProvider {
   readonly supportsVersionedCas = true
   private signedIn = false
@@ -130,6 +139,7 @@ export class MockSyncProvider implements SyncProvider {
   private readonly jsonFiles = new Map<string, RemoteJsonRecord>()
   private readonly blobFiles = new Map<string, RemoteBlobRecord>()
   private readonly changes: RemoteFileRef[] = []
+  private transactionGuard: { operationId: string; expiresAt: number } | undefined
 
   async signIn(): Promise<AuthSession> {
     this.signedIn = true
@@ -145,8 +155,34 @@ export class MockSyncProvider implements SyncProvider {
     return { id: 'mock-workspace', rootPath: 'Easylab Lab Notebook' }
   }
 
+  resolveWorkspace() {
+    return this.ensureWorkspace()
+  }
+
+  async acquireTransactionGuard(operationId: string) {
+    this.requireSignIn()
+    if (!/^[0-9a-f]{64}$/.test(operationId)) {
+      throw new WritePreconditionError('Drive transaction guard identity is invalid.')
+    }
+    const now = Date.now()
+    if (this.transactionGuard
+      && this.transactionGuard.operationId !== operationId
+      && this.transactionGuard.expiresAt > now) {
+      throw new WritePreconditionError('Another Drive transaction holds the workspace guard.')
+    }
+    this.transactionGuard = { operationId, expiresAt: now + MOCK_TRANSACTION_GUARD_LEASE_MS }
+  }
+
+  async releaseTransactionGuard(operationId: string) {
+    this.requireSignIn()
+    if (this.transactionGuard && this.transactionGuard.operationId !== operationId) {
+      throw new WritePreconditionError('Drive transaction workspace guard changed before release.')
+    }
+    this.transactionGuard = undefined
+  }
+
   async ensureDeviceRecord(device: DeviceProfile) {
-    await this.putJson(`devices/${safeDriveSegment(device.id, 'device')}.json`, device)
+    await this.seedJsonForTest(`devices/${safeDriveSegment(device.id, 'device')}.json`, device)
   }
 
   async getJson<T>(path: string): Promise<RemoteJson<T> | null> {
@@ -164,8 +200,9 @@ export class MockSyncProvider implements SyncProvider {
 
   async putJson<T>(path: string, value: T, options?: PutOptions): Promise<RemoteFileRef> {
     this.requireSignIn()
+    if (!options?.precondition) throw new WritePreconditionError('Every runtime mock Drive write requires an explicit precondition.')
     const existing = this.jsonFiles.get(path)?.file
-    if (options?.precondition) assertWritePrecondition(existing, options.precondition)
+    assertWritePrecondition(existing, options.precondition)
     const file = this.makeFile(path, 'application/json', existing, options?.appProperties)
     this.jsonFiles.set(path, { file, rawText: JSON.stringify(clone(value)) })
     this.recordChange(file)
@@ -184,8 +221,9 @@ export class MockSyncProvider implements SyncProvider {
 
   async putBlob(path: string, blob: Blob, metadata: BlobMetadata, options?: PutOptions): Promise<RemoteFileRef> {
     this.requireSignIn()
+    if (!options?.precondition) throw new WritePreconditionError('Every runtime mock Drive write requires an explicit precondition.')
     const existing = this.blobFiles.get(path)?.file
-    if (options?.precondition) assertWritePrecondition(existing, options.precondition)
+    assertWritePrecondition(existing, options.precondition)
     const file = this.makeFile(path, metadata.mimeType || blob.type || 'application/octet-stream', existing, metadata.appProperties)
     file.size = metadata.byteSize ?? blob.size
     this.blobFiles.set(path, { file, blob })
@@ -197,10 +235,10 @@ export class MockSyncProvider implements SyncProvider {
     return (await this.getJson<T>('manifest.json'))?.value ?? null
   }
 
-  putManifest<T>(manifest: T, options?: PutOptions) {
+  putManifest<T>(manifest: T, options: PutOptions) {
     return this.putJson('manifest.json', manifest, {
       ...options,
-      appProperties: { entityType: 'manifest' },
+      appProperties: { ...options?.appProperties, entityType: 'manifest' },
     })
   }
 
@@ -233,7 +271,7 @@ export class MockSyncProvider implements SyncProvider {
   async duplicateJson<T>(sourcePath: string, duplicatePath: string, value?: T) {
     const source = this.jsonFiles.get(sourcePath)
     if (!source && typeof value === 'undefined') throw new Error(`No mock JSON exists at ${sourcePath}.`)
-    return this.putJson(
+    return this.seedJsonForTest(
       duplicatePath,
       typeof value === 'undefined' ? JSON.parse(source!.rawText) as T : value,
     )
@@ -249,12 +287,23 @@ export class MockSyncProvider implements SyncProvider {
     return file
   }
 
-  seedJsonForTest<T>(path: string, value: T, options?: PutOptions) {
-    return this.putJson(path, value, options)
+  async seedJsonForTest<T>(path: string, value: T, options: TestSeedOptions = {}) {
+    this.requireSignIn()
+    const existing = this.jsonFiles.get(path)?.file
+    const file = this.makeFile(path, 'application/json', existing, options.appProperties)
+    this.jsonFiles.set(path, { file, rawText: JSON.stringify(clone(value)) })
+    this.recordChange(file)
+    return file
   }
 
-  seedBlobForTest(path: string, blob: Blob, metadata: BlobMetadata, options?: PutOptions) {
-    return this.putBlob(path, blob, metadata, options)
+  async seedBlobForTest(path: string, blob: Blob, metadata: BlobMetadata) {
+    this.requireSignIn()
+    const existing = this.blobFiles.get(path)?.file
+    const file = this.makeFile(path, metadata.mimeType || blob.type || 'application/octet-stream', existing, metadata.appProperties)
+    file.size = metadata.byteSize ?? blob.size
+    this.blobFiles.set(path, { file, blob })
+    this.recordChange(file)
+    return file
   }
 
   private requireSignIn() {
@@ -346,6 +395,7 @@ export class GoogleDriveSyncProvider implements SyncProvider {
   private readonly testOnlyAllowUnsafeSeeding: boolean
   private rootFolderId = ''
   private rootFolderVerified = false
+  private signedInStorageScope = ''
   private readonly folderIds = new Map<string, string>()
 
   constructor(options: GoogleDriveSyncProviderOptions) {
@@ -364,18 +414,69 @@ export class GoogleDriveSyncProvider implements SyncProvider {
   }
 
   async signIn(): Promise<AuthSession> {
+    const previousScope = this.signedInStorageScope
     const account = await this.client.signIn()
+    const nextScope = account?.storageScope?.trim() ?? ''
+    if (previousScope && previousScope !== nextScope) this.resetRootFolder()
+    this.signedInStorageScope = nextScope
     return { provider: 'google-drive', signedInAt: nowIso(), account }
   }
 
   async signOut() {
     this.client.logout()
+    this.signedInStorageScope = ''
+    this.resetRootFolder()
+  }
+
+  currentAccountScope() {
+    return this.signedInStorageScope || undefined
   }
 
   async ensureWorkspace(): Promise<WorkspaceRef> {
     await this.ensureRoot()
     await Promise.all(['devices', 'entries', 'attachments', 'filebox', 'transfers', 'conflicts', 'tombstones'].map((folder) => this.ensureFolderPath(folder)))
     return { id: this.rootFolderId, rootPath: this.folderName }
+  }
+
+  async resolveWorkspace(): Promise<WorkspaceRef> {
+    await this.resolveExistingRoot()
+    for (const folder of MANAGED_ROOT_FOLDERS) {
+      const matches = await this.client.listFolder(
+        this.rootFolderId,
+        `name = '${escapeDriveQuery(folder)}' and mimeType = '${DRIVE_MIME_FOLDER}'`,
+      )
+      if (matches.length !== 1) {
+        throw new WritePreconditionError(`Drive managed folder must exist exactly once before sync: ${folder}`)
+      }
+      this.folderIds.set(folder, matches[0].id)
+    }
+    return { id: this.rootFolderId, rootPath: this.folderName }
+  }
+
+  async acquireTransactionGuard(operationId: string) {
+    if (!this.testOnlyEnableVersionedCas) {
+      throw new WritePreconditionError('Google Drive transaction guards are disabled outside offline validation.')
+    }
+    if (!this.rootFolderVerified || !this.rootFolderId) {
+      throw new WritePreconditionError('Drive workspace must be verified before acquiring a transaction guard.')
+    }
+    if (!this.client.acquireWorkspaceTransactionGuard) {
+      throw new WritePreconditionError('Google Drive client does not support conditional transaction guards.')
+    }
+    await this.client.acquireWorkspaceTransactionGuard(this.rootFolderId, operationId)
+  }
+
+  async releaseTransactionGuard(operationId: string) {
+    if (!this.testOnlyEnableVersionedCas) {
+      throw new WritePreconditionError('Google Drive transaction guards are disabled outside offline validation.')
+    }
+    if (!this.rootFolderVerified || !this.rootFolderId) {
+      throw new WritePreconditionError('Drive workspace must remain verified while releasing a transaction guard.')
+    }
+    if (!this.client.releaseWorkspaceTransactionGuard) {
+      throw new WritePreconditionError('Google Drive client does not support conditional transaction guards.')
+    }
+    await this.client.releaseWorkspaceTransactionGuard(this.rootFolderId, operationId)
   }
 
   async ensureDeviceRecord(device: DeviceProfile) {
@@ -459,10 +560,10 @@ export class GoogleDriveSyncProvider implements SyncProvider {
     return (await this.getJson<T>('manifest.json'))?.value ?? null
   }
 
-  putManifest<T>(manifest: T, options?: PutOptions) {
+  putManifest<T>(manifest: T, options: PutOptions) {
     return this.putJson('manifest.json', manifest, {
       ...options,
-      appProperties: { ...options?.appProperties, entityType: 'manifest' },
+      appProperties: { ...options.appProperties, entityType: 'manifest' },
     })
   }
 
@@ -490,7 +591,7 @@ export class GoogleDriveSyncProvider implements SyncProvider {
   }
 
   async listManagedFiles(options: ListOptions = {}) {
-    await this.ensureWorkspace()
+    await this.resolveWorkspace()
     const allFiles = await this.listFilesRecursive('', this.rootFolderId)
     return allFiles
       .filter((file) => !options.prefix || file.path.startsWith(options.prefix))
@@ -603,6 +704,46 @@ export class GoogleDriveSyncProvider implements SyncProvider {
       }
     }
     if (!this.rootFolderId) this.rootFolderId = await this.resolveOrCreateRootFolder()
+    this.rootFolderVerified = true
+    this.folderIds.set('', this.rootFolderId)
+  }
+
+  private async resolveExistingRoot() {
+    if (this.rootFolderId && !this.rootFolderVerified) {
+      try {
+        const metadata = await this.client.getFileMetadata(this.rootFolderId)
+        const validFolder = metadata.id === this.rootFolderId
+          && metadata.mimeType === DRIVE_MIME_FOLDER
+          && metadata.trashed !== true
+        const validIdentity = validFolder && (
+          await this.hasValidRootManifest(this.rootFolderId)
+          || (metadata.name === this.folderName && await this.isUninitializedManagedRoot(this.rootFolderId))
+        )
+        if (!validIdentity) this.resetRootFolder()
+      } catch (error) {
+        if (!isMissingDriveFolderError(error)) throw error
+        this.resetRootFolder()
+      }
+    }
+    if (!this.rootFolderId) {
+      const matches = await this.client.listFolder(
+        'root',
+        `name = '${escapeDriveQuery(this.folderName)}' and mimeType = '${DRIVE_MIME_FOLDER}' and trashed = false`,
+      )
+      const manifestRoots: DriveFile[] = []
+      const emptyRoots: DriveFile[] = []
+      for (const candidate of matches) {
+        if (await this.hasValidRootManifest(candidate.id)) manifestRoots.push(candidate)
+        else if (await this.isUninitializedManagedRoot(candidate.id)) emptyRoots.push(candidate)
+      }
+      if (manifestRoots.length > 1 || (manifestRoots.length === 0 && emptyRoots.length > 1)) {
+        throw new WritePreconditionError('Drive workspace is ambiguous and cannot be used for transactional sync.')
+      }
+      this.rootFolderId = manifestRoots[0]?.id ?? emptyRoots[0]?.id ?? ''
+      if (!this.rootFolderId) {
+        throw new WritePreconditionError('Drive workspace must already exist before transactional sync.')
+      }
+    }
     this.rootFolderVerified = true
     this.folderIds.set('', this.rootFolderId)
   }

@@ -44,6 +44,7 @@ class ConditionalDriveHttpFake {
   interruptNextCompletionBeforeCommit = false
   expireNextSessionBeforeCommit = false
   cancelNextCompletionAfterCommit: (() => void) | undefined
+  loseNextMetadataResponseAfterCommit = false
   private failedListReadsRemaining = 0
   private session: { fileId?: string; metadata: Record<string, unknown> } | undefined
 
@@ -134,6 +135,10 @@ class ConditionalDriveHttpFake {
       else file.appProperties[key] = value
     }
     advance(file)
+    if (this.loseNextMetadataResponseAfterCommit) {
+      this.loseNextMetadataResponseAfterCommit = false
+      throw new TypeError('simulated lost metadata response after commit')
+    }
     return json(asDriveFile(file), { ETag: etag(file) })
   }
 
@@ -325,6 +330,46 @@ test('conditional multipart update fetches a fresh ETag, sends If-Match, and ver
   expect(fake.requests[mutationIndex - 1].url).toContain(`/files/${original.id}`)
   expect(fake.requests[mutationIndex].headers.get('If-Match')).toBe('"target-file-v3"')
   expect(fake.requests.filter((request) => request.url.includes(`/files/${original.id}`) && request.method === 'GET')).toHaveLength(4)
+})
+
+test('workspace transaction guard uses fresh folder ETags and verifies exclusive release', async () => {
+  const fake = new ConditionalDriveHttpFake()
+  const client = provider(fake)
+  const first = 'a'.repeat(64)
+  const second = 'b'.repeat(64)
+
+  await withFakeFetch(fake, async () => {
+    await client.acquireWorkspaceTransactionGuard!(parentId, first)
+    await client.acquireWorkspaceTransactionGuard!(parentId, first)
+    await expect(client.acquireWorkspaceTransactionGuard!(parentId, second))
+      .rejects.toBeInstanceOf(DriveWritePreconditionConflictError)
+    await client.releaseWorkspaceTransactionGuard!(parentId, first)
+  })
+
+  const patches = fake.requests.filter((request) => request.method === 'PATCH' && request.url.includes(`/files/${parentId}`))
+  expect(patches).toHaveLength(2)
+  expect(patches[0].headers.get('If-Match')).toBe('"attachments-folder-v1"')
+  expect(patches[1].headers.get('If-Match')).toBe('"attachments-folder-v2"')
+  expect(fake.parent.appProperties.easylabTransactionGuard).toBeUndefined()
+})
+
+test('workspace transaction guard safely takes over an expired lease and reconciles a lost release response', async () => {
+  const fake = new ConditionalDriveHttpFake()
+  const client = provider(fake)
+  const expiredOwner = 'c'.repeat(64)
+  const nextOwner = 'd'.repeat(64)
+  fake.parent.appProperties.easylabTransactionGuard = `${expiredOwner}:1`
+
+  await withFakeFetch(fake, async () => {
+    await client.acquireWorkspaceTransactionGuard!(parentId, nextOwner)
+    expect(fake.parent.appProperties.easylabTransactionGuard).toMatch(new RegExp(`^${nextOwner}:\\d+$`))
+    fake.loseNextMetadataResponseAfterCommit = true
+    await client.releaseWorkspaceTransactionGuard!(parentId, nextOwner)
+  })
+
+  expect(fake.parent.appProperties.easylabTransactionGuard).toBeUndefined()
+  expect(fake.requests.filter((request) => request.method === 'PATCH' && request.url.includes(`/files/${parentId}`)))
+    .toHaveLength(2)
 })
 
 test('conditional updates fail closed for stale versions, duplicate paths, and Drive 412 responses', async () => {

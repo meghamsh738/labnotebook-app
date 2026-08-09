@@ -24,7 +24,7 @@ type FakeDriveNode = DriveFile & {
 test('Mock provider enforces exact file and version preconditions', async () => {
   const provider = new MockSyncProvider()
   await provider.signIn()
-  const created = await provider.putJson('entries/2026-05-24.json', { title: 'base' })
+  const created = await provider.seedJsonForTest('entries/2026-05-24.json', { title: 'base' })
   expect(provider.supportsVersionedCas).toBe(true)
   const precondition = {
     kind: 'must-match' as const,
@@ -56,6 +56,7 @@ class FakeFolderDriveClient implements FolderDriveClient {
   failNextJsonUploadName = ''
   blobUploadAttempts = 0
   lastBlobMetadata: DriveBlobMetadata | undefined
+  rootListCalls = 0
   private sequence = 0
   private readonly nodes = new Map<string, FakeDriveNode>()
   private signedIn = false
@@ -138,10 +139,39 @@ class FakeFolderDriveClient implements FolderDriveClient {
 
   async listFolder(parentFolderId: string, query?: string) {
     this.requireSignIn()
+    if (parentFolderId === 'root') this.rootListCalls += 1
     return [...this.nodes.values()]
       .filter((node) => (node.parentId ?? 'root') === parentFolderId)
       .filter((node) => matchesDriveQuery(node, query))
       .map(toDriveFile)
+  }
+
+  async acquireWorkspaceTransactionGuard(folderId: string, operationId: string) {
+    this.requireSignIn()
+    const node = this.nodes.get(folderId)
+    if (!node || node.mimeType !== DRIVE_MIME_FOLDER) throw new Error('Workspace folder is missing.')
+    const existing = node.appProperties?.easylabTransactionGuard
+    if (existing && existing !== operationId) throw new Error('Another workspace transaction guard is active.')
+    this.nodes.set(folderId, {
+      ...node,
+      version: String(Number.parseInt(node.version ?? '0', 10) + 1),
+      appProperties: { ...(node.appProperties ?? {}), easylabTransactionGuard: operationId },
+    })
+  }
+
+  async releaseWorkspaceTransactionGuard(folderId: string, operationId: string) {
+    this.requireSignIn()
+    const node = this.nodes.get(folderId)
+    if (!node) throw new Error('Workspace folder is missing.')
+    const existing = node.appProperties?.easylabTransactionGuard
+    if (existing && existing !== operationId) throw new Error('Workspace transaction guard changed.')
+    const appProperties = { ...(node.appProperties ?? {}) }
+    delete appProperties.easylabTransactionGuard
+    this.nodes.set(folderId, {
+      ...node,
+      version: String(Number.parseInt(node.version ?? '0', 10) + 1),
+      appProperties,
+    })
   }
 
   addNode(node: FakeDriveNode) {
@@ -429,6 +459,101 @@ test('GoogleDriveSyncProvider recreates the workspace when a saved Drive folder 
   expect(workspace.id).not.toBe('missing-root-folder')
   expect(workspace.rootPath).toBe('Easylab Lab Notebook')
   expect(file.path).toBe('entries/recovered.json')
+})
+
+test('transactional workspace resolution refuses missing folders without provisioning them', async () => {
+  const client = new FakeFolderDriveClient()
+  client.addNode({
+    id: 'managed-root',
+    name: 'Easylab Lab Notebook',
+    mimeType: DRIVE_MIME_FOLDER,
+    modifiedTime: nowIso(),
+  })
+  const provider = new GoogleDriveSyncProvider({
+    clientId: 'test-client',
+    client,
+    folderId: 'managed-root',
+  })
+
+  await provider.signIn()
+  await expect(provider.resolveWorkspace()).rejects.toThrow(/must exist exactly once/i)
+  expect(await client.listFolder('managed-root')).toEqual([])
+})
+
+test('transactional workspace resolution rejects duplicate managed folders', async () => {
+  const client = new FakeFolderDriveClient()
+  client.addNode({
+    id: 'managed-root',
+    name: 'Easylab Lab Notebook',
+    mimeType: DRIVE_MIME_FOLDER,
+    modifiedTime: nowIso(),
+  })
+  for (const folder of ['devices', 'entries', 'attachments', 'filebox', 'transfers', 'conflicts', 'tombstones']) {
+    client.addNode({
+      id: `managed-${folder}`,
+      name: folder,
+      parentId: 'managed-root',
+      mimeType: DRIVE_MIME_FOLDER,
+      modifiedTime: nowIso(),
+    })
+  }
+  client.addNode({
+    id: 'managed-entries-duplicate',
+    name: 'entries',
+    parentId: 'managed-root',
+    mimeType: DRIVE_MIME_FOLDER,
+    modifiedTime: nowIso(),
+  })
+  const provider = new GoogleDriveSyncProvider({
+    clientId: 'test-client',
+    client,
+    folderId: 'managed-root',
+  })
+
+  await provider.signIn()
+  await expect(provider.resolveWorkspace()).rejects.toThrow(/must exist exactly once.*entries/i)
+  expect((await client.listFolder('managed-root')).filter((folder) => folder.name === 'entries')).toHaveLength(2)
+})
+
+test('sign-out clears cached workspace identity before another account can resolve it', async () => {
+  const client = new FakeFolderDriveClient()
+  client.addNode({ id: 'account-root', name: 'Easylab Lab Notebook', mimeType: DRIVE_MIME_FOLDER })
+  for (const folder of ['devices', 'entries', 'attachments', 'filebox', 'transfers', 'conflicts', 'tombstones']) {
+    client.addNode({ id: `account-${folder}`, name: folder, parentId: 'account-root', mimeType: DRIVE_MIME_FOLDER })
+  }
+  const provider = new GoogleDriveSyncProvider({
+    clientId: 'test-client', client, folderId: 'account-root', testOnlyEnableVersionedCas: true,
+  })
+
+  await provider.signIn()
+  await provider.resolveWorkspace()
+  expect(client.rootListCalls).toBe(0)
+  await provider.signOut()
+  await provider.signIn()
+  await provider.resolveWorkspace()
+  expect(client.rootListCalls).toBeGreaterThan(0)
+})
+
+test('workspace transaction guard is exclusive, resumable by identity, and explicitly released', async () => {
+  const client = new FakeFolderDriveClient()
+  client.addNode({ id: 'guard-root', name: 'Easylab Lab Notebook', mimeType: DRIVE_MIME_FOLDER })
+  for (const folder of ['devices', 'entries', 'attachments', 'filebox', 'transfers', 'conflicts', 'tombstones']) {
+    client.addNode({ id: `guard-${folder}`, name: folder, parentId: 'guard-root', mimeType: DRIVE_MIME_FOLDER })
+  }
+  const provider = new GoogleDriveSyncProvider({
+    clientId: 'test-client', client, folderId: 'guard-root', testOnlyEnableVersionedCas: true,
+  })
+  const first = 'a'.repeat(64)
+  const second = 'b'.repeat(64)
+
+  await provider.signIn()
+  await provider.resolveWorkspace()
+  await provider.acquireTransactionGuard(first)
+  await provider.acquireTransactionGuard(first)
+  await expect(provider.acquireTransactionGuard(second)).rejects.toThrow(/another.*guard/i)
+  await provider.releaseTransactionGuard(first)
+  await provider.acquireTransactionGuard(second)
+  await provider.releaseTransactionGuard(second)
 })
 
 test('GoogleDriveSyncProvider rejects saved ids with invalid root metadata', async () => {

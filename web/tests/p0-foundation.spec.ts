@@ -58,6 +58,94 @@ test('journal repositories isolate accounts without changing object-store schema
   })
 })
 
+test('Drive transaction journal survives browser recreation and isolates account scopes', async ({ page }) => {
+  await page.goto('/')
+
+  const result = await page.evaluate(async () => {
+    const {
+      DriveTransactionJournal,
+      IndexedDbDriveTransactionPersistence,
+    } = await import('/src/sync/driveTransactionJournal.ts')
+    const { hashJsonSha256 } = await import('/src/sync/hashing.ts')
+    const suffix = crypto.randomUUID()
+    const scopeA = `transaction-account-a-${suffix}`
+    const scopeB = `transaction-account-b-${suffix}`
+    const manifest = { version: 1, provider: 'google-drive' }
+    const inputStateHash = await hashJsonSha256({ local: 'before' })
+    const contentHash = await hashJsonSha256(manifest)
+    const planHash = await hashJsonSha256({ inputStateHash, contentHash, suffix })
+    const plan = {
+      operationId: planHash,
+      planHash,
+      inputStateHash,
+      createdAt: '2026-08-09T10:00:00.000Z',
+      writes: [{
+        id: await hashJsonSha256({ path: 'manifest.json', contentHash }),
+        kind: 'manifest' as const,
+        path: 'manifest.json',
+        value: manifest,
+        contentHash,
+        appProperties: { entityType: 'manifest' },
+        precondition: { kind: 'must-not-exist' as const, operationId: `create-${suffix}` },
+      }],
+      finalSnapshot: { entries: {} },
+      finalMeta: { entryHashes: {} },
+      result: { pushedEntries: 0 },
+    }
+    const first = new DriveTransactionJournal(new IndexedDbDriveTransactionPersistence())
+    await first.begin(scopeA, plan)
+    await first.markRunning(scopeA, plan.operationId)
+
+    const recreated = new DriveTransactionJournal(new IndexedDbDriveTransactionPersistence())
+    const recovered = await recreated.latestIncomplete(scopeA)
+    const otherAccount = await recreated.latestIncomplete(scopeB)
+    let immutable = false
+    try {
+      await recreated.begin(scopeA, { ...plan, writes: [{ ...plan.writes[0], path: 'changed.json' }] })
+    } catch {
+      immutable = true
+    }
+    const competingHash = await hashJsonSha256({ competing: true, suffix })
+    let competingPlanBlocked = false
+    try {
+      await recreated.begin(scopeA, {
+        ...plan,
+        operationId: competingHash,
+        planHash: competingHash,
+        createdAt: '2026-08-09T10:00:01.000Z',
+      })
+    } catch {
+      competingPlanBlocked = true
+    }
+    await recreated.markCompleted(scopeA, plan.operationId)
+    await recreated.begin(scopeA, {
+      ...plan,
+      operationId: competingHash,
+      planHash: competingHash,
+      createdAt: '2026-08-09T10:00:01.000Z',
+    })
+    await recreated.markCompleted(scopeA, competingHash)
+    const retainedCompleted = await new IndexedDbDriveTransactionPersistence().list(scopeA)
+    return {
+      state: recovered?.state,
+      operationId: recovered?.plan.operationId,
+      otherAccount: Boolean(otherAccount),
+      immutable,
+      competingPlanBlocked,
+      retainedCompleted: retainedCompleted.length,
+      serialized: JSON.stringify(recovered),
+    }
+  })
+
+  expect(result.state).toBe('running')
+  expect(result.operationId).toMatch(/^[0-9a-f]{64}$/)
+  expect(result.otherAccount).toBe(false)
+  expect(result.immutable).toBe(true)
+  expect(result.competingPlanBlocked).toBe(true)
+  expect(result.retainedCompleted).toBe(1)
+  expect(result.serialized).not.toMatch(/access.?token|refresh.?token|session.?url|email/i)
+})
+
 test('IndexedDbBlobStore persists and verifies attachment blobs', async ({ page }) => {
   await page.goto('/')
 
@@ -296,4 +384,47 @@ test('multi-store replacement aborts atomically when any record cannot be persis
   })
 
   expect(result).toEqual({ rejected: true, entryIds: ['entry-before'], deviceIds: ['dev-before'] })
+})
+
+test('journal state replacement rejects a stale revision from another browser context', async ({ page }) => {
+  await page.goto('/')
+
+  const result = await page.evaluate(async () => {
+    const { createJournalRepositories } = await import('/src/sync/repositories.ts')
+    const dbName = `p0-revision-cas-${crypto.randomUUID()}`
+    const first = await createJournalRepositories({ dbName })
+    const second = await createJournalRepositories({ dbName })
+    const envelope = (id: string, title: string) => ({
+      id,
+      kind: 'entry' as const,
+      version: 1 as const,
+      updatedAt: '2026-08-09T10:00:00.000Z',
+      updatedByDeviceId: 'revision-device',
+      payload: {
+        id,
+        authorId: 'local-user',
+        title,
+        dateBucket: '2026-08-09',
+        createdDatetime: '2026-08-09T09:00:00.000Z',
+        lastEditedDatetime: '2026-08-09T10:00:00.000Z',
+        content: [], tags: [], searchTerms: [], linkedFiles: [], pinnedRegions: [],
+      },
+    })
+    await first.replaceStores({ entries: [envelope('entry-base', 'base')] })
+    const staleRevision = await first.getRevision()
+    await second.replaceStores({ entries: [envelope('entry-newer', 'newer')] })
+    const staleWrite = await first.replaceStoresIfRevision(
+      { entries: [envelope('entry-stale', 'stale')] },
+      staleRevision,
+    )
+    return {
+      applied: staleWrite.applied,
+      revision: await first.getRevision(),
+      entryIds: (await first.entries.all()).map((entry) => entry.id),
+    }
+  })
+
+  expect(result.applied).toBe(false)
+  expect(result.revision).toBe(2)
+  expect(result.entryIds).toEqual(['entry-newer'])
 })

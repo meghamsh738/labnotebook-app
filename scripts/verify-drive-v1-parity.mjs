@@ -273,7 +273,11 @@ assert.match(readRemoteEntries, /readValidatedRemoteJson/)
 const readRemoteTombstones = webSyncEngine.slice(
   webSyncEngine.indexOf('async function readRemoteTombstones'),
 )
-assert.match(readRemoteTombstones, /if \(result\.ok\) valid\.push\(result\.value\)/)
+assert.match(
+  readRemoteTombstones,
+  /if \(result\.ok\) valid\.push\(\{ value: result\.value, path: file\.path \}\)/,
+)
+assert.match(readRemoteTombstones, /exact\?\.path \?\? tombstonePath\(tombstone\)/)
 const applyTombstones = webDataCore.slice(
   webDataCore.indexOf('export function applyTombstonesToSnapshot'),
   webDataCore.indexOf('export function buildPendingSyncQueue'),
@@ -284,7 +288,10 @@ const providerContract = webProvider.slice(
   webProvider.indexOf('type RemoteJsonRecord'),
 )
 assert.match(providerContract, /supportsVersionedCas/)
-assert.match(webProvider, /precondition\?: WritePrecondition/)
+assert.match(webProvider, /export type PutOptions = \{[\s\S]*precondition: WritePrecondition/)
+assert.match(providerContract, /putJson<T>\(path: string, value: T, options: PutOptions\)/)
+assert.match(providerContract, /putBlob\(path: string, blob: Blob, metadata: BlobMetadata, options: PutOptions\)/)
+assert.match(providerContract, /putManifest<T>\(manifest: T, options: PutOptions\)/)
 assert.match(webProvider, /class MockSyncProvider[\s\S]*supportsVersionedCas = true/)
 assert.match(webProvider, /class GoogleDriveSyncProvider[\s\S]*supportsVersionedCas = false/)
 assert.match(webDataCore, /buildEntryEnvelope[\s\S]*payload: projectEntryPayload\(entry\)/)

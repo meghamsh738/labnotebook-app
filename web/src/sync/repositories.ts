@@ -12,6 +12,7 @@ import type {
 
 export const JOURNAL_DB_NAME = 'easylab-journal-core'
 export const JOURNAL_DB_VERSION = 3
+const JOURNAL_LOCAL_REVISION_ID = 'journal-local-revision'
 
 export const JOURNAL_STORES = {
   entries: 'entries',
@@ -191,24 +192,62 @@ function repository<S extends JournalStoreName>(db: IDBDatabase, storeName: S): 
   return new EntityRepository<StoreRecordMap[S]>(db, storeName)
 }
 
-function replaceJournalStores(db: IDBDatabase, replacements: JournalStoreReplacements): Promise<void> {
+function journalRevision(value: unknown) {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : 0
+}
+
+function readJournalRevision(db: IDBDatabase): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const request = db.transaction(JOURNAL_STORES.meta, 'readonly')
+      .objectStore(JOURNAL_STORES.meta)
+      .get(JOURNAL_LOCAL_REVISION_ID)
+    request.onsuccess = () => resolve(journalRevision((request.result as JournalMetaRecord | undefined)?.value))
+    request.onerror = () => reject(request.error)
+  })
+}
+
+function replaceJournalStores(
+  db: IDBDatabase,
+  replacements: JournalStoreReplacements,
+  expectedRevision?: number,
+): Promise<{ applied: boolean; revision: number }> {
   const storeNames = Object.keys(replacements) as JournalStoreName[]
-  if (storeNames.length === 0) return Promise.resolve()
+  if (storeNames.length === 0) {
+    return readJournalRevision(db).then((revision) => ({ applied: true, revision }))
+  }
+  const transactionStores = [...new Set([...storeNames, JOURNAL_STORES.meta])]
 
   return new Promise((resolve, reject) => {
-    const tx = db.transaction(storeNames, 'readwrite')
-    tx.oncomplete = () => resolve()
+    const tx = db.transaction(transactionStores, 'readwrite')
+    let applied = false
+    let nextRevision = 0
+    tx.oncomplete = () => resolve({ applied, revision: nextRevision })
     tx.onabort = () => reject(tx.error ?? new Error('Atomic journal store replacement was aborted.'))
-    try {
-      for (const storeName of storeNames) {
-        const store = tx.objectStore(storeName)
-        store.clear()
-        const values = replacements[storeName] as Array<{ id: string }> | undefined
-        values?.forEach((value) => store.put(value))
+    tx.onerror = () => reject(tx.error)
+    const revisionRequest = tx.objectStore(JOURNAL_STORES.meta).get(JOURNAL_LOCAL_REVISION_ID)
+    revisionRequest.onerror = () => reject(revisionRequest.error)
+    revisionRequest.onsuccess = () => {
+      try {
+        const currentRevision = journalRevision((revisionRequest.result as JournalMetaRecord | undefined)?.value)
+        nextRevision = currentRevision
+        if (typeof expectedRevision === 'number' && currentRevision !== expectedRevision) return
+        nextRevision = currentRevision + 1
+        for (const storeName of storeNames) {
+          const store = tx.objectStore(storeName)
+          store.clear()
+          const values = replacements[storeName] as Array<{ id: string }> | undefined
+          values?.forEach((value) => store.put(value))
+        }
+        tx.objectStore(JOURNAL_STORES.meta).put({
+          id: JOURNAL_LOCAL_REVISION_ID,
+          updatedAt: new Date().toISOString(),
+          value: nextRevision,
+        } satisfies JournalMetaRecord)
+        applied = true
+      } catch (error) {
+        tx.abort()
+        reject(error)
       }
-    } catch (error) {
-      tx.abort()
-      reject(error)
     }
   })
 }
@@ -228,7 +267,12 @@ export async function createJournalRepositories(dbOrOptions?: IDBDatabase | Jour
     devices: repository(journalDb, JOURNAL_STORES.devices),
     meta: repository(journalDb, JOURNAL_STORES.meta),
     blobs: repository(journalDb, JOURNAL_STORES.blobs),
-    replaceStores: (replacements: JournalStoreReplacements) => replaceJournalStores(journalDb, replacements),
+    replaceStores: async (replacements: JournalStoreReplacements) => {
+      await replaceJournalStores(journalDb, replacements)
+    },
+    replaceStoresIfRevision: (replacements: JournalStoreReplacements, expectedRevision: number) =>
+      replaceJournalStores(journalDb, replacements, expectedRevision),
+    getRevision: () => readJournalRevision(journalDb),
   }
 }
 

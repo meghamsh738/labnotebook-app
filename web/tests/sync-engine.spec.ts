@@ -1,6 +1,7 @@
 import { expect, test } from '@playwright/test'
 import type { Attachment, DeviceProfile, Entry, TombstoneRecord } from '../src/domain/types'
 import { MemoryBlobStore } from '../src/sync/blobStore'
+import { createManifest } from '../src/sync/connectedSync'
 import type { JournalSnapshot } from '../src/sync/dataCore'
 import { buildEntryEnvelope } from '../src/sync/dataCore'
 import { MemoryJournalStore, resolveSyncConflict, selectPreferredConflict, syncOnce } from '../src/sync/syncEngine'
@@ -144,7 +145,14 @@ test('a verified remote entry path is reused instead of creating a recomputed du
   const remoteEntry = entry({ id: 'entry-preserve-path', date: '2026-05-23', text: 'remote', deviceId: desktop.id })
   const legacyPath = 'entries/verified-legacy-name.json'
   await provider.signIn()
-  await provider.putJson(legacyPath, buildEntryEnvelope(remoteEntry, desktop))
+  await provider.seedJsonForTest(legacyPath, buildEntryEnvelope(remoteEntry, desktop))
+  await provider.seedJsonForTest('manifest.json', createManifest({
+    device: desktop,
+    entries: { [remoteEntry.id]: remoteEntry },
+    attachments: [],
+    fileBoxItems: [],
+    transfers: [],
+  }))
   const store = new MemoryJournalStore(snapshot(desktop))
 
   await syncOnce({ provider, store, device: desktop })
@@ -364,10 +372,10 @@ test('attachment blobs restore by Drive file id after remote metadata is renamed
   const remoteMetadata = await provider.getJson<{ payload: Attachment }>(metadataPath)
   expect(remoteMetadata?.value.payload.driveFileId).toBeTruthy()
   const verifiedBlobPath = 'attachments/verified-archive/image-by-id.json'
-  const verifiedBlob = await provider.putBlob(verifiedBlobPath, new Blob(['stable image bytes'], { type: 'application/json' }), {
+  const verifiedBlob = await provider.seedBlobForTest(verifiedBlobPath, new Blob(['stable image bytes'], { type: 'application/json' }), {
     mimeType: 'application/json',
   })
-  await provider.putJson(metadataPath, {
+  await provider.seedJsonForTest(metadataPath, {
     ...remoteMetadata!.value,
     updatedAt: '2026-05-23T12:00:00.000Z',
     payload: {
@@ -719,7 +727,14 @@ test('pulls Drive conflict records into a device that did not detect the conflic
   }
 
   await provider.signIn()
-  await provider.putJson(`conflicts/${remoteConflict.id}.json`, remoteConflict)
+  await provider.seedJsonForTest(`conflicts/${remoteConflict.id}.json`, remoteConflict)
+  await provider.seedJsonForTest('manifest.json', createManifest({
+    device: laptop,
+    entries: {},
+    attachments: [],
+    fileBoxItems: [],
+    transfers: [],
+  }))
   const result = await syncOnce({ provider, store: laptopStore, device: laptop })
   const finalLaptop = await laptopStore.getSnapshot()
 

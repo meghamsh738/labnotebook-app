@@ -38,6 +38,9 @@ const GOOGLE_IDENTITY_LOAD_TIMEOUT_MS = 15_000
 const GOOGLE_AUTH_TIMEOUT_MS = 45_000
 const DRIVE_REQUEST_TIMEOUT_MS = 30_000
 const DRIVE_FILE_FIELDS = 'id,name,mimeType,modifiedTime,size,trashed,version,parents,appProperties'
+const DRIVE_TRANSACTION_GUARD_PROPERTY = 'easylabTransactionGuard'
+const DRIVE_TRANSACTION_GUARD_LEASE_MS = 24 * 60 * 60 * 1000
+const DRIVE_TRANSACTION_GUARD_RENEWAL_WINDOW_MS = 60 * 60 * 1000
 
 export type StorageMode = 'local-only' | 'google-drive'
 
@@ -99,6 +102,8 @@ export type SyncProvider = {
   uploadBlob(parentFolderId: string, name: string, blob: Blob, mimeType?: string, metadata?: DriveBlobMetadata): Promise<string>
   conditionalUploadJson?<T>(request: DriveConditionalJsonWrite<T>): Promise<DriveFile>
   conditionalUploadBlob?(request: DriveConditionalBlobWrite): Promise<DriveFile>
+  acquireWorkspaceTransactionGuard?(folderId: string, operationId: string): Promise<void>
+  releaseWorkspaceTransactionGuard?(folderId: string, operationId: string): Promise<void>
   downloadJson<T>(fileId: string): Promise<T>
   downloadText?(fileId: string): Promise<string>
   downloadBlob(fileId: string): Promise<Blob>
@@ -848,6 +853,103 @@ export class GoogleDriveProvider implements SyncProvider {
       throw new Error(`Drive blob SHA-256 does not match its bytes: ${request.path}`)
     }
     return this.conditionalWrite({ ...request, mimeType, sha256: actualSha256 })
+  }
+
+  async acquireWorkspaceTransactionGuard(folderId: string, operationId: string) {
+    if (!/^[0-9a-f]{64}$/.test(operationId)) {
+      throw new DriveWritePreconditionConflictError('Drive transaction guard identity is invalid.')
+    }
+    const snapshot = await this.getMetadataSnapshot(folderId)
+    if (snapshot.file.mimeType !== DRIVE_MIME_FOLDER || snapshot.file.trashed === true || !snapshot.etag) {
+      throw new DriveWritePreconditionConflictError('Drive transaction guard requires a verified active workspace folder.')
+    }
+    const now = Date.now()
+    const existingValue = snapshot.file.appProperties?.[DRIVE_TRANSACTION_GUARD_PROPERTY]
+    const existing = this.parseWorkspaceTransactionGuard(existingValue)
+    if (existingValue && !existing) {
+      throw new DriveWritePreconditionConflictError('Drive transaction guard metadata is malformed.')
+    }
+    if (existing && existing.operationId !== operationId && existing.expiresAt > now) {
+      throw new DriveWritePreconditionConflictError('Another Drive transaction holds the workspace guard.')
+    }
+    if (existing?.operationId === operationId && existing.expiresAt > now + DRIVE_TRANSACTION_GUARD_RENEWAL_WINDOW_MS) {
+      return
+    }
+
+    const leaseValue = `${operationId}:${now + DRIVE_TRANSACTION_GUARD_LEASE_MS}`
+    try {
+      await this.requestRawNoRetry(
+        `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(folderId)}?fields=${encodeURIComponent(DRIVE_FILE_FIELDS)}`,
+        {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json', 'If-Match': snapshot.etag },
+          body: JSON.stringify({
+            appProperties: {
+              ...(snapshot.file.appProperties ?? {}),
+              [DRIVE_TRANSACTION_GUARD_PROPERTY]: leaseValue,
+            },
+          }),
+        },
+      )
+    } catch (error) {
+      const reconciled = await this.getMetadataSnapshot(folderId).catch(() => undefined)
+      if (reconciled?.file.appProperties?.[DRIVE_TRANSACTION_GUARD_PROPERTY] === leaseValue) return
+      if (this.isDrivePreconditionFailure(error)) {
+        throw new DriveWritePreconditionConflictError('Drive transaction guard raced with another workspace update.')
+      }
+      throw error
+    }
+    const verified = await this.getMetadataSnapshot(folderId)
+    if (verified.file.appProperties?.[DRIVE_TRANSACTION_GUARD_PROPERTY] !== leaseValue) {
+      throw new DriveWritePreconditionConflictError('Drive transaction guard acquisition could not be verified.')
+    }
+  }
+
+  async releaseWorkspaceTransactionGuard(folderId: string, operationId: string) {
+    if (!/^[0-9a-f]{64}$/.test(operationId)) {
+      throw new DriveWritePreconditionConflictError('Drive transaction guard identity is invalid.')
+    }
+    const snapshot = await this.getMetadataSnapshot(folderId)
+    const existingValue = snapshot.file.appProperties?.[DRIVE_TRANSACTION_GUARD_PROPERTY]
+    if (!existingValue) return
+    const existing = this.parseWorkspaceTransactionGuard(existingValue)
+    if (!existing || existing.operationId !== operationId || !snapshot.etag) {
+      throw new DriveWritePreconditionConflictError('Drive transaction guard changed before release.')
+    }
+    try {
+      await this.requestRawNoRetry(
+        `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(folderId)}?fields=${encodeURIComponent(DRIVE_FILE_FIELDS)}`,
+        {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json', 'If-Match': snapshot.etag },
+          body: JSON.stringify({ appProperties: { [DRIVE_TRANSACTION_GUARD_PROPERTY]: null } }),
+        },
+      )
+    } catch (error) {
+      const reconciled = await this.getMetadataSnapshot(folderId).catch(() => undefined)
+      if (!reconciled?.file.appProperties?.[DRIVE_TRANSACTION_GUARD_PROPERTY]) return
+      const holder = this.parseWorkspaceTransactionGuard(
+        reconciled.file.appProperties[DRIVE_TRANSACTION_GUARD_PROPERTY],
+      )
+      if (!holder || holder.operationId !== operationId || this.isDrivePreconditionFailure(error)) {
+        throw new DriveWritePreconditionConflictError('Drive transaction guard changed before release.')
+      }
+      throw error
+    }
+    const verified = await this.getMetadataSnapshot(folderId)
+    if (verified.file.appProperties?.[DRIVE_TRANSACTION_GUARD_PROPERTY]) {
+      throw new DriveWritePreconditionConflictError('Drive transaction guard release could not be verified.')
+    }
+  }
+
+  private parseWorkspaceTransactionGuard(value?: string) {
+    if (!value) return undefined
+    const match = value.match(/^([0-9a-f]{64}):(\d{1,16})$/)
+    if (!match) return undefined
+    const expiresAt = Number.parseInt(match[2], 10)
+    return Number.isSafeInteger(expiresAt) && expiresAt > 0
+      ? { operationId: match[1], expiresAt }
+      : undefined
   }
 
   private async conditionalWrite(request: DriveConditionalBlobWrite): Promise<DriveFile> {

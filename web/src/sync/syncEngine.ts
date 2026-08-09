@@ -21,7 +21,7 @@ import {
   safeDriveSegment,
   type JournalSnapshot,
 } from './dataCore'
-import { hashJsonSha256, stableStringify } from './hashing'
+import { hashBlobSha256, hashJsonSha256, hashTextSha256, stableStringify } from './hashing'
 import {
   buildInvalidRemoteJsonConflict,
   validateAttachmentEnvelope,
@@ -39,7 +39,18 @@ import {
   type JournalRepositories,
   type JournalStoreReplacements,
 } from './repositories'
-import type { SyncProvider } from './syncProvider'
+import {
+  DriveTransactionJournal,
+  IndexedDbDriveTransactionPersistence,
+  MemoryDriveTransactionPersistence,
+  type DriveTransactionBlobWrite,
+  type DriveTransactionJsonWrite,
+  type DriveTransactionPlan,
+  type DriveTransactionReceipt,
+  type DriveTransactionRecord,
+  type DriveTransactionWrite,
+} from './driveTransactionJournal'
+import type { RemoteFileRef, SyncProvider, WritePrecondition } from './syncProvider'
 
 export type SyncEngineMeta = {
   entryHashes: Record<string, string>
@@ -50,6 +61,10 @@ export type SyncEngineMeta = {
   entryPaths?: Record<string, string>
   attachmentPaths?: Record<string, string>
   attachmentBlobPaths?: Record<string, string>
+  fileBoxPaths?: Record<string, string>
+  transferPaths?: Record<string, string>
+  conflictPaths?: Record<string, string>
+  tombstonePaths?: Record<string, string>
   lastSyncedAt?: string
   driveChangesToken?: string
 }
@@ -71,9 +86,20 @@ export type LocalJournalStore = {
   getMeta(): Promise<SyncEngineMeta>
   saveMeta(meta: SyncEngineMeta): Promise<void>
   saveState?(snapshot: JournalSnapshot, meta: SyncEngineMeta): Promise<void>
+  getRevision(): Promise<number>
+  saveStateIfRevision(snapshot: JournalSnapshot, meta: SyncEngineMeta, expectedRevision: number): Promise<boolean>
 }
 
 const SYNC_ENGINE_META_ID = 'sync-engine'
+const DRIVE_RESUMABLE_UPLOAD_THRESHOLD_BYTES = 5 * 1024 * 1024
+const DRIVE_FILE_ID_PLACEHOLDER_PREFIX = '__easylab_drive_file_id__:'
+const fallbackTransactionJournal = new DriveTransactionJournal(new MemoryDriveTransactionPersistence())
+
+function defaultTransactionJournal() {
+  return typeof indexedDB === 'undefined'
+    ? fallbackTransactionJournal
+    : new DriveTransactionJournal(new IndexedDbDriveTransactionPersistence())
+}
 
 function nowIso() {
   return new Date().toISOString()
@@ -100,6 +126,7 @@ function envelopeRecord<T>(envelopes: SyncEntityEnvelope<T>[]) {
 export class MemoryJournalStore implements LocalJournalStore {
   private snapshot: JournalSnapshot
   private meta: SyncEngineMeta
+  private revision = 0
 
   constructor(snapshot: JournalSnapshot, meta: SyncEngineMeta = defaultMeta()) {
     this.snapshot = clone(snapshot)
@@ -111,6 +138,7 @@ export class MemoryJournalStore implements LocalJournalStore {
   }
 
   async saveSnapshot(snapshot: JournalSnapshot) {
+    this.revision += 1
     this.snapshot = clone(snapshot)
   }
 
@@ -119,12 +147,26 @@ export class MemoryJournalStore implements LocalJournalStore {
   }
 
   async saveMeta(meta: SyncEngineMeta) {
+    this.revision += 1
     this.meta = clone(meta)
   }
 
   async saveState(snapshot: JournalSnapshot, meta: SyncEngineMeta) {
+    this.revision += 1
     this.snapshot = clone(snapshot)
     this.meta = clone(meta)
+  }
+
+  async getRevision() {
+    return this.revision
+  }
+
+  async saveStateIfRevision(snapshot: JournalSnapshot, meta: SyncEngineMeta, expectedRevision: number) {
+    if (this.revision !== expectedRevision) return false
+    this.revision += 1
+    this.snapshot = clone(snapshot)
+    this.meta = clone(meta)
+    return true
   }
 }
 
@@ -169,12 +211,7 @@ export class IndexedDbJournalStore implements LocalJournalStore {
   }
 
   async saveMeta(meta: SyncEngineMeta) {
-    await this.repositories.meta.put({
-      id: SYNC_ENGINE_META_ID,
-      updatedAt: nowIso(),
-      lastSyncedAt: meta.lastSyncedAt,
-      value: meta,
-    })
+    await this.repositories.replaceStores({ meta: [syncEngineMetaRecord(meta)] })
   }
 
   async saveState(snapshot: JournalSnapshot, meta: SyncEngineMeta) {
@@ -183,6 +220,19 @@ export class IndexedDbJournalStore implements LocalJournalStore {
       ...snapshotReplacements(snapshot, device),
       meta: [syncEngineMetaRecord(meta)],
     })
+  }
+
+  getRevision() {
+    return this.repositories.getRevision()
+  }
+
+  async saveStateIfRevision(snapshot: JournalSnapshot, meta: SyncEngineMeta, expectedRevision: number) {
+    const device = snapshot.device ?? this.device
+    const result = await this.repositories.replaceStoresIfRevision({
+      ...snapshotReplacements(snapshot, device),
+      meta: [syncEngineMetaRecord(meta)],
+    }, expectedRevision)
+    return result.applied
   }
 }
 
@@ -421,6 +471,13 @@ function conflictRemoteTombstone(conflict: SyncConflict) {
   return result.ok ? result.value : undefined
 }
 
+function conflictLocalTombstone(conflict: SyncConflict) {
+  if (typeof conflict.localCopy !== 'object' || conflict.localCopy === null || Array.isArray(conflict.localCopy)) return undefined
+  const tombstone = (conflict.localCopy as { tombstone?: unknown }).tombstone
+  const result = validateTombstone(tombstone)
+  return result.ok ? result.value : undefined
+}
+
 function divergentTombstoneTarget(conflict: SyncConflict) {
   if (conflict.resolution !== 'pending') return undefined
   if (typeof conflict.localCopy !== 'object' || conflict.localCopy === null || Array.isArray(conflict.localCopy)) {
@@ -654,6 +711,18 @@ async function saveStoreState(store: LocalJournalStore, snapshot: JournalSnapsho
   }
 }
 
+async function readStableStoreState(store: LocalJournalStore) {
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const before = await store.getRevision()
+    const [snapshot, storedMeta] = await Promise.all([store.getSnapshot(), store.getMeta()])
+    const after = await store.getRevision()
+    if (before === after) {
+      return { snapshot, meta: { ...defaultMeta(), ...storedMeta }, revision: after }
+    }
+  }
+  throw new Error('Local notebook changed too many times while transactional state was being read.')
+}
+
 export async function resolveSyncConflict(params: {
   store: LocalJournalStore
   device: DeviceProfile
@@ -684,24 +753,31 @@ export async function resolveSyncConflict(params: {
       ?? validatedConflictEntity(entityKind, conflictCopyValue(conflict.localCopy, entityKind), params.device)
     const remoteEntity = validatedConflictEntity(entityKind, conflictCopyValue(conflict.remoteCopy, entityKind), params.device)
     const remoteTombstone = conflictRemoteTombstone(conflict)
+    const localTombstone = conflictLocalTombstone(conflict)
     const hashes = entityHashMap(meta, entityKind)
 
     if (params.resolution === 'local-won') {
-      if (!localEntity) throw new Error(`Sync conflict ${params.conflictId} has no valid local ${entityKind} copy.`)
-      const revivedAt = remoteTombstone
-        ? new Date(Math.max(Date.now(), Date.parse(remoteTombstone.deletedAt) + 1)).toISOString()
-        : timestamp
-      const authoritativeEntity = remoteTombstone
-        ? reviveConflictEntity(entityKind, localEntity, params.device, revivedAt)
-        : localEntity
-      putSnapshotEntity(snapshot, entityKind, authoritativeEntity)
-      snapshot.tombstones = snapshot.tombstones.filter((candidate) => !(candidate.entityKind === entityKind && candidate.entityId === conflict.entityId))
-      hashes[conflict.entityId] = conflictCopyHash(conflict.remoteCopy) ?? remoteTombstone?.deletedAt ?? ''
-      if (remoteTombstone) {
-        const hash = await entityHash(entityKind, authoritativeEntity)
-        resolvedLocalCopy = entityKind === 'entry'
-          ? { hash, deviceId: params.device.id, entry: authoritativeEntity, value: authoritativeEntity }
-          : { hash, deviceId: params.device.id, value: authoritativeEntity }
+      if (localTombstone) {
+        deleteSnapshotEntity(snapshot, entityKind, conflict.entityId)
+        if (!snapshot.tombstones.some((candidate) => candidate.id === localTombstone.id)) snapshot.tombstones.push(localTombstone)
+        delete hashes[conflict.entityId]
+      } else {
+        if (!localEntity) throw new Error(`Sync conflict ${params.conflictId} has no valid local ${entityKind} copy.`)
+        const revivedAt = remoteTombstone
+          ? new Date(Math.max(Date.now(), Date.parse(remoteTombstone.deletedAt) + 1)).toISOString()
+          : timestamp
+        const authoritativeEntity = remoteTombstone
+          ? reviveConflictEntity(entityKind, localEntity, params.device, revivedAt)
+          : localEntity
+        putSnapshotEntity(snapshot, entityKind, authoritativeEntity)
+        snapshot.tombstones = snapshot.tombstones.filter((candidate) => !(candidate.entityKind === entityKind && candidate.entityId === conflict.entityId))
+        hashes[conflict.entityId] = conflictCopyHash(conflict.remoteCopy) ?? remoteTombstone?.deletedAt ?? ''
+        if (remoteTombstone) {
+          const hash = await entityHash(entityKind, authoritativeEntity)
+          resolvedLocalCopy = entityKind === 'entry'
+            ? { hash, deviceId: params.device.id, entry: authoritativeEntity, value: authoritativeEntity }
+            : { hash, deviceId: params.device.id, value: authoritativeEntity }
+        }
       }
     } else if (params.resolution === 'remote-won') {
       if (remoteTombstone) {
@@ -710,6 +786,7 @@ export async function resolveSyncConflict(params: {
         delete hashes[conflict.entityId]
       } else {
         if (!remoteEntity) throw new Error(`Sync conflict ${params.conflictId} has no valid remote ${entityKind} copy.`)
+        snapshot.tombstones = snapshot.tombstones.filter((candidate) => !(candidate.entityKind === entityKind && candidate.entityId === conflict.entityId))
         putSnapshotEntity(snapshot, entityKind, remoteEntity)
         hashes[conflict.entityId] = conflictCopyHash(conflict.remoteCopy) ?? await entityHash(entityKind, remoteEntity)
       }
@@ -727,7 +804,8 @@ export async function resolveSyncConflict(params: {
       const copy = copyConflictEntity(entityKind, remoteEntity, params.device)
       putSnapshotEntity(snapshot, entityKind, copy)
       copiedEntityId = copy.id
-      hashes[conflict.entityId] = conflictCopyHash(conflict.remoteCopy) ?? await entityHash(entityKind, remoteEntity)
+      if (localTombstone) delete hashes[conflict.entityId]
+      else hashes[conflict.entityId] = conflictCopyHash(conflict.remoteCopy) ?? await entityHash(entityKind, remoteEntity)
       delete hashes[copy.id]
     }
   }
@@ -750,33 +828,685 @@ export async function resolveSyncConflict(params: {
   return { snapshot: nextSnapshot, conflict: resolvedConflict, copiedEntityId }
 }
 
+type RemotePathIndex = Map<string, RemoteFileRef[]>
+
+function indexRemotePaths(files: RemoteFileRef[]): RemotePathIndex {
+  const index = new Map<string, RemoteFileRef[]>()
+  for (const file of files) index.set(file.path, [...(index.get(file.path) ?? []), file])
+  for (const [path, matches] of index) {
+    if (matches.length > 1) throw new Error(`Drive managed path is duplicated and cannot be written safely: ${path}`)
+  }
+  return index
+}
+
+function exactRemoteFile(index: RemotePathIndex, path: string) {
+  return index.get(path)?.[0]
+}
+
+async function writeIdentity(seed: string, path: string, contentHash: string, precondition: WritePrecondition) {
+  return hashJsonSha256({ seed, path, contentHash, precondition })
+}
+
+async function buildWritePrecondition(params: {
+  seed: string
+  path: string
+  contentHash: string
+  remoteIndex: RemotePathIndex
+  appProperties: Record<string, string>
+}) {
+  const existing = exactRemoteFile(params.remoteIndex, params.path)
+  if (existing) {
+    return {
+      precondition: { kind: 'must-match', fileId: existing.id, version: existing.version } as const,
+      appProperties: { ...params.appProperties },
+      operationId: await writeIdentity(params.seed, params.path, params.contentHash, {
+        kind: 'must-match', fileId: existing.id, version: existing.version,
+      }),
+    }
+  }
+  const operationId = await writeIdentity(params.seed, params.path, params.contentHash, {
+    kind: 'must-not-exist', operationId: 'pending',
+  })
+  return {
+    precondition: { kind: 'must-not-exist', operationId } as const,
+    appProperties: { ...params.appProperties, easylabOperationId: operationId },
+    operationId,
+  }
+}
+
+async function buildJsonTransactionWrite(params: {
+  kind: DriveTransactionJsonWrite['kind']
+  seed: string
+  path: string
+  value: unknown
+  appProperties: Record<string, string>
+  remoteIndex: RemotePathIndex
+}): Promise<DriveTransactionJsonWrite> {
+  const contentHash = await hashJsonSha256(params.value)
+  const identity = await buildWritePrecondition({ ...params, contentHash })
+  return {
+    id: await hashTextSha256(`${params.kind}\u0000${params.path}\u0000${contentHash}`),
+    kind: params.kind,
+    path: params.path,
+    value: clone(params.value),
+    contentHash,
+    appProperties: identity.appProperties,
+    precondition: identity.precondition,
+  }
+}
+
+async function buildBlobTransactionWrite(params: {
+  seed: string
+  path: string
+  blobKey: string
+  mimeType: string
+  byteSize: number
+  sha256: string
+  appProperties: Record<string, string>
+  remoteIndex: RemotePathIndex
+}): Promise<DriveTransactionBlobWrite> {
+  const identity = await buildWritePrecondition({ ...params, contentHash: params.sha256 })
+  const id = await hashTextSha256(`blob\u0000${params.path}\u0000${params.sha256}`)
+  return {
+    id,
+    kind: 'blob',
+    path: params.path,
+    blobKey: params.blobKey,
+    mimeType: params.mimeType,
+    byteSize: params.byteSize,
+    sha256: params.sha256,
+    contentHash: params.sha256,
+    appProperties: identity.appProperties,
+    precondition: identity.precondition,
+    resumableOperationId: params.byteSize >= DRIVE_RESUMABLE_UPLOAD_THRESHOLD_BYTES ? identity.operationId : undefined,
+    fileIdPlaceholder: identity.precondition.kind === 'must-not-exist'
+      ? `${DRIVE_FILE_ID_PLACEHOLDER_PREFIX}${id}`
+      : undefined,
+  }
+}
+
+function resolveReceiptPlaceholders(value: unknown, receipts: DriveTransactionReceipt[]): unknown {
+  if (typeof value === 'string' && value.startsWith(DRIVE_FILE_ID_PLACEHOLDER_PREFIX)) {
+    const writeId = value.slice(DRIVE_FILE_ID_PLACEHOLDER_PREFIX.length)
+    const receipt = receipts.find((candidate) => candidate.writeId === writeId)
+    if (!receipt) throw new Error(`Drive transaction dependency has no verified receipt: ${writeId}`)
+    return receipt.fileId
+  }
+  if (Array.isArray(value)) return value.map((item) => resolveReceiptPlaceholders(item, receipts))
+  if (typeof value === 'object' && value !== null) {
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, resolveReceiptPlaceholders(item, receipts)]))
+  }
+  return value
+}
+
+function appPropertiesMatch(actual: Record<string, string> | undefined, expected: Record<string, string>) {
+  return Object.entries(expected).every(([key, value]) => actual?.[key] === value)
+}
+
+async function verifyPlannedWrite(params: {
+  provider: SyncProvider
+  write: DriveTransactionWrite
+  receipts: DriveTransactionReceipt[]
+  expectedReceipt?: DriveTransactionReceipt
+}) {
+  const candidates = (await params.provider.listManagedFiles({ prefix: params.write.path }))
+    .filter((file) => file.path === params.write.path)
+  if (candidates.length !== 1) return undefined
+  const file = candidates[0]
+  if (!appPropertiesMatch(file.appProperties, params.write.appProperties)) return undefined
+  if (params.expectedReceipt) {
+    if (file.id !== params.expectedReceipt.fileId || file.version !== params.expectedReceipt.version) return undefined
+  } else if (params.write.precondition.kind === 'must-match') {
+    if (file.id !== params.write.precondition.fileId
+      || BigInt(file.version) <= BigInt(params.write.precondition.version)) return undefined
+  } else if (file.appProperties?.easylabOperationId !== params.write.precondition.operationId) {
+    return undefined
+  }
+
+  const resolvedValue = params.write.kind === 'blob'
+    ? undefined
+    : resolveReceiptPlaceholders(params.write.value, params.receipts)
+  const contentHash = params.write.kind === 'blob'
+    ? await (async () => {
+        const blob = params.provider.getBlobById
+          ? await params.provider.getBlobById(file.id)
+          : await params.provider.getBlob(params.write.path)
+        return blob ? hashBlobSha256(blob) : undefined
+      })()
+    : await (async () => {
+        const remote = await params.provider.getJson<unknown>(params.write.path)
+        return remote ? hashJsonSha256(remote.value) : undefined
+      })()
+  const expectedHash = params.write.kind === 'blob'
+    ? params.write.sha256
+    : await hashJsonSha256(resolvedValue)
+  if (await contentHash !== expectedHash) return undefined
+  return {
+    writeId: params.write.id,
+    path: params.write.path,
+    fileId: file.id,
+    version: file.version,
+    contentHash: expectedHash,
+    verifiedAt: nowIso(),
+  } satisfies DriveTransactionReceipt
+}
+
+async function revalidateGuardedRemoteIdentity(params: {
+  provider: SyncProvider
+  journal: DriveTransactionJournal
+  storageScope: string
+  record: DriveTransactionRecord
+}) {
+  const remoteIdentity = params.record.plan.remoteIdentity
+  if (!remoteIdentity) {
+    throw new Error('Drive transaction plan omitted the remote identity required for guarded recovery.')
+  }
+  let record = params.record
+  const currentFiles = await params.provider.listManagedFiles()
+  indexRemotePaths(currentFiles)
+  for (const write of record.plan.writes) {
+    if (record.receipts.some((receipt) => receipt.writeId === write.id)) continue
+    const reconciled = await verifyPlannedWrite({
+      provider: params.provider,
+      write,
+      receipts: record.receipts,
+    })
+    if (reconciled) {
+      record = await params.journal.recordReceipt(
+        params.storageScope,
+        record.plan.operationId,
+        reconciled,
+      )
+    }
+  }
+  const expected = new Map(
+    remoteIdentity.map((file) => [file.path, { path: file.path, id: file.fileId, version: file.version }]),
+  )
+  for (const receipt of record.receipts) {
+    expected.set(receipt.path, { path: receipt.path, id: receipt.fileId, version: receipt.version })
+  }
+  const expectedIdentity = [...expected.values()]
+    .sort((left, right) => left.path.localeCompare(right.path) || left.id.localeCompare(right.id))
+  const currentIdentity = currentFiles
+    .map(({ path, id, version }) => ({ path, id, version }))
+    .sort((left, right) => left.path.localeCompare(right.path) || left.id.localeCompare(right.id))
+  if (stableStringify(expectedIdentity) !== stableStringify(currentIdentity)) {
+    throw new Error('Drive changed after this transaction was planned; guarded execution is blocked before mutation.')
+  }
+  return record
+}
+
+async function executeDriveTransaction(params: {
+  provider: SyncProvider
+  blobStore?: BlobStore
+  journal: DriveTransactionJournal
+  storageScope: string
+  record: DriveTransactionRecord
+}) {
+  const { provider, blobStore, journal, storageScope } = params
+  let record = params.record
+  let guardAcquired = false
+  let mutationStarted = false
+  try {
+    const currentAccountScope = provider.currentAccountScope?.()
+    if (currentAccountScope && currentAccountScope !== storageScope) {
+      throw new Error('Google account changed before the Drive transaction guard could be acquired.')
+    }
+    await provider.acquireTransactionGuard(record.plan.operationId)
+    guardAcquired = true
+    record = await revalidateGuardedRemoteIdentity({ provider, journal, storageScope, record })
+    record = await journal.markRunning(storageScope, record.plan.operationId)
+    for (const write of record.plan.writes) {
+      const currentAccountScope = provider.currentAccountScope?.()
+      if (currentAccountScope && currentAccountScope !== storageScope) {
+        throw new Error('Google account changed while a Drive transaction was running; remote mutation is blocked.')
+      }
+      // Reacquisition is idempotent for the current operation and renews a guard
+      // whose bounded lease is nearing expiry during a long blob upload.
+      await provider.acquireTransactionGuard(record.plan.operationId)
+      const existingReceipt = record.receipts.find((receipt) => receipt.writeId === write.id)
+      if (existingReceipt) {
+        const verified = await verifyPlannedWrite({ provider, write, receipts: record.receipts, expectedReceipt: existingReceipt })
+        if (!verified) throw new Error(`A verified Drive transaction receipt diverged: ${write.path}`)
+        continue
+      }
+
+      const reconciled = await verifyPlannedWrite({ provider, write, receipts: record.receipts })
+      let receipt = reconciled
+      if (!receipt) {
+        mutationStarted = true
+        if (write.kind === 'blob') {
+          if (!blobStore) throw new Error(`Drive transaction blob store is unavailable: ${write.path}`)
+          const blobRecord = await blobStore.getRecord(write.blobKey)
+          if (!blobRecord || blobRecord.size !== write.byteSize || await hashBlobSha256(blobRecord.blob) !== write.sha256) {
+            throw new Error(`Drive transaction blob changed after planning: ${write.path}`)
+          }
+          const remote = await provider.putBlob(write.path, blobRecord.blob, {
+            mimeType: write.mimeType,
+            sha256: write.sha256,
+            byteSize: write.byteSize,
+            appProperties: write.appProperties,
+          }, {
+            precondition: write.precondition,
+            appProperties: write.appProperties,
+            resumableOperationId: write.resumableOperationId,
+          })
+          receipt = {
+            writeId: write.id,
+            path: write.path,
+            fileId: remote.id,
+            version: remote.version,
+            contentHash: write.sha256,
+            verifiedAt: nowIso(),
+          }
+        } else {
+          const value = resolveReceiptPlaceholders(write.value, record.receipts)
+          const options = {
+            precondition: write.precondition,
+            appProperties: write.appProperties,
+            resumableOperationId: write.resumableOperationId,
+          }
+          const remote = write.kind === 'manifest'
+            ? await provider.putManifest(value, options)
+            : await provider.putJson(write.path, value, options)
+          receipt = {
+            writeId: write.id,
+            path: write.path,
+            fileId: remote.id,
+            version: remote.version,
+            contentHash: await hashJsonSha256(value),
+            verifiedAt: nowIso(),
+          }
+        }
+      }
+      record = await journal.recordReceipt(storageScope, record.plan.operationId, receipt)
+      if (write.kind === 'manifest') {
+        record = await journal.markManifestCommitted(storageScope, record.plan.operationId)
+      }
+    }
+    if (record.plan.writes.at(-1)?.kind === 'manifest'
+      && record.receipts.some((receipt) => receipt.writeId === record.plan.writes.at(-1)?.id)
+      && record.state !== 'manifest-committed') {
+      record = await journal.markManifestCommitted(storageScope, record.plan.operationId)
+    }
+    await provider.releaseTransactionGuard(record.plan.operationId)
+    return record
+  } catch (error) {
+    if (guardAcquired && !mutationStarted) {
+      await provider.releaseTransactionGuard(record.plan.operationId).catch(() => undefined)
+    }
+    await journal.markAmbiguous(storageScope, record.plan.operationId).catch(() => undefined)
+    throw error
+  }
+}
+
+function asJournalSnapshot(value: unknown) {
+  return clone(value as JournalSnapshot)
+}
+
+function asSyncEngineMeta(value: unknown) {
+  return clone(value as SyncEngineMeta)
+}
+
+function asSyncEngineResult(value: unknown) {
+  return clone(value as SyncEngineResult)
+}
+
+async function resolvedTransactionState(record: DriveTransactionRecord) {
+  const snapshot = asJournalSnapshot(resolveReceiptPlaceholders(record.plan.finalSnapshot, record.receipts))
+  const meta = asSyncEngineMeta(resolveReceiptPlaceholders(record.plan.finalMeta, record.receipts))
+  for (const attachment of snapshot.attachments) {
+    if (meta.attachmentHashes[attachment.id]) meta.attachmentHashes[attachment.id] = await attachmentMetadataHash(attachment)
+  }
+  meta.lastSyncedAt = record.plan.createdAt
+  return { snapshot, meta }
+}
+
+function sameSnapshotValue(left: unknown, right: unknown) {
+  return stableStringify(left ?? null) === stableStringify(right ?? null)
+}
+
+function mergeRecordAfterTransaction<T>(
+  initial: Record<string, T>,
+  committed: Record<string, T>,
+  current: Record<string, T>,
+) {
+  const merged: Record<string, T> = {}
+  const ids = new Set([...Object.keys(initial), ...Object.keys(committed), ...Object.keys(current)])
+  for (const id of ids) {
+    const initialValue = initial[id]
+    const currentValue = current[id]
+    const chosen = sameSnapshotValue(currentValue, initialValue) ? committed[id] : currentValue
+    if (chosen !== undefined) merged[id] = clone(chosen)
+  }
+  return merged
+}
+
+function mergeArrayAfterTransaction<T extends { id: string }>(
+  initial: T[],
+  committed: T[],
+  current: T[],
+) {
+  const initialById = Object.fromEntries(initial.map((value) => [value.id, value]))
+  const committedById = Object.fromEntries(committed.map((value) => [value.id, value]))
+  const currentById = Object.fromEntries(current.map((value) => [value.id, value]))
+  return Object.values(mergeRecordAfterTransaction(initialById, committedById, currentById))
+}
+
+function transactionMergeTombstone(snapshot: JournalSnapshot, entityKind: ResolvableEntityKind, entityId: string) {
+  return snapshot.tombstones.find((candidate) => candidate.entityKind === entityKind && candidate.entityId === entityId)
+}
+
+function transactionMergeUpdatedAt(entityKind: ResolvableEntityKind, entity: ResolvableEntity) {
+  return entityKind === 'entry'
+    ? (entity as Entry).lastEditedDatetime
+    : (entity as Attachment | FileBoxItem | TransferRecord).updatedAt || nowIso()
+}
+
+async function makeConcurrentTransactionConflict(params: {
+  entityKind: ResolvableEntityKind
+  entityId: string
+  current?: ResolvableEntity
+  committed?: ResolvableEntity
+  currentSnapshot: JournalSnapshot
+  committedSnapshot: JournalSnapshot
+  deviceId: string
+}) {
+  if (params.current && params.committed) {
+    const [localHash, remoteHash] = await Promise.all([
+      entityHash(params.entityKind, params.current),
+      entityHash(params.entityKind, params.committed),
+    ])
+    if (params.entityKind === 'entry') {
+      return makeEntryConflict({
+        entityId: params.entityId,
+        local: params.current as Entry,
+        remote: params.committed as Entry,
+        localHash,
+        remoteHash,
+        deviceId: params.deviceId,
+        summary: 'A local edit arrived while a newer Drive entry was being committed locally; both versions are preserved for review.',
+      })
+    }
+    return makeEntityConflict({
+      entityKind: params.entityKind,
+      entityId: params.entityId,
+      localUpdatedAt: transactionMergeUpdatedAt(params.entityKind, params.current),
+      remoteUpdatedAt: transactionMergeUpdatedAt(params.entityKind, params.committed),
+      localHash,
+      remoteHash,
+      localCopy: params.current as Attachment | FileBoxItem | TransferRecord,
+      remoteCopy: params.committed as Attachment | FileBoxItem | TransferRecord,
+      deviceId: params.deviceId,
+      summary: `A local ${params.entityKind} edit arrived while a newer Drive version was being committed locally; both versions are preserved for review.`,
+    })
+  }
+  if (params.current) {
+    const remoteTombstone = transactionMergeTombstone(
+      params.committedSnapshot,
+      params.entityKind,
+      params.entityId,
+    )
+    if (!remoteTombstone) {
+      throw new Error(`Drive transaction merge found an unexplained remote deletion: ${params.entityKind}/${params.entityId}`)
+    }
+    return makeRemoteDeleteConflict({
+      entityKind: params.entityKind,
+      entityId: params.entityId,
+      localUpdatedAt: transactionMergeUpdatedAt(params.entityKind, params.current),
+      localHash: await entityHash(params.entityKind, params.current),
+      localCopy: params.current,
+      tombstone: remoteTombstone,
+      deviceId: params.deviceId,
+    })
+  }
+  if (params.committed) {
+    const localTombstone = transactionMergeTombstone(
+      params.currentSnapshot,
+      params.entityKind,
+      params.entityId,
+    )
+    if (!localTombstone) {
+      throw new Error(`Drive transaction merge found an unexplained local deletion: ${params.entityKind}/${params.entityId}`)
+    }
+    const remoteHash = await entityHash(params.entityKind, params.committed)
+    return {
+      id: mergeConflictId(params.entityKind, params.entityId),
+      entityKind: params.entityKind,
+      entityId: params.entityId,
+      localUpdatedAt: localTombstone.deletedAt,
+      remoteUpdatedAt: transactionMergeUpdatedAt(params.entityKind, params.committed),
+      detectedAt: nowIso(),
+      resolution: 'pending' as const,
+      summary: `A local ${params.entityKind} deletion arrived while a newer Drive version was being committed locally; deletion remains effective and both versions are preserved for review.`,
+      localCopy: { tombstone: localTombstone },
+      remoteCopy: params.entityKind === 'entry'
+        ? { hash: remoteHash, entry: params.committed, value: params.committed }
+        : { hash: remoteHash, value: params.committed },
+    } satisfies SyncConflict
+  }
+  throw new Error(`Drive transaction merge found two unexplained deletions: ${params.entityKind}/${params.entityId}`)
+}
+
+async function mergeEntityRecordAfterTransaction(
+  entityKind: ResolvableEntityKind,
+  initial: Record<string, ResolvableEntity>,
+  committed: Record<string, ResolvableEntity>,
+  current: Record<string, ResolvableEntity>,
+  committedSnapshot: JournalSnapshot,
+  currentSnapshot: JournalSnapshot,
+  deviceId: string,
+) {
+  const values: Record<string, ResolvableEntity> = {}
+  const conflicts: SyncConflict[] = []
+  const suppressedCommittedTombstoneTargets = new Set<string>()
+  const ids = new Set([...Object.keys(initial), ...Object.keys(committed), ...Object.keys(current)])
+  for (const id of ids) {
+    const initialValue = initial[id]
+    const committedValue = committed[id]
+    const currentValue = current[id]
+    const [initialHash, committedHash, currentHash] = await Promise.all([
+      initialValue ? entityHash(entityKind, initialValue) : undefined,
+      committedValue ? entityHash(entityKind, committedValue) : undefined,
+      currentValue ? entityHash(entityKind, currentValue) : undefined,
+    ])
+    if (currentHash === committedHash) {
+      const chosen = sameSnapshotValue(currentValue, initialValue) ? committedValue : currentValue
+      if (chosen) values[id] = clone(chosen)
+      continue
+    }
+    const localChanged = currentHash !== initialHash
+    const committedChanged = committedHash !== initialHash
+    if (!localChanged) {
+      if (committedValue) values[id] = clone(committedValue)
+      continue
+    }
+    if (!committedChanged) {
+      if (currentValue) values[id] = clone(currentValue)
+      continue
+    }
+    if (currentValue) values[id] = clone(currentValue)
+    if (currentValue && !committedValue) {
+      // The committed remote tombstone is retained inside the conflict, but must
+      // not hide the newer local edit before the user resolves that conflict.
+      suppressedCommittedTombstoneTargets.add(`${entityKind}\u0000${id}`)
+    }
+    conflicts.push(await makeConcurrentTransactionConflict({
+      entityKind,
+      entityId: id,
+      current: currentValue,
+      committed: committedValue,
+      currentSnapshot,
+      committedSnapshot,
+      deviceId,
+    }))
+  }
+  return { values, conflicts, suppressedCommittedTombstoneTargets }
+}
+
+async function mergeLocalChangesAfterTransaction(record: DriveTransactionRecord, committed: JournalSnapshot, current: JournalSnapshot) {
+  if (!record.plan.initialSnapshot) {
+    throw new Error('Drive transaction cannot preserve newer local edits because its initial snapshot is unavailable.')
+  }
+  const initial = asJournalSnapshot(record.plan.initialSnapshot)
+  const deviceId = current.device?.id ?? committed.device?.id ?? initial.device?.id ?? 'unknown-device'
+  const toRecord = <T extends ResolvableEntity>(values: T[]) => Object.fromEntries(values.map((value) => [value.id, value]))
+  const [entries, attachments, fileBoxItems, transfers] = await Promise.all([
+    mergeEntityRecordAfterTransaction('entry', initial.entries, committed.entries, current.entries, committed, current, deviceId),
+    mergeEntityRecordAfterTransaction('attachment', toRecord(initial.attachments), toRecord(committed.attachments), toRecord(current.attachments), committed, current, deviceId),
+    mergeEntityRecordAfterTransaction('fileBoxItem', toRecord(initial.fileBoxItems), toRecord(committed.fileBoxItems), toRecord(current.fileBoxItems), committed, current, deviceId),
+    mergeEntityRecordAfterTransaction('transfer', toRecord(initial.transfers), toRecord(committed.transfers), toRecord(current.transfers), committed, current, deviceId),
+  ])
+  let conflicts = mergeArrayAfterTransaction(initial.conflicts, committed.conflicts, current.conflicts)
+  for (const conflict of [...entries.conflicts, ...attachments.conflicts, ...fileBoxItems.conflicts, ...transfers.conflicts]) {
+    conflicts = upsertConflict(conflicts, conflict)
+  }
+  const suppressedCommittedTombstoneTargets = new Set([
+    ...entries.suppressedCommittedTombstoneTargets,
+    ...attachments.suppressedCommittedTombstoneTargets,
+    ...fileBoxItems.suppressedCommittedTombstoneTargets,
+    ...transfers.suppressedCommittedTombstoneTargets,
+  ])
+  const normalizedTombstones = normalizeTombstonesByTarget(
+    mergeArrayAfterTransaction(initial.tombstones, committed.tombstones, current.tombstones)
+      .filter((tombstone) => !suppressedCommittedTombstoneTargets.has(`${tombstone.entityKind}\u0000${tombstone.entityId}`)),
+  )
+  for (const conflict of normalizedTombstones.conflicts) conflicts = upsertConflict(conflicts, conflict)
+  return applyTombstonesToSnapshot({
+    entries: entries.values as Record<string, Entry>,
+    attachments: Object.values(attachments.values) as Attachment[],
+    fileBoxItems: Object.values(fileBoxItems.values) as FileBoxItem[],
+    transfers: Object.values(transfers.values) as TransferRecord[],
+    conflicts,
+    tombstones: normalizedTombstones.tombstones,
+    device: sameSnapshotValue(current.device, initial.device) ? clone(committed.device) : clone(current.device),
+  }, normalizedTombstones.tombstones)
+}
+
+async function finalizeDriveTransaction(params: {
+  provider: SyncProvider
+  store: LocalJournalStore
+  journal: DriveTransactionJournal
+  storageScope: string
+  record: DriveTransactionRecord
+}) {
+  const currentAccountScope = params.provider.currentAccountScope?.()
+  if (currentAccountScope && currentAccountScope !== params.storageScope) {
+    throw new Error('Google account changed before Drive transaction finalization; local completion is blocked.')
+  }
+  const receipts = params.record.receipts
+  if (receipts.length !== params.record.plan.writes.length || params.record.state !== 'manifest-committed') {
+    throw new Error('Drive transaction cannot finalize before every write and manifest are verified.')
+  }
+  const { snapshot, meta } = await resolvedTransactionState(params.record)
+  if (params.provider.listChanges) {
+    meta.driveChangesToken = (await params.provider.listChanges(meta.driveChangesToken ?? '0')).nextToken
+  }
+  let finalized = false
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const current = await readStableStoreState(params.store)
+    const currentInputHash = await hashJsonSha256({ snapshot: current.snapshot, meta: current.meta })
+    const finalSnapshot = currentInputHash === params.record.plan.inputStateHash
+      ? snapshot
+      : await mergeLocalChangesAfterTransaction(params.record, snapshot, current.snapshot)
+    if (await params.store.saveStateIfRevision(finalSnapshot, meta, current.revision)) {
+      finalized = true
+      break
+    }
+  }
+  if (!finalized) throw new Error('Local notebook kept changing while Drive transaction completion was being merged.')
+  await params.journal.markCompleted(params.storageScope, params.record.plan.operationId)
+  return asSyncEngineResult(params.record.plan.result)
+}
+
 export async function syncOnce(params: {
   provider: SyncProvider
   store: LocalJournalStore
   device: DeviceProfile
   blobStore?: BlobStore
   downloadRemoteBlobs?: boolean
+  transactionJournal?: DriveTransactionJournal
+  accountScope?: string
 }): Promise<SyncEngineResult> {
   const { provider, store, device, blobStore, downloadRemoteBlobs = true } = params
   if (provider.supportsVersionedCas !== true) {
     throw new Error('Drive v1 writes are disabled until the provider supports versioned compare-and-swap.')
   }
-  await provider.signIn()
-  const workspace = await provider.ensureWorkspace()
-  let snapshot = await store.getSnapshot()
+  const session = await provider.signIn()
+  const workspace = await provider.resolveWorkspace()
+  const transactionJournal = params.transactionJournal ?? defaultTransactionJournal()
+  const storageScope = params.accountScope?.trim()
+    || session.account?.storageScope?.trim()
+    || (session.provider === 'mock' ? 'mock-account' : '')
+  if (!storageScope) throw new Error('Drive transaction recovery requires an account-scoped storage identity.')
+
+  const initialStoreState = await readStableStoreState(store)
+  let snapshot = initialStoreState.snapshot
+  const initialSnapshot = clone(snapshot)
+  const storedMeta = initialStoreState.meta
+  const inputStateHash = await hashJsonSha256({ snapshot, meta: storedMeta })
+  let incomplete = await transactionJournal.latestIncomplete(storageScope)
+  if (incomplete) {
+    if (incomplete.plan.inputStateHash !== inputStateHash
+      && !incomplete.plan.initialSnapshot) {
+      throw new Error('Local notebook input changed while a legacy Drive transaction was incomplete; safe recovery is blocked.')
+    }
+    const manifestWrite = incomplete.plan.writes.at(-1)
+    const manifestReceipt = manifestWrite?.kind === 'manifest'
+      ? incomplete.receipts.find((receipt) => receipt.writeId === manifestWrite.id)
+      : undefined
+    if (manifestReceipt && incomplete.receipts.length === incomplete.plan.writes.length) {
+      const currentAccountScope = provider.currentAccountScope?.()
+      if (currentAccountScope && currentAccountScope !== storageScope) {
+        throw new Error('Google account changed before manifest-committed Drive recovery; local completion is blocked.')
+      }
+      if (incomplete.state !== 'manifest-committed') {
+        incomplete = await transactionJournal.markManifestCommitted(storageScope, incomplete.plan.operationId)
+      }
+      await provider.releaseTransactionGuard(incomplete.plan.operationId)
+      return finalizeDriveTransaction({ provider, store, journal: transactionJournal, storageScope, record: incomplete })
+    }
+    const recovered = await executeDriveTransaction({
+      provider,
+      blobStore,
+      journal: transactionJournal,
+      storageScope,
+      record: incomplete,
+    })
+    return finalizeDriveTransaction({ provider, store, journal: transactionJournal, storageScope, record: recovered })
+  }
+
   const normalizedLocalTombstones = normalizeTombstonesByTarget(snapshot.tombstones)
   snapshot.tombstones = normalizedLocalTombstones.tombstones
   for (const conflict of normalizedLocalTombstones.conflicts) {
     snapshot.conflicts = upsertConflict(snapshot.conflicts, conflict)
   }
-  const meta = { ...defaultMeta(), ...(await store.getMeta()) }
+  const meta = storedMeta
   meta.fileBoxHashes = meta.fileBoxHashes ?? {}
   meta.transferHashes = meta.transferHashes ?? {}
   meta.entryPaths = meta.entryPaths ?? {}
   meta.attachmentPaths = meta.attachmentPaths ?? {}
   meta.attachmentBlobPaths = meta.attachmentBlobPaths ?? {}
-  const manifestResult = validateManifest(await provider.loadManifest<unknown>())
-  let previousManifest: SyncManifest | undefined = manifestResult.ok ? manifestResult.value : undefined
+  meta.fileBoxPaths = meta.fileBoxPaths ?? {}
+  meta.transferPaths = meta.transferPaths ?? {}
+  meta.conflictPaths = meta.conflictPaths ?? {}
+  meta.tombstonePaths = meta.tombstonePaths ?? {}
+  const remoteManifest = await provider.getJson<unknown>('manifest.json')
+  const manifestResult = validateManifest(remoteManifest?.value)
+  if (remoteManifest && !manifestResult.ok) {
+    throw new Error(`Drive manifest is malformed and blocks transactional sync: ${manifestResult.error}`)
+  }
+  const previousManifest: SyncManifest | undefined = manifestResult.ok ? manifestResult.value : undefined
+  const preflightFiles = await provider.listManagedFiles()
+  const preflightIndex = indexRemotePaths(preflightFiles)
+  const listedManifest = exactRemoteFile(preflightIndex, 'manifest.json')
+  if (remoteManifest
+    && (!listedManifest || remoteManifest.id !== listedManifest.id || remoteManifest.version !== listedManifest.version)) {
+    throw new Error('Drive manifest identity changed before transactional preflight completed.')
+  }
+  if (!remoteManifest && listedManifest) {
+    throw new Error('Drive manifest appeared during transactional preflight; sync must restart.')
+  }
 
   // Validate the complete remote snapshot before making any remote mutation.  A malformed
   // tombstone cannot safely be ignored because its unknown target could otherwise resurrect.
@@ -804,18 +1534,48 @@ export async function syncOnce(params: {
       uploadedBlobs: 0, downloadedBlobs: 0, pushedTombstones: 0, conflicts: snapshot.conflicts.length,
     }
   }
-  if (!previousManifest) {
-    previousManifest = createManifest({
+  if (previousManifest) {
+    const effectiveRemoteTombstones = remoteTombstones.valid.filter((tombstone) => !remoteConflicts.valid.some((conflict) => {
+      const resolvedTombstone = conflictRemoteTombstone(conflict)
+      return conflict.resolution === 'local-won'
+        && conflict.entityKind === tombstone.entityKind
+        && conflict.entityId === tombstone.entityId
+        && resolvedTombstone?.deletedAt === tombstone.deletedAt
+        && resolvedTombstone.deletedByDeviceId === tombstone.deletedByDeviceId
+    }))
+    const projectedRemote = applyTombstonesToSnapshot({
+      entries: Object.fromEntries(remoteEntries.valid.map((envelope) => [envelope.id, envelope.payload])),
+      attachments: remoteAttachments.valid.map((envelope) => envelope.payload),
+      fileBoxItems: remoteFileBoxItems.valid.map((envelope) => envelope.payload),
+      transfers: remoteTransfers.valid.map((envelope) => envelope.payload),
+      conflicts: remoteConflicts.valid,
+      tombstones: effectiveRemoteTombstones,
       device,
-      entries: snapshot.entries,
-      attachments: snapshot.attachments,
-      fileBoxItems: snapshot.fileBoxItems,
-      transfers: snapshot.transfers,
-      folderName: workspace.rootPath,
-    })
-    await provider.putManifest(previousManifest)
+    }, effectiveRemoteTombstones)
+    const countsMatch = previousManifest.entryCount === Object.keys(projectedRemote.entries).length
+      && previousManifest.attachmentCount === projectedRemote.attachments.length
+      && previousManifest.fileBoxCount === projectedRemote.fileBoxItems.length
+      && previousManifest.transferCount === projectedRemote.transfers.length
+    if (!countsMatch) {
+      throw new Error(`Drive manifest counts do not match the verified remote snapshot; transactional sync is blocked (${stableStringify({
+        manifest: {
+          entries: previousManifest.entryCount,
+          attachments: previousManifest.attachmentCount,
+          fileBox: previousManifest.fileBoxCount,
+          transfers: previousManifest.transferCount,
+        },
+        remote: {
+          entries: Object.keys(projectedRemote.entries).length,
+          attachments: projectedRemote.attachments.length,
+          fileBox: projectedRemote.fileBoxItems.length,
+          transfers: projectedRemote.transfers.length,
+        },
+      })}).`)
+    }
   }
-  await provider.ensureDeviceRecord(device)
+  if (!previousManifest && preflightFiles.some((file) => file.path !== 'manifest.json')) {
+    throw new Error('Drive workspace contains managed data without a verified manifest; transactional sync is blocked.')
+  }
 
   let pulledEntries = 0
   let pulledAttachments = 0
@@ -827,6 +1587,7 @@ export async function syncOnce(params: {
   let conflicts = snapshot.conflicts.length
 
   for (const remoteConflict of remoteConflicts.valid) {
+    meta.conflictPaths[remoteConflict.id] = remoteConflicts.paths[remoteConflict.id]
     const localConflict = snapshot.conflicts.find((conflict) => conflict.id === remoteConflict.id)
     const preferred = localConflict ? selectPreferredConflict(localConflict, remoteConflict) : remoteConflict
     if (!localConflict || preferred === remoteConflict) snapshot.conflicts = upsertConflict(snapshot.conflicts, remoteConflict)
@@ -834,6 +1595,7 @@ export async function syncOnce(params: {
 
   const locallyWonRemoteDeletes = new Map<string, string>()
   for (const tombstone of remoteTombstones.valid) {
+    meta.tombstonePaths[`${tombstone.entityKind}\u0000${tombstone.entityId}`] = remoteTombstones.paths[`${tombstone.entityKind}\u0000${tombstone.entityId}`]
     const resolvedDeleteConflict = snapshot.conflicts.find((conflict) => {
       const resolvedTombstone = conflictRemoteTombstone(conflict)
       return conflict.entityKind === tombstone.entityKind
@@ -1081,6 +1843,7 @@ export async function syncOnce(params: {
 
   for (const remoteEnvelope of remoteFileBoxItems.valid) {
     const remoteItem = remoteEnvelope.payload
+    meta.fileBoxPaths[remoteItem.id] = remoteEnvelope.remotePath
     const resolvedDeleteAt = locallyWonRemoteDeletes.get(`fileBoxItem:${remoteItem.id}`)
     if (tombstonedFileBoxItems.has(remoteItem.id) || tombstonedEntries.has(remoteItem.entryId) || tombstonedAttachments.has(remoteItem.attachmentId || '')
       || (resolvedDeleteAt && Date.parse(remoteEnvelope.updatedAt) <= Date.parse(resolvedDeleteAt))) {
@@ -1137,6 +1900,7 @@ export async function syncOnce(params: {
 
   for (const remoteEnvelope of remoteTransfers.valid) {
     const remoteTransfer = remoteEnvelope.payload
+    meta.transferPaths[remoteTransfer.id] = remoteEnvelope.remotePath
     const resolvedDeleteAt = locallyWonRemoteDeletes.get(`transfer:${remoteTransfer.id}`)
     if (tombstonedTransfers.has(remoteTransfer.id) || tombstonedFileBoxItems.has(remoteTransfer.fileBoxItemId || '')
       || tombstonedEntries.has(remoteTransfer.entryId || '') || tombstonedAttachments.has(remoteTransfer.attachmentId || '')
@@ -1189,14 +1953,73 @@ export async function syncOnce(params: {
     }))
   }
 
+  const planningFiles = await provider.listManagedFiles()
+  const preflightIdentity = preflightFiles
+    .map(({ path, id, version }) => ({ path, id, version }))
+    .sort((left, right) => left.path.localeCompare(right.path) || left.id.localeCompare(right.id))
+  const planningIdentity = planningFiles
+    .map(({ path, id, version }) => ({ path, id, version }))
+    .sort((left, right) => left.path.localeCompare(right.path) || left.id.localeCompare(right.id))
+  if (stableStringify(preflightIdentity) !== stableStringify(planningIdentity)) {
+    throw new Error('Drive changed during transactional preflight; sync must be retried from a fresh snapshot.')
+  }
+  const planningIndex = indexRemotePaths(planningFiles)
+
+  const hasTombstone = (entityKind: TombstoneRecord['entityKind'], entityId: string) => snapshot.tombstones.some(
+    (tombstone) => tombstone.entityKind === entityKind && tombstone.entityId === entityId,
+  )
+  for (const entry of Object.values(snapshot.entries)) {
+    const path = meta.entryPaths[entry.id] ?? entryPath(entry, snapshot.entries)
+    if (meta.entryHashes[entry.id] && !hasTombstone('entry', entry.id) && !exactRemoteFile(planningIndex, path)) {
+      throw new Error(`Drive entry with a prior baseline is missing: ${path}`)
+    }
+  }
+  for (const attachment of snapshot.attachments) {
+    const path = meta.attachmentPaths[attachment.id] ?? attachmentMetadataPath(attachment, snapshot.entries)
+    if (meta.attachmentHashes[attachment.id]
+      && !hasTombstone('attachment', attachment.id)
+      && !hasTombstone('entry', attachment.entryId)
+      && !exactRemoteFile(planningIndex, path)) {
+      throw new Error(`Drive attachment with a prior baseline is missing: ${path}`)
+    }
+  }
+  for (const item of snapshot.fileBoxItems) {
+    const path = meta.fileBoxPaths[item.id] ?? fileBoxPath(item)
+    if (meta.fileBoxHashes[item.id] && !hasTombstone('fileBoxItem', item.id) && !exactRemoteFile(planningIndex, path)) {
+      throw new Error(`Drive File Box record with a prior baseline is missing: ${path}`)
+    }
+  }
+  for (const transfer of snapshot.transfers) {
+    const path = meta.transferPaths[transfer.id] ?? transferPath(transfer)
+    if (meta.transferHashes[transfer.id] && !hasTombstone('transfer', transfer.id) && !exactRemoteFile(planningIndex, path)) {
+      throw new Error(`Drive transfer with a prior baseline is missing: ${path}`)
+    }
+  }
+
+  const scopeHash = await hashTextSha256(storageScope)
+  const transactionSeed = await hashJsonSha256({
+    scopeHash,
+    inputStateHash,
+    remote: planningIdentity,
+    deviceId: device.id,
+  })
+  const tombstoneWrites: DriveTransactionJsonWrite[] = []
+  const blobWrites: DriveTransactionBlobWrite[] = []
+  const jsonWrites: DriveTransactionJsonWrite[] = []
   const blockedTombstoneTargets = new Set(
     snapshot.conflicts.map(divergentTombstoneTarget).filter((target): target is string => Boolean(target)),
   )
   for (const tombstone of snapshot.tombstones) {
-    if (blockedTombstoneTargets.has(`${tombstone.entityKind}\u0000${tombstone.entityId}`)) continue
-    await provider.putJson(tombstonePath(tombstone), tombstone, {
+    const target = `${tombstone.entityKind}\u0000${tombstone.entityId}`
+    if (blockedTombstoneTargets.has(target)) continue
+    tombstoneWrites.push(await buildJsonTransactionWrite({
+      kind: 'tombstone',
+      seed: transactionSeed,
+      path: meta.tombstonePaths[target] ?? tombstonePath(tombstone),
+      value: tombstone,
       appProperties: { entityType: 'tombstone', entityId: tombstone.entityId },
-    })
+      remoteIndex: planningIndex,
+    }))
     pushedTombstones += 1
   }
 
@@ -1207,13 +2030,15 @@ export async function syncOnce(params: {
 
   for (const attachment of snapshot.attachments) {
     if (openConflictAttachments.has(attachment.id)) continue
-    const uploadedBlob = await uploadAttachmentBlob(
+    const uploadedBlob = await planAttachmentBlob({
       attachment,
-      snapshot.entries,
-      provider,
+      entries: snapshot.entries,
       blobStore,
-      meta.attachmentBlobPaths[attachment.id],
-    )
+      verifiedBlobPath: meta.attachmentBlobPaths[attachment.id],
+      seed: transactionSeed,
+      remoteIndex: planningIndex,
+    })
+    if (uploadedBlob.write) blobWrites.push(uploadedBlob.write)
     if (uploadedBlob.uploaded) uploadedBlobs += 1
     const nextAttachment = uploadedBlob.attachment
     const attachmentIndex = snapshot.attachments.findIndex((candidate) => candidate.id === nextAttachment.id)
@@ -1221,12 +2046,14 @@ export async function syncOnce(params: {
     if (nextAttachment.syncStatus === 'failed') continue
     const hash = await attachmentMetadataHash(nextAttachment)
     if (hash !== meta.attachmentHashes[attachment.id]) {
-      await provider.putJson(meta.attachmentPaths[nextAttachment.id] ?? attachmentMetadataPath(nextAttachment, snapshot.entries), buildAttachmentEnvelope({
-        ...nextAttachment,
-        syncStatus: 'synced',
-      }, device), {
+      jsonWrites.push(await buildJsonTransactionWrite({
+        kind: 'json',
+        seed: transactionSeed,
+        path: meta.attachmentPaths[nextAttachment.id] ?? attachmentMetadataPath(nextAttachment, snapshot.entries),
+        value: buildAttachmentEnvelope({ ...nextAttachment, syncStatus: 'synced' }, device),
         appProperties: { entityType: 'attachment', entityId: nextAttachment.id, contentHash: hash },
-      })
+        remoteIndex: planningIndex,
+      }))
       if (attachmentIndex >= 0) snapshot.attachments[attachmentIndex] = { ...nextAttachment, syncStatus: 'synced' }
       meta.attachmentHashes[nextAttachment.id] = hash
       pushedAttachments += 1
@@ -1238,27 +2065,42 @@ export async function syncOnce(params: {
     const hash = await entryContentHash(entry)
     if (hash !== meta.entryHashes[entry.id]) {
       const envelope = buildEntryEnvelope({ ...entry, syncStatus: 'synced', updatedByDeviceId: device.id }, device)
-      await provider.putJson(meta.entryPaths[entry.id] ?? entryPath(entry, snapshot.entries), envelope, {
+      jsonWrites.push(await buildJsonTransactionWrite({
+        kind: 'json',
+        seed: transactionSeed,
+        path: meta.entryPaths[entry.id] ?? entryPath(entry, snapshot.entries),
+        value: envelope,
         appProperties: { entityType: 'entry', entityId: entry.id, contentHash: hash },
-      })
+        remoteIndex: planningIndex,
+      }))
       meta.entryHashes[entry.id] = hash
       pushedEntries += 1
     }
   }
 
   for (const conflict of snapshot.conflicts) {
-    await provider.putJson(`conflicts/${safeDriveSegment(conflict.id, 'conflict')}.json`, conflict, {
+    jsonWrites.push(await buildJsonTransactionWrite({
+      kind: 'json',
+      seed: transactionSeed,
+      path: meta.conflictPaths[conflict.id] ?? `conflicts/${safeDriveSegment(conflict.id, 'conflict')}.json`,
+      value: conflict,
       appProperties: { entityType: 'conflict', entityId: conflict.entityId },
-    })
+      remoteIndex: planningIndex,
+    }))
   }
 
   for (const item of snapshot.fileBoxItems) {
     if (openConflictFileBoxItems.has(item.id) || tombstonedFileBoxItems.has(item.id) || tombstonedEntries.has(item.entryId) || tombstonedAttachments.has(item.attachmentId || '')) continue
     const hash = await fileBoxMetadataHash(item)
     if (hash !== meta.fileBoxHashes[item.id]) {
-      await provider.putJson(fileBoxPath(item), buildFileBoxEnvelope(item, device), {
+      jsonWrites.push(await buildJsonTransactionWrite({
+        kind: 'json',
+        seed: transactionSeed,
+        path: meta.fileBoxPaths[item.id] ?? fileBoxPath(item),
+        value: buildFileBoxEnvelope(item, device),
         appProperties: { entityType: 'fileBoxItem', entityId: item.id, contentHash: hash },
-      })
+        remoteIndex: planningIndex,
+      }))
       meta.fileBoxHashes[item.id] = hash
     }
   }
@@ -1269,40 +2111,91 @@ export async function syncOnce(params: {
       || tombstonedEntries.has(transfer.entryId || '') || tombstonedAttachments.has(transfer.attachmentId || '')) continue
     const hash = await transferMetadataHash(transfer)
     if (hash !== meta.transferHashes[transfer.id]) {
-      await provider.putJson(transferPath(transfer), buildTransferEnvelope(transfer, device), {
+      jsonWrites.push(await buildJsonTransactionWrite({
+        kind: 'json',
+        seed: transactionSeed,
+        path: meta.transferPaths[transfer.id] ?? transferPath(transfer),
+        value: buildTransferEnvelope(transfer, device),
         appProperties: { entityType: 'transfer', entityId: transfer.id, contentHash: hash },
-      })
+        remoteIndex: planningIndex,
+      }))
       meta.transferHashes[transfer.id] = hash
     }
   }
 
-  await provider.putManifest(createManifest({
-    device,
-    entries: snapshot.entries,
-    attachments: snapshot.attachments,
-    fileBoxItems: snapshot.fileBoxItems,
-    transfers: snapshot.transfers,
-    folderName: workspace.rootPath,
-    previousManifest,
+  jsonWrites.push(await buildJsonTransactionWrite({
+    kind: 'json',
+    seed: transactionSeed,
+    path: `devices/${safeDriveSegment(device.id, 'device')}.json`,
+    value: device,
+    appProperties: { entityType: 'device', entityId: device.id },
+    remoteIndex: planningIndex,
   }))
 
-  meta.lastSyncedAt = nowIso()
-  if (provider.listChanges) {
-    meta.driveChangesToken = (await provider.listChanges(meta.driveChangesToken ?? '0')).nextToken
-  }
+  const pendingRemoteDeletes = snapshot.conflicts
+    .filter((conflict) => conflict.resolution === 'pending')
+    .map(conflictRemoteTombstone)
+    .filter((tombstone): tombstone is TombstoneRecord => Boolean(tombstone))
+  const manifestSnapshot = applyTombstonesToSnapshot(
+    snapshot,
+    normalizeTombstonesByTarget([...snapshot.tombstones, ...pendingRemoteDeletes]).tombstones,
+  )
+  const manifest = createManifest({
+    device,
+    entries: manifestSnapshot.entries,
+    attachments: manifestSnapshot.attachments,
+    fileBoxItems: manifestSnapshot.fileBoxItems,
+    transfers: manifestSnapshot.transfers,
+    folderName: workspace.rootPath,
+    previousManifest,
+  })
+  const manifestWrite = await buildJsonTransactionWrite({
+    kind: 'manifest',
+    seed: transactionSeed,
+    path: 'manifest.json',
+    value: manifest,
+    appProperties: { entityType: 'manifest' },
+    remoteIndex: planningIndex,
+  })
   conflicts = snapshot.conflicts.length
-  await saveStoreState(store, snapshot, meta)
-
-  return { pulledEntries, pushedEntries, pulledAttachments, pushedAttachments, uploadedBlobs, downloadedBlobs, pushedTombstones, conflicts }
+  const result = { pulledEntries, pushedEntries, pulledAttachments, pushedAttachments, uploadedBlobs, downloadedBlobs, pushedTombstones, conflicts }
+  const writes: DriveTransactionWrite[] = [...tombstoneWrites, ...blobWrites, ...jsonWrites, manifestWrite]
+  const planCore = {
+    inputStateHash,
+    remoteIdentity: planningIdentity.map(({ path, id, version }) => ({ path, fileId: id, version })),
+    writes,
+    initialSnapshot,
+    finalSnapshot: snapshot,
+    finalMeta: meta,
+    result,
+  }
+  const planHash = await hashJsonSha256(planCore)
+  const plan: DriveTransactionPlan = {
+    operationId: planHash,
+    planHash,
+    createdAt: nowIso(),
+    ...clone(planCore),
+  }
+  const prepared = await transactionJournal.begin(storageScope, plan)
+  const executed = await executeDriveTransaction({
+    provider,
+    blobStore,
+    journal: transactionJournal,
+    storageScope,
+    record: prepared,
+  })
+  return finalizeDriveTransaction({ provider, store, journal: transactionJournal, storageScope, record: executed })
 }
 
-async function uploadAttachmentBlob(
-  attachment: Attachment,
-  entries: Record<string, Entry>,
-  provider: SyncProvider,
-  blobStore?: BlobStore,
-  verifiedBlobPath?: string,
-): Promise<{ attachment: Attachment; uploaded: boolean }> {
+async function planAttachmentBlob(params: {
+  attachment: Attachment
+  entries: Record<string, Entry>
+  blobStore?: BlobStore
+  verifiedBlobPath?: string
+  seed: string
+  remoteIndex: RemotePathIndex
+}): Promise<{ attachment: Attachment; uploaded: boolean; write?: DriveTransactionBlobWrite }> {
+  const { attachment, entries, blobStore, verifiedBlobPath, seed, remoteIndex } = params
   if (!blobStore) return { attachment, uploaded: false }
   const key = attachmentBlobKey(attachment)
   const record = await blobStore.getRecord(key)
@@ -1328,12 +2221,19 @@ async function uploadAttachmentBlob(
     return { attachment: { ...attachment, syncStatus: 'failed' }, uploaded: false }
   }
   const actualSha256 = verified.actualSha256
-  const remote = await provider.putBlob(verifiedBlobPath ?? attachmentBlobPath(attachment, entries), record.blob, {
+  const write = await buildBlobTransactionWrite({
+    seed,
+    path: verifiedBlobPath ?? attachmentBlobPath(attachment, entries),
+    blobKey: key,
     mimeType: attachment.contentType || attachment.mimeType || record.mimeType,
     sha256: actualSha256,
     byteSize: record.size,
     appProperties: { entityType: 'attachmentBlob', entityId: attachment.id, sha256: actualSha256 },
+    remoteIndex,
   })
+  const driveFileId = write.precondition.kind === 'must-match'
+    ? write.precondition.fileId
+    : write.fileIdPlaceholder
   return {
     attachment: {
       ...attachment,
@@ -1341,11 +2241,12 @@ async function uploadAttachmentBlob(
       sha256: actualSha256,
       bytes: attachment.bytes ?? record.size,
       contentType: attachment.contentType || record.mimeType,
-      driveFileId: remote.id,
+      driveFileId,
       syncStatus: 'synced',
       updatedAt: nowIso(),
     },
     uploaded: true,
+    write,
   }
 }
 
@@ -1417,6 +2318,27 @@ function newestEnvelopePerId<T extends SyncEntityEnvelope<unknown>>(envelopes: T
 
 type RemoteEnvelope<T> = SyncEntityEnvelope<T> & { remotePath: string }
 
+function appendDuplicateEnvelopeConflicts<T>(params: {
+  envelopes: RemoteEnvelope<T>[]
+  invalid: SyncConflict[]
+  deviceId: string
+  entityKind: SyncConflict['entityKind']
+}) {
+  const byId = new Map<string, RemoteEnvelope<T>[]>()
+  for (const envelope of params.envelopes) byId.set(envelope.id, [...(byId.get(envelope.id) ?? []), envelope])
+  for (const [id, duplicates] of byId) {
+    if (duplicates.length < 2) continue
+    params.invalid.push(buildInvalidRemoteJsonConflict({
+      entityKind: params.entityKind,
+      entityId: id,
+      deviceId: params.deviceId,
+      error: `Multiple verified Drive records claim the same ${params.entityKind} id.`,
+      remoteCopy: duplicates.map((duplicate) => ({ path: duplicate.remotePath, value: duplicate })),
+      detectedAt: duplicates.map((duplicate) => duplicate.updatedAt).sort().at(-1) ?? nowIso(),
+    }))
+  }
+}
+
 function remoteEnvelope<T>(path: string, envelope: SyncEntityEnvelope<T>): RemoteEnvelope<T> {
   return { ...envelope, remotePath: path }
 }
@@ -1430,6 +2352,7 @@ async function readRemoteEntries(provider: SyncProvider, deviceId: string) {
     if (result.ok) valid.push(remoteEnvelope(file.path, result.value))
     else invalid.push(result.conflict)
   }
+  appendDuplicateEnvelopeConflicts({ envelopes: valid, invalid, deviceId, entityKind: 'entry' })
   return { valid: newestEnvelopePerId(valid), invalid }
 }
 
@@ -1469,6 +2392,7 @@ async function readRemoteAttachments(provider: SyncProvider, deviceId: string) {
     }
     valid.push({ ...remoteEnvelope(file.path, result.value), remoteBlobPath: blobFile?.path })
   }
+  appendDuplicateEnvelopeConflicts({ envelopes: valid, invalid, deviceId, entityKind: 'attachment' })
   return { valid: newestEnvelopePerId(valid), invalid }
 }
 
@@ -1481,6 +2405,7 @@ async function readRemoteFileBoxItems(provider: SyncProvider, deviceId: string) 
     if (result.ok) valid.push(remoteEnvelope(file.path, result.value))
     else invalid.push(result.conflict)
   }
+  appendDuplicateEnvelopeConflicts({ envelopes: valid, invalid, deviceId, entityKind: 'fileBoxItem' })
   return { valid: newestEnvelopePerId(valid), invalid }
 }
 
@@ -1493,12 +2418,13 @@ async function readRemoteTransfers(provider: SyncProvider, deviceId: string) {
     if (result.ok) valid.push(remoteEnvelope(file.path, result.value))
     else invalid.push(result.conflict)
   }
+  appendDuplicateEnvelopeConflicts({ envelopes: valid, invalid, deviceId, entityKind: 'transfer' })
   return { valid: newestEnvelopePerId(valid), invalid }
 }
 
 async function readRemoteConflicts(provider: SyncProvider, deviceId: string) {
   const files = await provider.listManagedFiles({ prefix: 'conflicts/' })
-  const valid: SyncConflict[] = []
+  const valid: { value: SyncConflict; path: string }[] = []
   const invalid: SyncConflict[] = []
   for (const file of files) {
     const result = await readValidatedRemoteJson(
@@ -1516,28 +2442,40 @@ async function readRemoteConflicts(provider: SyncProvider, deviceId: string) {
       },
       validateConflict,
     )
-    if (result.ok) valid.push(result.value)
+    if (result.ok) valid.push({ value: result.value, path: file.path })
     else invalid.push(result.conflict)
   }
-  const preferred = new Map<string, SyncConflict>()
-  for (const conflict of valid) {
-    const current = preferred.get(conflict.id)
-    preferred.set(conflict.id, current ? selectPreferredConflict(current, conflict) : conflict)
+  const preferred = new Map<string, { value: SyncConflict; path: string }>()
+  for (const candidate of valid) {
+    const current = preferred.get(candidate.value.id)
+    preferred.set(candidate.value.id, current && selectPreferredConflict(current.value, candidate.value) === current.value
+      ? current
+      : candidate)
   }
-  return { valid: [...preferred.values()], invalid }
+  const selected = [...preferred.values()]
+  return {
+    valid: selected.map((candidate) => candidate.value),
+    paths: Object.fromEntries(selected.map((candidate) => [candidate.value.id, candidate.path])),
+    invalid,
+  }
 }
 
 async function readRemoteTombstones(provider: SyncProvider, deviceId: string) {
   const files = await provider.listManagedFiles({ prefix: 'tombstones/' })
-  const valid: TombstoneRecord[] = []
+  const valid: { value: TombstoneRecord; path: string }[] = []
   const invalid: SyncConflict[] = []
   for (const file of files) {
     const result = await readValidatedRemoteJson(provider, file, deviceId, 'tombstone', validateTombstone)
-    if (result.ok) valid.push(result.value)
+    if (result.ok) valid.push({ value: result.value, path: file.path })
     else invalid.push(result.conflict)
   }
-  const normalized = normalizeTombstonesByTarget(valid)
-  return { valid: normalized.tombstones, invalid: [...invalid, ...normalized.conflicts] }
+  const normalized = normalizeTombstonesByTarget(valid.map((candidate) => candidate.value))
+  const paths = Object.fromEntries(normalized.tombstones.map((tombstone) => {
+    const exact = valid.find((candidate) => candidate.value.id === tombstone.id)
+      ?? valid.find((candidate) => candidate.value.entityKind === tombstone.entityKind && candidate.value.entityId === tombstone.entityId)
+    return [`${tombstone.entityKind}\u0000${tombstone.entityId}`, exact?.path ?? tombstonePath(tombstone)]
+  }))
+  return { valid: normalized.tombstones, paths, invalid: [...invalid, ...normalized.conflicts] }
 }
 
 async function readValidatedRemoteJson<T>(
