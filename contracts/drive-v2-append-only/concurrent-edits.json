@@ -1,0 +1,134 @@
+{
+  "workspaceId": "ws-v2-0123456789abcdef0123456789abcdef",
+  "objects": [
+    {
+      "body": {
+        "protocol": "easylab-drive-v2-append-only",
+        "schemaVersion": 2,
+        "workspaceId": "ws-v2-0123456789abcdef0123456789abcdef",
+        "entityKind": "entry",
+        "entityId": "entry-v2-parity",
+        "operation": "upsert",
+        "baseObjectIds": [],
+        "blobIds": [],
+        "payload": {
+          "id": "entry-v2-parity",
+          "title": "Base",
+          "content": "Base note"
+        },
+        "tombstone": null,
+        "resolutionOf": []
+      },
+      "expectedId": "obj-v2-74aac223bf266e026e235fa74387a0ad24df18ac3ed4dfe1d23b2a78f9baff50"
+    },
+    {
+      "body": {
+        "protocol": "easylab-drive-v2-append-only",
+        "schemaVersion": 2,
+        "workspaceId": "ws-v2-0123456789abcdef0123456789abcdef",
+        "entityKind": "entry",
+        "entityId": "entry-v2-parity",
+        "operation": "upsert",
+        "baseObjectIds": [
+          "obj-v2-74aac223bf266e026e235fa74387a0ad24df18ac3ed4dfe1d23b2a78f9baff50"
+        ],
+        "blobIds": [],
+        "payload": {
+          "id": "entry-v2-parity",
+          "title": "Android edit",
+          "content": "Edited offline on Android"
+        },
+        "tombstone": null,
+        "resolutionOf": []
+      },
+      "expectedId": "obj-v2-a208a2e408ffbe4495931a3d4b88950793165b235201102081c8b3e8df99e69d"
+    },
+    {
+      "body": {
+        "protocol": "easylab-drive-v2-append-only",
+        "schemaVersion": 2,
+        "workspaceId": "ws-v2-0123456789abcdef0123456789abcdef",
+        "entityKind": "entry",
+        "entityId": "entry-v2-parity",
+        "operation": "upsert",
+        "baseObjectIds": [
+          "obj-v2-74aac223bf266e026e235fa74387a0ad24df18ac3ed4dfe1d23b2a78f9baff50"
+        ],
+        "blobIds": [],
+        "payload": {
+          "id": "entry-v2-parity",
+          "title": "Web edit",
+          "content": "Edited concurrently on web"
+        },
+        "tombstone": null,
+        "resolutionOf": []
+      },
+      "expectedId": "obj-v2-88fd3a72d2c94697ec114afac9b69051111ae16dbd88e4c5f6c5a7cc31cce296"
+    }
+  ],
+  "commits": [
+    {
+      "body": {
+        "protocol": "easylab-drive-v2-append-only",
+        "schemaVersion": 2,
+        "workspaceId": "ws-v2-0123456789abcdef0123456789abcdef",
+        "operationId": "op-v2-parity-genesis",
+        "createdAt": "2026-08-09T08:00:00.000Z",
+        "parentCommitIds": [],
+        "objectIds": [
+          "obj-v2-74aac223bf266e026e235fa74387a0ad24df18ac3ed4dfe1d23b2a78f9baff50"
+        ],
+        "blobIds": []
+      },
+      "expectedId": "commit-v2-03ad3724f39de5bb15401b032a159c26f723f2f42585b98ecedac5345bd76916"
+    },
+    {
+      "body": {
+        "protocol": "easylab-drive-v2-append-only",
+        "schemaVersion": 2,
+        "workspaceId": "ws-v2-0123456789abcdef0123456789abcdef",
+        "operationId": "op-v2-parity-android",
+        "createdAt": "2026-08-09T08:01:00.000Z",
+        "parentCommitIds": [
+          "commit-v2-03ad3724f39de5bb15401b032a159c26f723f2f42585b98ecedac5345bd76916"
+        ],
+        "objectIds": [
+          "obj-v2-a208a2e408ffbe4495931a3d4b88950793165b235201102081c8b3e8df99e69d"
+        ],
+        "blobIds": []
+      },
+      "expectedId": "commit-v2-6d8053d009c6e9bedd2a8f239a4c5a6b6fb7851c2eba0660dce21f6bfec4b99a"
+    },
+    {
+      "body": {
+        "protocol": "easylab-drive-v2-append-only",
+        "schemaVersion": 2,
+        "workspaceId": "ws-v2-0123456789abcdef0123456789abcdef",
+        "operationId": "op-v2-parity-web",
+        "createdAt": "2026-08-09T08:01:30.000Z",
+        "parentCommitIds": [
+          "commit-v2-03ad3724f39de5bb15401b032a159c26f723f2f42585b98ecedac5345bd76916"
+        ],
+        "objectIds": [
+          "obj-v2-88fd3a72d2c94697ec114afac9b69051111ae16dbd88e4c5f6c5a7cc31cce296"
+        ],
+        "blobIds": []
+      },
+      "expectedId": "commit-v2-1845e3252093d7c6c573eb2312cd9c286f3aff975326dbb4428ae02e5e36943e"
+    }
+  ],
+  "expected": {
+    "tips": [
+      "commit-v2-1845e3252093d7c6c573eb2312cd9c286f3aff975326dbb4428ae02e5e36943e",
+      "commit-v2-6d8053d009c6e9bedd2a8f239a4c5a6b6fb7851c2eba0660dce21f6bfec4b99a"
+    ],
+    "maximalObjectIds": [
+      "obj-v2-88fd3a72d2c94697ec114afac9b69051111ae16dbd88e4c5f6c5a7cc31cce296",
+      "obj-v2-a208a2e408ffbe4495931a3d4b88950793165b235201102081c8b3e8df99e69d"
+    ],
+    "decision": "deterministic-pending-conflict",
+    "conflictId": "conf-v2-fbb6443e3ff17587304cd2abfacb2cab89bfd481ea824ce67f5a27eef834022a",
+    "winner": null,
+    "remoteOverwriteAllowed": false
+  }
+}

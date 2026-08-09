@@ -1,0 +1,192 @@
+{
+  "workspaceId": "ws-v2-11111111111111111111111111111111",
+  "objects": [
+    {
+      "body": {
+        "protocol": "easylab-drive-v2-append-only",
+        "schemaVersion": 2,
+        "workspaceId": "ws-v2-11111111111111111111111111111111",
+        "entityKind": "entry",
+        "entityId": "entry-a",
+        "operation": "upsert",
+        "baseObjectIds": [],
+        "blobIds": [],
+        "payload": { "id": "entry-a", "title": "A base" },
+        "tombstone": null,
+        "resolutionOf": []
+      },
+      "expectedId": "obj-v2-10381928769d938d0b2007c08c20d9f3d0ed8e4d27181221533ab8a70cf880f3"
+    },
+    {
+      "body": {
+        "protocol": "easylab-drive-v2-append-only",
+        "schemaVersion": 2,
+        "workspaceId": "ws-v2-11111111111111111111111111111111",
+        "entityKind": "entry",
+        "entityId": "entry-b",
+        "operation": "upsert",
+        "baseObjectIds": [],
+        "blobIds": [],
+        "payload": { "id": "entry-b", "title": "B base" },
+        "tombstone": null,
+        "resolutionOf": []
+      },
+      "expectedId": "obj-v2-f977c34ceba67d767aaeb6e742f370a7e64ae25f9780401ed67df95de75d8a26"
+    },
+    {
+      "body": {
+        "protocol": "easylab-drive-v2-append-only",
+        "schemaVersion": 2,
+        "workspaceId": "ws-v2-11111111111111111111111111111111",
+        "entityKind": "entry",
+        "entityId": "entry-a",
+        "operation": "upsert",
+        "baseObjectIds": [
+          "obj-v2-10381928769d938d0b2007c08c20d9f3d0ed8e4d27181221533ab8a70cf880f3"
+        ],
+        "blobIds": [],
+        "payload": { "id": "entry-a", "title": "A android" },
+        "tombstone": null,
+        "resolutionOf": []
+      },
+      "expectedId": "obj-v2-83ffcb173f94d4d7af03b17b3b70144e9d77c80a5d9ea1234f34863c639debe9"
+    },
+    {
+      "body": {
+        "protocol": "easylab-drive-v2-append-only",
+        "schemaVersion": 2,
+        "workspaceId": "ws-v2-11111111111111111111111111111111",
+        "entityKind": "entry",
+        "entityId": "entry-a",
+        "operation": "upsert",
+        "baseObjectIds": [
+          "obj-v2-10381928769d938d0b2007c08c20d9f3d0ed8e4d27181221533ab8a70cf880f3"
+        ],
+        "blobIds": [],
+        "payload": { "id": "entry-a", "title": "A web" },
+        "tombstone": null,
+        "resolutionOf": []
+      },
+      "expectedId": "obj-v2-13ddf2ab1a5caaf12a8ad4232b83e4b4951e94e6ad38ace7eb43c63efee4c2c4"
+    },
+    {
+      "body": {
+        "protocol": "easylab-drive-v2-append-only",
+        "schemaVersion": 2,
+        "workspaceId": "ws-v2-11111111111111111111111111111111",
+        "entityKind": "entry",
+        "entityId": "entry-b",
+        "operation": "upsert",
+        "baseObjectIds": [
+          "obj-v2-f977c34ceba67d767aaeb6e742f370a7e64ae25f9780401ed67df95de75d8a26"
+        ],
+        "blobIds": [],
+        "payload": { "id": "entry-b", "title": "B merged tip edit" },
+        "tombstone": null,
+        "resolutionOf": []
+      },
+      "expectedId": "obj-v2-531b35e7161c3de7fde38b27804823ecc5084ccb7ff11fbe8115d891f883b3c9"
+    }
+  ],
+  "commits": [
+    {
+      "body": {
+        "protocol": "easylab-drive-v2-append-only",
+        "schemaVersion": 2,
+        "workspaceId": "ws-v2-11111111111111111111111111111111",
+        "operationId": "op-frontier-genesis",
+        "createdAt": "2026-08-09T09:00:00.000Z",
+        "parentCommitIds": [],
+        "objectIds": [
+          "obj-v2-10381928769d938d0b2007c08c20d9f3d0ed8e4d27181221533ab8a70cf880f3",
+          "obj-v2-f977c34ceba67d767aaeb6e742f370a7e64ae25f9780401ed67df95de75d8a26"
+        ],
+        "blobIds": []
+      },
+      "expectedId": "commit-v2-dbff1cb6e56fe9cbf3e9bfd1f3393c6051551fff796eb1122a3c4f0f537f1df8"
+    },
+    {
+      "body": {
+        "protocol": "easylab-drive-v2-append-only",
+        "schemaVersion": 2,
+        "workspaceId": "ws-v2-11111111111111111111111111111111",
+        "operationId": "op-frontier-android",
+        "createdAt": "2026-08-09T09:01:00.000Z",
+        "parentCommitIds": [
+          "commit-v2-dbff1cb6e56fe9cbf3e9bfd1f3393c6051551fff796eb1122a3c4f0f537f1df8"
+        ],
+        "objectIds": [
+          "obj-v2-83ffcb173f94d4d7af03b17b3b70144e9d77c80a5d9ea1234f34863c639debe9"
+        ],
+        "blobIds": []
+      },
+      "expectedId": "commit-v2-d0c74115cd0b46f9589d83e8b0d56a5193ed4487f20245ef829dd814305344be"
+    },
+    {
+      "body": {
+        "protocol": "easylab-drive-v2-append-only",
+        "schemaVersion": 2,
+        "workspaceId": "ws-v2-11111111111111111111111111111111",
+        "operationId": "op-frontier-web",
+        "createdAt": "2026-08-09T09:01:10.000Z",
+        "parentCommitIds": [
+          "commit-v2-dbff1cb6e56fe9cbf3e9bfd1f3393c6051551fff796eb1122a3c4f0f537f1df8"
+        ],
+        "objectIds": [
+          "obj-v2-13ddf2ab1a5caaf12a8ad4232b83e4b4951e94e6ad38ace7eb43c63efee4c2c4"
+        ],
+        "blobIds": []
+      },
+      "expectedId": "commit-v2-63f7363f9de3d1b329ba5867d7cc1c06af70fd45ad9dabe9a11f0324f93cdd2a"
+    },
+    {
+      "body": {
+        "protocol": "easylab-drive-v2-append-only",
+        "schemaVersion": 2,
+        "workspaceId": "ws-v2-11111111111111111111111111111111",
+        "operationId": "op-frontier-unrelated",
+        "createdAt": "2026-08-09T09:02:00.000Z",
+        "parentCommitIds": [
+          "commit-v2-63f7363f9de3d1b329ba5867d7cc1c06af70fd45ad9dabe9a11f0324f93cdd2a",
+          "commit-v2-d0c74115cd0b46f9589d83e8b0d56a5193ed4487f20245ef829dd814305344be"
+        ],
+        "objectIds": [
+          "obj-v2-531b35e7161c3de7fde38b27804823ecc5084ccb7ff11fbe8115d891f883b3c9"
+        ],
+        "blobIds": []
+      },
+      "expectedId": "commit-v2-c3e461c40f7730441845659839e36505533e1db5619db59a4ba27c0a7d82582f"
+    },
+    {
+      "body": {
+        "protocol": "easylab-drive-v2-append-only",
+        "schemaVersion": 2,
+        "workspaceId": "ws-v2-11111111111111111111111111111111",
+        "operationId": "op-frontier-merge-only",
+        "createdAt": "2026-08-09T09:03:00.000Z",
+        "parentCommitIds": [
+          "commit-v2-c3e461c40f7730441845659839e36505533e1db5619db59a4ba27c0a7d82582f"
+        ],
+        "objectIds": [],
+        "blobIds": []
+      },
+      "expectedId": "commit-v2-2d824fc3b21d126e0444665fc6d841d43f03489ab9b3148f523866539480cf4c"
+    }
+  ],
+  "expected": {
+    "tips": [
+      "commit-v2-2d824fc3b21d126e0444665fc6d841d43f03489ab9b3148f523866539480cf4c"
+    ],
+    "frontiers": {
+      "entry:entry-a": [
+        "obj-v2-13ddf2ab1a5caaf12a8ad4232b83e4b4951e94e6ad38ace7eb43c63efee4c2c4",
+        "obj-v2-83ffcb173f94d4d7af03b17b3b70144e9d77c80a5d9ea1234f34863c639debe9"
+      ],
+      "entry:entry-b": [
+        "obj-v2-531b35e7161c3de7fde38b27804823ecc5084ccb7ff11fbe8115d891f883b3c9"
+      ]
+    },
+    "entryAConflictRemains": true,
+    "mergeOnlyPreservesState": true
+  }
+}

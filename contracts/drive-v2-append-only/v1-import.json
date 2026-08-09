@@ -1,0 +1,92 @@
+{
+  "source": {
+    "protocol": "drive-v1",
+    "mode": "read-only",
+    "manifestVerified": true,
+    "completeInventoryVerified": true,
+    "duplicates": false,
+    "malformedRecords": false,
+    "manifestTimestamp": "2026-08-09T07:00:00.000Z",
+    "semanticSnapshotId": "8f4a7c3d"
+  },
+  "destination": {
+    "protocol": "easylab-drive-v2-append-only",
+    "commitKind": "genesis-import",
+    "parentCommitIds": [],
+    "object": {
+      "body": {
+        "protocol": "easylab-drive-v2-append-only",
+        "schemaVersion": 2,
+        "workspaceId": "ws-v2-77777777777777777777777777777777",
+        "entityKind": "entry",
+        "entityId": "entry-imported",
+        "operation": "upsert",
+        "baseObjectIds": [],
+        "blobIds": [],
+        "payload": {
+          "id": "entry-imported",
+          "title": "Imported from verified v1",
+          "futureRemoteField": { "preserved": true }
+        },
+        "tombstone": null,
+        "resolutionOf": []
+      },
+      "expectedId": "obj-v2-8a3109ea93c62bbe579621b59af2eb6ebd67dbe2d6fc7c66f1c99614500b09dc"
+    },
+    "commit": {
+      "body": {
+        "protocol": "easylab-drive-v2-append-only",
+        "schemaVersion": 2,
+        "workspaceId": "ws-v2-77777777777777777777777777777777",
+        "operationId": "import-v1-8f4a7c3d",
+        "createdAt": "2026-08-09T07:00:00.000Z",
+        "parentCommitIds": [],
+        "objectIds": [
+          "obj-v2-8a3109ea93c62bbe579621b59af2eb6ebd67dbe2d6fc7c66f1c99614500b09dc"
+        ],
+        "blobIds": []
+      },
+      "expectedId": "commit-v2-e575fe9beb41201a62e289a28683ebeb262fa39586b68c09156268409202f6e4"
+    }
+  },
+  "repeatImport": {
+    "objectBody": {
+      "protocol": "easylab-drive-v2-append-only",
+      "schemaVersion": 2,
+      "workspaceId": "ws-v2-77777777777777777777777777777777",
+      "entityKind": "entry",
+      "entityId": "entry-imported",
+      "operation": "upsert",
+      "baseObjectIds": [],
+      "blobIds": [],
+      "payload": {
+        "id": "entry-imported",
+        "title": "Imported from verified v1",
+        "futureRemoteField": { "preserved": true }
+      },
+      "tombstone": null,
+      "resolutionOf": []
+    },
+    "commitBody": {
+      "protocol": "easylab-drive-v2-append-only",
+      "schemaVersion": 2,
+      "workspaceId": "ws-v2-77777777777777777777777777777777",
+      "operationId": "import-v1-8f4a7c3d",
+      "createdAt": "2026-08-09T07:00:00.000Z",
+      "parentCommitIds": [],
+      "objectIds": [
+        "obj-v2-8a3109ea93c62bbe579621b59af2eb6ebd67dbe2d6fc7c66f1c99614500b09dc"
+      ],
+      "blobIds": []
+    },
+    "expectedObjectId": "obj-v2-8a3109ea93c62bbe579621b59af2eb6ebd67dbe2d6fc7c66f1c99614500b09dc",
+    "expectedCommitId": "commit-v2-e575fe9beb41201a62e289a28683ebeb262fa39586b68c09156268409202f6e4"
+  },
+  "expected": {
+    "v1MutationCount": 0,
+    "v1PhysicalDeletionCount": 0,
+    "v2CommitPublishedLast": true,
+    "repeatImportWithSameSnapshot": "same-canonical-commit-id",
+    "missingOrMalformedV1Input": "block"
+  }
+}

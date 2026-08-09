@@ -1,0 +1,193 @@
+{
+  "gateVersion": 1,
+  "driveContractVersion": 2,
+  "protocol": "easylab-drive-v2-append-only",
+  "writeGate": "disabled-until-v2-runtime-parity",
+  "workspace": {
+    "rootFolderName": "Easylab Lab Notebook v2",
+    "protocolMarker": "easylabDriveProtocol=v2-append-only",
+    "managedFolders": ["objects", "blobs", "commits"],
+    "provisioning": "explicit-single-client-only",
+    "duplicateMarkedRoots": "block",
+    "v1Boundary": "read-only-import-source"
+  },
+  "remoteMutation": {
+    "mode": "create-only",
+    "preGeneratedDriveFileIdRequired": true,
+    "filesUpdateAllowed": false,
+    "multipartPatchAllowed": false,
+    "resumablePatchAllowed": false,
+    "physicalDeletionAllowed": false,
+    "retryUsesSameDriveFileId": true,
+    "ambiguousCreateRequiresExactReconciliation": true
+  },
+  "canonicalIdentity": {
+    "jsonCanonicalization": "RFC-8785",
+    "digest": "SHA-256",
+    "objectId": "obj-v2-{sha256-canonical-envelope-body}",
+    "blobId": "blob-v2-{sha256-bytes}",
+    "commitId": "commit-v2-{sha256-canonical-commit-body}",
+    "conflictId": "conf-v2-{sha256-target-and-sorted-maximal-object-ids}",
+    "forbiddenInputs": [
+      "accountEmail",
+      "accountId",
+      "driveFileId",
+      "driveVersion",
+      "etag",
+      "oauthToken",
+      "resumableSessionUrl"
+    ]
+  },
+  "remoteSchemas": {
+    "objectEnvelopeBody": {
+      "exactFields": [
+        "protocol",
+        "schemaVersion",
+        "workspaceId",
+        "entityKind",
+        "entityId",
+        "operation",
+        "baseObjectIds",
+        "blobIds",
+        "payload",
+        "tombstone",
+        "resolutionOf"
+      ],
+      "operations": ["upsert", "tombstone", "resolve-upsert", "resolve-tombstone"],
+      "setFieldsSortedUnique": ["baseObjectIds", "blobIds", "resolutionOf"],
+      "upsertShape": "payload-object-and-null-tombstone",
+      "tombstoneShape": "null-payload-and-canonical-utc-tombstone",
+      "resolutionRequires": "resolutionOf-equals-baseObjectIds-equals-complete-parent-frontier"
+    },
+    "entityRelationships": {
+      "entry": [],
+      "attachment": ["entryId"],
+      "fileBoxItem": ["entryId", "attachmentId"],
+      "transfer": ["entryId", "attachmentId", "fileBoxItemId"],
+      "requiredIds": "nonblank-and-reference-existing-reachable-targets-of-the-declared-kind",
+      "parentConsistency": "all-referenced-parent-links-must-agree"
+    },
+    "commitBody": {
+      "exactFields": [
+        "protocol",
+        "schemaVersion",
+        "workspaceId",
+        "operationId",
+        "createdAt",
+        "parentCommitIds",
+        "objectIds",
+        "blobIds"
+      ],
+      "setFieldsSortedUnique": ["parentCommitIds", "objectIds", "blobIds"],
+      "introducedTargetLimit": "one-object-per-entity-target",
+      "blobReferences": "exact-union-required-by-introduced-objects"
+    },
+    "artifactAppProperties": {
+      "required": [
+        "easylabDriveProtocol",
+        "easylabWorkspaceId",
+        "easylabArtifactKind",
+        "easylabCanonicalId",
+        "easylabContentSha256"
+      ],
+      "exactMatchRequired": true
+    },
+    "workspaceRoot": {
+      "exactName": "Easylab Lab Notebook v2",
+      "exactParent": "root",
+      "mimeType": "application/vnd.google-apps.folder",
+      "appProperties": [
+        "easylabDriveProtocol",
+        "easylabWorkspaceId",
+        "easylabArtifactKind"
+      ]
+    },
+    "managedFolder": {
+      "exactRoles": ["objects", "blobs", "commits"],
+      "exactParent": "saved-workspace-root",
+      "mimeType": "application/vnd.google-apps.folder",
+      "appProperties": [
+        "easylabDriveProtocol",
+        "easylabWorkspaceId",
+        "easylabArtifactKind",
+        "easylabFolderRole"
+      ]
+    }
+  },
+  "paths": {
+    "object": "objects/{objectId}.json",
+    "blob": "blobs/{blobId}.bin",
+    "commit": "commits/{commitId}.json"
+  },
+  "transaction": {
+    "order": ["blobs", "objects", "commit"],
+    "commitLast": true,
+    "genesis": "exactly-one-parentless-commit",
+    "commitParents": "all-observed-valid-tips",
+    "unreferencedPrerequisites": "inert-orphans",
+    "partialTransactionVisible": false,
+    "checkpointBeforeVerifiedCommit": false
+  },
+  "frontier": {
+    "scope": "per-entity-across-all-valid-reachable-commits",
+    "objectBaseReferences": "same-target-only",
+    "newObjectBases": "complete-parent-history-target-frontier",
+    "unrelatedDescendantCommitPreservesState": true,
+    "mergeOnlyCommitPreservesEveryEntityFrontier": true
+  },
+  "merge": {
+    "causalDescendant": "supersedes-ancestor",
+    "concurrentIdenticalObject": "converge",
+    "concurrentDivergentEdit": "deterministic-pending-conflict",
+    "concurrentDivergentEditProjection": "hidden-until-explicit-resolution",
+    "concurrentDeleteEdit": "deterministic-pending-conflict-and-hide-live-target",
+    "concurrentIdenticalTombstones": "converge",
+    "concurrentDivergentTombstones": "deterministic-pending-conflict-and-hide-live-target",
+    "equalInstantDivergentTombstones": "deterministic-pending-conflict-and-hide-live-target",
+    "resolutionRequires": "all-maximal-object-ids-and-all-observed-tips",
+    "regularUpsertAfterTombstone": "invalid-restore-must-be-explicit",
+    "wallClockTieBreakAllowed": false
+  },
+  "deletions": {
+    "physicalDriveDeletion": false,
+    "nonResurrection": true,
+    "cascade": "parent-transitively-suppresses-descendants",
+    "unresolvedDeleteEditProjection": "hidden",
+    "resolutionOperationRequiredToRestore": true
+  },
+  "verification": {
+    "exhaustivePagination": true,
+    "exactDuplicateArtifacts": "equivalent",
+    "divergentDuplicateArtifacts": "block",
+    "missingReferencedArtifact": "block",
+    "malformedArtifact": "block-with-zero-remote-mutation",
+    "unknownManagedArtifact": "block-with-zero-remote-mutation",
+    "graphCycle": "block-with-zero-remote-mutation"
+  },
+  "localOperationIdentity": {
+    "tuple": ["accountScopeId", "savedRootDriveFileId", "workspaceId", "operationId"],
+    "immutableArtifactDescriptorsPersistedBeforeMutation": true,
+    "accountSwitch": "block-with-zero-remote-mutation",
+    "savedRootSwitch": "block-with-zero-remote-mutation",
+    "workspaceMarkerSwitch": "block-with-zero-remote-mutation",
+    "managedFolderSwitch": "block-with-zero-remote-mutation",
+    "duplicateMarkedRoot": "block-with-zero-remote-mutation",
+    "crossAccountJournalReadAllowed": false
+  },
+  "upload": {
+    "multipartMaximumExclusiveBytes": 5242880,
+    "resumableMinimumInclusiveBytes": 5242880,
+    "allModesCreateOnly": true,
+    "operationIdentityAccountScoped": true,
+    "sessionUrlPersisted": false
+  },
+  "runtime": {
+    "contractOnly": true,
+    "oauthScope": "https://www.googleapis.com/auth/drive.file",
+    "androidProductionWired": false,
+    "webProductionWired": false,
+    "electronProductionWired": false,
+    "nativeDriveWritesAllowed": false,
+    "liveDriveValidationPerformed": false
+  }
+}

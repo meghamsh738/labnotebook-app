@@ -1,0 +1,146 @@
+{
+  "workspaceId": "ws-v2-44444444444444444444444444444444",
+  "target": { "entityKind": "entry", "entityId": "entry-tombstone" },
+  "objects": [
+    {
+      "body": {
+        "protocol": "easylab-drive-v2-append-only",
+        "schemaVersion": 2,
+        "workspaceId": "ws-v2-44444444444444444444444444444444",
+        "entityKind": "entry",
+        "entityId": "entry-tombstone",
+        "operation": "upsert",
+        "baseObjectIds": [],
+        "blobIds": [],
+        "payload": { "id": "entry-tombstone", "title": "Sample entry" },
+        "tombstone": null,
+        "resolutionOf": []
+      },
+      "expectedId": "obj-v2-cf3f9e4531ae9c2b7571e3b099cfc8b6ca51b1294e595870906b8e6e1185e74b"
+    },
+    {
+      "body": {
+        "protocol": "easylab-drive-v2-append-only",
+        "schemaVersion": 2,
+        "workspaceId": "ws-v2-44444444444444444444444444444444",
+        "entityKind": "entry",
+        "entityId": "entry-tombstone",
+        "operation": "tombstone",
+        "baseObjectIds": [
+          "obj-v2-cf3f9e4531ae9c2b7571e3b099cfc8b6ca51b1294e595870906b8e6e1185e74b"
+        ],
+        "blobIds": [],
+        "payload": null,
+        "tombstone": {
+          "deletedAt": "2026-08-09T12:00:00.000Z",
+          "deletedByDeviceId": "device-a"
+        },
+        "resolutionOf": []
+      },
+      "expectedId": "obj-v2-b7e28bdf75fa2a7c742e5266ed86a8f19a6a14aac6112ceecd7d603e17ee7208"
+    },
+    {
+      "body": {
+        "protocol": "easylab-drive-v2-append-only",
+        "schemaVersion": 2,
+        "workspaceId": "ws-v2-44444444444444444444444444444444",
+        "entityKind": "entry",
+        "entityId": "entry-tombstone",
+        "operation": "tombstone",
+        "baseObjectIds": [
+          "obj-v2-cf3f9e4531ae9c2b7571e3b099cfc8b6ca51b1294e595870906b8e6e1185e74b"
+        ],
+        "blobIds": [],
+        "payload": null,
+        "tombstone": {
+          "deletedAt": "2026-08-09T12:05:00.000Z",
+          "deletedByDeviceId": "device-b"
+        },
+        "resolutionOf": []
+      },
+      "expectedId": "obj-v2-793c4f143e2a1ce2743294b4deeddfd24d06beeaf68541c53bec1f93a98aebfd"
+    },
+    {
+      "body": {
+        "protocol": "easylab-drive-v2-append-only",
+        "schemaVersion": 2,
+        "workspaceId": "ws-v2-44444444444444444444444444444444",
+        "entityKind": "entry",
+        "entityId": "entry-tombstone",
+        "operation": "tombstone",
+        "baseObjectIds": [
+          "obj-v2-cf3f9e4531ae9c2b7571e3b099cfc8b6ca51b1294e595870906b8e6e1185e74b"
+        ],
+        "blobIds": [],
+        "payload": null,
+        "tombstone": {
+          "deletedAt": "2026-08-09T12:00:00.000Z",
+          "deletedByDeviceId": "device-c"
+        },
+        "resolutionOf": []
+      },
+      "expectedId": "obj-v2-94bd0db1ecceab284b91e889a1ebb93586a68a76eb42dcace476521094f1813a"
+    },
+    {
+      "body": {
+        "protocol": "easylab-drive-v2-append-only",
+        "schemaVersion": 2,
+        "workspaceId": "ws-v2-44444444444444444444444444444444",
+        "entityKind": "entry",
+        "entityId": "entry-tombstone",
+        "operation": "tombstone",
+        "baseObjectIds": [
+          "obj-v2-b7e28bdf75fa2a7c742e5266ed86a8f19a6a14aac6112ceecd7d603e17ee7208"
+        ],
+        "blobIds": [],
+        "payload": null,
+        "tombstone": {
+          "deletedAt": "2026-08-09T12:10:00.000Z",
+          "deletedByDeviceId": "device-a"
+        },
+        "resolutionOf": []
+      },
+      "expectedId": "obj-v2-b80b7e30a30861839320a32a41ac10ba9d04402444d71d17f515341583f6e09d"
+    }
+  ],
+  "scenarios": {
+    "identicalConcurrentCopies": {
+      "frontier": [
+        "obj-v2-b7e28bdf75fa2a7c742e5266ed86a8f19a6a14aac6112ceecd7d603e17ee7208",
+        "obj-v2-b7e28bdf75fa2a7c742e5266ed86a8f19a6a14aac6112ceecd7d603e17ee7208"
+      ],
+      "expectedUniqueFrontier": [
+        "obj-v2-b7e28bdf75fa2a7c742e5266ed86a8f19a6a14aac6112ceecd7d603e17ee7208"
+      ],
+      "decision": "converge"
+    },
+    "unequalInstantConcurrent": {
+      "frontier": [
+        "obj-v2-793c4f143e2a1ce2743294b4deeddfd24d06beeaf68541c53bec1f93a98aebfd",
+        "obj-v2-b7e28bdf75fa2a7c742e5266ed86a8f19a6a14aac6112ceecd7d603e17ee7208"
+      ],
+      "expectedConflictId": "conf-v2-816b3a3da581bc4ac273b0c3db2d8a109a382b89fd76a5f441f8867488b1b394",
+      "decision": "deterministic-pending-conflict",
+      "liveTargetVisible": false
+    },
+    "equalInstantDivergent": {
+      "frontier": [
+        "obj-v2-94bd0db1ecceab284b91e889a1ebb93586a68a76eb42dcace476521094f1813a",
+        "obj-v2-b7e28bdf75fa2a7c742e5266ed86a8f19a6a14aac6112ceecd7d603e17ee7208"
+      ],
+      "expectedConflictId": "conf-v2-bcc8da529a679019e13fe6d1f12b4d7ad81c65e968fd4505728e63c2b5f3022d",
+      "decision": "deterministic-pending-conflict",
+      "liveTargetVisible": false
+    },
+    "causalTombstone": {
+      "frontier": [
+        "obj-v2-b80b7e30a30861839320a32a41ac10ba9d04402444d71d17f515341583f6e09d"
+      ],
+      "superseded": [
+        "obj-v2-b7e28bdf75fa2a7c742e5266ed86a8f19a6a14aac6112ceecd7d603e17ee7208"
+      ],
+      "decision": "deleted"
+    }
+  },
+  "wallClockTieBreakAllowed": false
+}

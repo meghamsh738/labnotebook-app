@@ -1,0 +1,214 @@
+{
+  "workspaceId": "ws-v2-33333333333333333333333333333333",
+  "target": { "entityKind": "entry", "entityId": "entry-v2-deleted" },
+  "objects": [
+    {
+      "body": {
+        "protocol": "easylab-drive-v2-append-only", "schemaVersion": 2,
+        "workspaceId": "ws-v2-33333333333333333333333333333333",
+        "entityKind": "entry", "entityId": "entry-v2-deleted", "operation": "upsert",
+        "baseObjectIds": [], "blobIds": [],
+        "payload": { "id": "entry-v2-deleted", "title": "Base before race" },
+        "tombstone": null, "resolutionOf": []
+      },
+      "expectedId": "obj-v2-481ad9fdc7cc76448f691eec7ee1b709d8830ba2f1b0c91851d6b02379f26519"
+    },
+    {
+      "body": {
+        "protocol": "easylab-drive-v2-append-only", "schemaVersion": 2,
+        "workspaceId": "ws-v2-33333333333333333333333333333333",
+        "entityKind": "attachment", "entityId": "attachment-v2-child", "operation": "upsert",
+        "baseObjectIds": [], "blobIds": [],
+        "payload": {
+          "id": "attachment-v2-child", "entryId": "entry-v2-deleted", "filename": "child.csv"
+        },
+        "tombstone": null, "resolutionOf": []
+      },
+      "expectedId": "obj-v2-3bc65ed40c56ee4b8c547f6327625db6bf1253ff7b5730d9cad081827a6e7fc8"
+    },
+    {
+      "body": {
+        "protocol": "easylab-drive-v2-append-only", "schemaVersion": 2,
+        "workspaceId": "ws-v2-33333333333333333333333333333333",
+        "entityKind": "fileBoxItem", "entityId": "file-box-v2-child", "operation": "upsert",
+        "baseObjectIds": [], "blobIds": [],
+        "payload": {
+          "id": "file-box-v2-child", "entryId": "entry-v2-deleted",
+          "attachmentId": "attachment-v2-child"
+        },
+        "tombstone": null, "resolutionOf": []
+      },
+      "expectedId": "obj-v2-cb500ae595b9c72604c4478d1f9e24fa7a8c6c48c69ae05c82b99d4656d59d92"
+    },
+    {
+      "body": {
+        "protocol": "easylab-drive-v2-append-only", "schemaVersion": 2,
+        "workspaceId": "ws-v2-33333333333333333333333333333333",
+        "entityKind": "transfer", "entityId": "transfer-v2-child", "operation": "upsert",
+        "baseObjectIds": [], "blobIds": [],
+        "payload": {
+          "id": "transfer-v2-child", "entryId": "entry-v2-deleted",
+          "attachmentId": "attachment-v2-child", "fileBoxItemId": "file-box-v2-child"
+        },
+        "tombstone": null, "resolutionOf": []
+      },
+      "expectedId": "obj-v2-56c7bb25583724b1084f5c1e2af09d2595ae8ff2df3fc06d7c12189a09f72ed0"
+    },
+    {
+      "body": {
+        "protocol": "easylab-drive-v2-append-only", "schemaVersion": 2,
+        "workspaceId": "ws-v2-33333333333333333333333333333333",
+        "entityKind": "entry", "entityId": "entry-v2-deleted", "operation": "upsert",
+        "baseObjectIds": [
+          "obj-v2-481ad9fdc7cc76448f691eec7ee1b709d8830ba2f1b0c91851d6b02379f26519"
+        ],
+        "blobIds": [], "payload": { "id": "entry-v2-deleted", "title": "Concurrent edit" },
+        "tombstone": null, "resolutionOf": []
+      },
+      "expectedId": "obj-v2-d9617adbfd069ec2300b04621b691d79cd8095bc9406926331924b6496210fca"
+    },
+    {
+      "body": {
+        "protocol": "easylab-drive-v2-append-only", "schemaVersion": 2,
+        "workspaceId": "ws-v2-33333333333333333333333333333333",
+        "entityKind": "entry", "entityId": "entry-v2-deleted", "operation": "tombstone",
+        "baseObjectIds": [
+          "obj-v2-481ad9fdc7cc76448f691eec7ee1b709d8830ba2f1b0c91851d6b02379f26519"
+        ],
+        "blobIds": [], "payload": null,
+        "tombstone": {
+          "deletedAt": "2026-08-09T11:01:00.000Z", "deletedByDeviceId": "device-electron"
+        },
+        "resolutionOf": []
+      },
+      "expectedId": "obj-v2-e19eefb790d326f65a36d33ada4a1f03008b2aca99400507cfa2e11faf404d33"
+    },
+    {
+      "body": {
+        "protocol": "easylab-drive-v2-append-only", "schemaVersion": 2,
+        "workspaceId": "ws-v2-33333333333333333333333333333333",
+        "entityKind": "entry", "entityId": "entry-v2-deleted", "operation": "resolve-upsert",
+        "baseObjectIds": [
+          "obj-v2-d9617adbfd069ec2300b04621b691d79cd8095bc9406926331924b6496210fca",
+          "obj-v2-e19eefb790d326f65a36d33ada4a1f03008b2aca99400507cfa2e11faf404d33"
+        ],
+        "blobIds": [],
+        "payload": { "id": "entry-v2-deleted", "title": "Explicitly restored merged entry" },
+        "tombstone": null,
+        "resolutionOf": [
+          "obj-v2-d9617adbfd069ec2300b04621b691d79cd8095bc9406926331924b6496210fca",
+          "obj-v2-e19eefb790d326f65a36d33ada4a1f03008b2aca99400507cfa2e11faf404d33"
+        ]
+      },
+      "expectedId": "obj-v2-dedf6d056d0ce360c67e1240ccb38052926874d77ecb42b1384d443e01bcc674"
+    }
+  ],
+  "commits": [
+    {
+      "body": {
+        "protocol": "easylab-drive-v2-append-only", "schemaVersion": 2,
+        "workspaceId": "ws-v2-33333333333333333333333333333333",
+        "operationId": "op-delete-edit-base", "createdAt": "2026-08-09T11:00:00.000Z",
+        "parentCommitIds": [],
+        "objectIds": [
+          "obj-v2-3bc65ed40c56ee4b8c547f6327625db6bf1253ff7b5730d9cad081827a6e7fc8",
+          "obj-v2-481ad9fdc7cc76448f691eec7ee1b709d8830ba2f1b0c91851d6b02379f26519",
+          "obj-v2-56c7bb25583724b1084f5c1e2af09d2595ae8ff2df3fc06d7c12189a09f72ed0",
+          "obj-v2-cb500ae595b9c72604c4478d1f9e24fa7a8c6c48c69ae05c82b99d4656d59d92"
+        ],
+        "blobIds": []
+      },
+      "expectedId": "commit-v2-19ace7843a78730dddeabb31ab59913a6f24a1b29e673608772299022e7d76bb"
+    },
+    {
+      "body": {
+        "protocol": "easylab-drive-v2-append-only", "schemaVersion": 2,
+        "workspaceId": "ws-v2-33333333333333333333333333333333",
+        "operationId": "op-delete-edit-edit", "createdAt": "2026-08-09T11:01:10.000Z",
+        "parentCommitIds": [
+          "commit-v2-19ace7843a78730dddeabb31ab59913a6f24a1b29e673608772299022e7d76bb"
+        ],
+        "objectIds": [
+          "obj-v2-d9617adbfd069ec2300b04621b691d79cd8095bc9406926331924b6496210fca"
+        ],
+        "blobIds": []
+      },
+      "expectedId": "commit-v2-bac64eb8d039f3d41acf2912b32597631010d755750f5a4b2c82b761d19b71c7"
+    },
+    {
+      "body": {
+        "protocol": "easylab-drive-v2-append-only", "schemaVersion": 2,
+        "workspaceId": "ws-v2-33333333333333333333333333333333",
+        "operationId": "op-delete-edit-tombstone", "createdAt": "2026-08-09T11:01:20.000Z",
+        "parentCommitIds": [
+          "commit-v2-19ace7843a78730dddeabb31ab59913a6f24a1b29e673608772299022e7d76bb"
+        ],
+        "objectIds": [
+          "obj-v2-e19eefb790d326f65a36d33ada4a1f03008b2aca99400507cfa2e11faf404d33"
+        ],
+        "blobIds": []
+      },
+      "expectedId": "commit-v2-1d0acddcfd0c07805ed4ff8904250831eb54c88cd23599e5ccedbf0d16e3b1f2"
+    },
+    {
+      "body": {
+        "protocol": "easylab-drive-v2-append-only", "schemaVersion": 2,
+        "workspaceId": "ws-v2-33333333333333333333333333333333",
+        "operationId": "op-delete-edit-resolution", "createdAt": "2026-08-09T11:02:00.000Z",
+        "parentCommitIds": [
+          "commit-v2-1d0acddcfd0c07805ed4ff8904250831eb54c88cd23599e5ccedbf0d16e3b1f2",
+          "commit-v2-bac64eb8d039f3d41acf2912b32597631010d755750f5a4b2c82b761d19b71c7"
+        ],
+        "objectIds": [
+          "obj-v2-dedf6d056d0ce360c67e1240ccb38052926874d77ecb42b1384d443e01bcc674"
+        ],
+        "blobIds": []
+      },
+      "expectedId": "commit-v2-5c3c12b6004389b737bc83f7847b2235bc60649670935d47dc1e2a58c1a4b2bd"
+    }
+  ],
+  "raceSnapshot": {
+    "commitIds": [
+      "commit-v2-19ace7843a78730dddeabb31ab59913a6f24a1b29e673608772299022e7d76bb",
+      "commit-v2-bac64eb8d039f3d41acf2912b32597631010d755750f5a4b2c82b761d19b71c7",
+      "commit-v2-1d0acddcfd0c07805ed4ff8904250831eb54c88cd23599e5ccedbf0d16e3b1f2"
+    ],
+    "expected": {
+      "frontier": [
+        "obj-v2-d9617adbfd069ec2300b04621b691d79cd8095bc9406926331924b6496210fca",
+        "obj-v2-e19eefb790d326f65a36d33ada4a1f03008b2aca99400507cfa2e11faf404d33"
+      ],
+      "conflictId": "conf-v2-1a81936bce2eedaaf8371e54498bc88a870823b73ad217d2ebd396ceb64ef5a4",
+      "decision": "deterministic-pending-conflict",
+      "visibleTargets": [],
+      "suppressedTargets": [
+        "attachment:attachment-v2-child", "entry:entry-v2-deleted",
+        "fileBoxItem:file-box-v2-child", "transfer:transfer-v2-child"
+      ],
+      "resurrectionAllowed": false,
+      "resolutionMustReference": [
+        "obj-v2-d9617adbfd069ec2300b04621b691d79cd8095bc9406926331924b6496210fca",
+        "obj-v2-e19eefb790d326f65a36d33ada4a1f03008b2aca99400507cfa2e11faf404d33"
+      ]
+    }
+  },
+  "resolvedSnapshot": {
+    "commitIds": [
+      "commit-v2-19ace7843a78730dddeabb31ab59913a6f24a1b29e673608772299022e7d76bb",
+      "commit-v2-bac64eb8d039f3d41acf2912b32597631010d755750f5a4b2c82b761d19b71c7",
+      "commit-v2-1d0acddcfd0c07805ed4ff8904250831eb54c88cd23599e5ccedbf0d16e3b1f2",
+      "commit-v2-5c3c12b6004389b737bc83f7847b2235bc60649670935d47dc1e2a58c1a4b2bd"
+    ],
+    "expected": {
+      "frontier": [
+        "obj-v2-dedf6d056d0ce360c67e1240ccb38052926874d77ecb42b1384d443e01bcc674"
+      ],
+      "visibleTargets": [
+        "attachment:attachment-v2-child", "entry:entry-v2-deleted",
+        "fileBoxItem:file-box-v2-child", "transfer:transfer-v2-child"
+      ],
+      "suppressedTargets": [],
+      "explicitResolution": true
+    }
+  }
+}

@@ -1,0 +1,56 @@
+{
+  "logicalPath": "objects/obj-v2-d818753f488e0d822d3c1906148d5668ee49678c83ac5005eab13033756d79be.json",
+  "exactCopies": [
+    {
+      "driveFileId": "fixture-duplicate-drive-id-a",
+      "parentFolderDriveFileId": "fixture-v2-objects-folder-id",
+      "path": "objects/obj-v2-d818753f488e0d822d3c1906148d5668ee49678c83ac5005eab13033756d79be.json",
+      "mimeType": "application/json",
+      "byteCount": 327,
+      "contentSha256": "d818753f488e0d822d3c1906148d5668ee49678c83ac5005eab13033756d79be",
+      "appProperties": {
+        "easylabDriveProtocol": "v2-append-only",
+        "easylabWorkspaceId": "ws-v2-22222222222222222222222222222222",
+        "easylabArtifactKind": "object",
+        "easylabCanonicalId": "obj-v2-d818753f488e0d822d3c1906148d5668ee49678c83ac5005eab13033756d79be",
+        "easylabContentSha256": "d818753f488e0d822d3c1906148d5668ee49678c83ac5005eab13033756d79be"
+      }
+    },
+    {
+      "driveFileId": "fixture-duplicate-drive-id-b",
+      "parentFolderDriveFileId": "fixture-v2-objects-folder-id",
+      "path": "objects/obj-v2-d818753f488e0d822d3c1906148d5668ee49678c83ac5005eab13033756d79be.json",
+      "mimeType": "application/json",
+      "byteCount": 327,
+      "contentSha256": "d818753f488e0d822d3c1906148d5668ee49678c83ac5005eab13033756d79be",
+      "appProperties": {
+        "easylabDriveProtocol": "v2-append-only",
+        "easylabWorkspaceId": "ws-v2-22222222222222222222222222222222",
+        "easylabArtifactKind": "object",
+        "easylabCanonicalId": "obj-v2-d818753f488e0d822d3c1906148d5668ee49678c83ac5005eab13033756d79be",
+        "easylabContentSha256": "d818753f488e0d822d3c1906148d5668ee49678c83ac5005eab13033756d79be"
+      }
+    }
+  ],
+  "divergentCopy": {
+    "driveFileId": "fixture-duplicate-drive-id-c",
+    "parentFolderDriveFileId": "fixture-v2-objects-folder-id",
+    "path": "objects/obj-v2-d818753f488e0d822d3c1906148d5668ee49678c83ac5005eab13033756d79be.json",
+    "mimeType": "application/json",
+    "byteCount": 328,
+    "contentSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "appProperties": {
+      "easylabDriveProtocol": "v2-append-only",
+      "easylabWorkspaceId": "ws-v2-22222222222222222222222222222222",
+      "easylabArtifactKind": "object",
+      "easylabCanonicalId": "obj-v2-d818753f488e0d822d3c1906148d5668ee49678c83ac5005eab13033756d79be",
+      "easylabContentSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    }
+  },
+  "expected": {
+    "exactCopiesDecision": "equivalent",
+    "divergentCopiesDecision": "block",
+    "driveFileIdAffectsCanonicalIdentity": false,
+    "remoteMutationAllowedAfterDivergence": false
+  }
+}

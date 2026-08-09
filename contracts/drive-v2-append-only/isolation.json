@@ -1,0 +1,189 @@
+{
+  "storedIdentity": {
+    "accountScopeId": "local-account-scope-a",
+    "savedRootDriveFileId": "local-root-drive-id-a",
+    "workspaceId": "ws-v2-55555555555555555555555555555555",
+    "operationId": "op-v2-isolation"
+  },
+  "immutableArtifactDescriptors": [
+    {
+      "kind": "object",
+      "canonicalId": "obj-v2-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "generatedDriveFileId": "local-generated-drive-id-a",
+      "path": "objects/obj-v2-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.json",
+      "mimeType": "application/json",
+      "byteCount": 128,
+      "contentSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "kind": "commit",
+      "canonicalId": "commit-v2-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "generatedDriveFileId": "local-generated-drive-id-b",
+      "path": "commits/commit-v2-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.json",
+      "mimeType": "application/json",
+      "byteCount": 256,
+      "contentSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    }
+  ],
+  "resumeCases": [
+    {
+      "name": "exact-context",
+      "current": {
+        "accountScopeId": "local-account-scope-a",
+        "savedRootDriveFileId": "local-root-drive-id-a",
+        "workspaceId": "ws-v2-55555555555555555555555555555555",
+        "operationId": "op-v2-isolation",
+        "managedFolderSetId": "folders-a",
+        "matchingMarkedRootCount": 1
+      },
+      "storedManagedFolderSetId": "folders-a",
+      "expected": "resume"
+    },
+    {
+      "name": "account-switch",
+      "current": {
+        "accountScopeId": "local-account-scope-b",
+        "savedRootDriveFileId": "local-root-drive-id-a",
+        "workspaceId": "ws-v2-55555555555555555555555555555555",
+        "operationId": "op-v2-isolation",
+        "managedFolderSetId": "folders-a",
+        "matchingMarkedRootCount": 1
+      },
+      "storedManagedFolderSetId": "folders-a",
+      "expected": "block-zero-mutation"
+    },
+    {
+      "name": "saved-root-switch",
+      "current": {
+        "accountScopeId": "local-account-scope-a",
+        "savedRootDriveFileId": "local-root-drive-id-b",
+        "workspaceId": "ws-v2-55555555555555555555555555555555",
+        "operationId": "op-v2-isolation",
+        "managedFolderSetId": "folders-a",
+        "matchingMarkedRootCount": 1
+      },
+      "storedManagedFolderSetId": "folders-a",
+      "expected": "block-zero-mutation"
+    },
+    {
+      "name": "workspace-marker-switch",
+      "current": {
+        "accountScopeId": "local-account-scope-a",
+        "savedRootDriveFileId": "local-root-drive-id-a",
+        "workspaceId": "ws-v2-66666666666666666666666666666666",
+        "operationId": "op-v2-isolation",
+        "managedFolderSetId": "folders-a",
+        "matchingMarkedRootCount": 1
+      },
+      "storedManagedFolderSetId": "folders-a",
+      "expected": "block-zero-mutation"
+    },
+    {
+      "name": "stale-operation-id",
+      "current": {
+        "accountScopeId": "local-account-scope-a",
+        "savedRootDriveFileId": "local-root-drive-id-a",
+        "workspaceId": "ws-v2-55555555555555555555555555555555",
+        "operationId": "op-v2-newer-operation",
+        "managedFolderSetId": "folders-a",
+        "matchingMarkedRootCount": 1
+      },
+      "storedManagedFolderSetId": "folders-a",
+      "expected": "block-zero-mutation"
+    },
+    {
+      "name": "managed-folder-switch",
+      "current": {
+        "accountScopeId": "local-account-scope-a",
+        "savedRootDriveFileId": "local-root-drive-id-a",
+        "workspaceId": "ws-v2-55555555555555555555555555555555",
+        "operationId": "op-v2-isolation",
+        "managedFolderSetId": "folders-b",
+        "matchingMarkedRootCount": 1
+      },
+      "storedManagedFolderSetId": "folders-a",
+      "expected": "block-zero-mutation"
+    },
+    {
+      "name": "duplicate-marked-root",
+      "current": {
+        "accountScopeId": "local-account-scope-a",
+        "savedRootDriveFileId": "local-root-drive-id-a",
+        "workspaceId": "ws-v2-55555555555555555555555555555555",
+        "operationId": "op-v2-isolation",
+        "managedFolderSetId": "folders-a",
+        "matchingMarkedRootCount": 2
+      },
+      "storedManagedFolderSetId": "folders-a",
+      "expected": "block-zero-mutation"
+    }
+  ],
+  "sameOperationIdOtherAccount": {
+    "accountScopeId": "local-account-scope-b",
+    "operationId": "op-v2-isolation",
+    "canReadStoredAccountAJournal": false
+  },
+  "descriptorCases": [
+    {
+      "name": "exact-descriptors",
+      "current": [
+        {
+          "kind": "object",
+          "canonicalId": "obj-v2-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "generatedDriveFileId": "local-generated-drive-id-a",
+          "path": "objects/obj-v2-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.json",
+          "mimeType": "application/json",
+          "byteCount": 128,
+          "contentSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        {
+          "kind": "commit",
+          "canonicalId": "commit-v2-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "generatedDriveFileId": "local-generated-drive-id-b",
+          "path": "commits/commit-v2-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.json",
+          "mimeType": "application/json",
+          "byteCount": 256,
+          "contentSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        }
+      ],
+      "expected": "resume"
+    },
+    {
+      "name": "changed-content",
+      "current": [
+        {
+          "kind": "object",
+          "canonicalId": "obj-v2-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "generatedDriveFileId": "local-generated-drive-id-a",
+          "path": "objects/obj-v2-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.json",
+          "mimeType": "application/json",
+          "byteCount": 128,
+          "contentSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        }
+      ],
+      "expected": "block-zero-mutation"
+    },
+    {
+      "name": "changed-generated-drive-id",
+      "current": [
+        {
+          "kind": "object",
+          "canonicalId": "obj-v2-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "generatedDriveFileId": "local-generated-drive-id-other",
+          "path": "objects/obj-v2-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.json",
+          "mimeType": "application/json",
+          "byteCount": 128,
+          "contentSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      ],
+      "expected": "block-zero-mutation"
+    }
+  ],
+  "remoteCanonicalBodiesContain": ["workspaceId"],
+  "remoteCanonicalBodiesExclude": [
+    "accountScopeId",
+    "savedRootDriveFileId",
+    "generatedDriveFileId",
+    "managedFolderSetId"
+  ]
+}

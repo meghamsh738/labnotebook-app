@@ -1,0 +1,198 @@
+{
+  "workspaceId": "ws-v2-22222222222222222222222222222222",
+  "blobs": [
+    {
+      "driveFileId": "fixture-blob-drive-id",
+      "parentFolderDriveFileId": "fixture-v2-blobs-folder-id",
+      "path": "blobs/blob-v2-9cfa8f7fe8e6745749ec5c62e17ee01600676c2d61153963c252ba2c1e490a05.bin",
+      "bytesBase64": "RWFzeWxhYiBEcml2ZSB2MiBpbW11dGFibGUgYXR0YWNobWVudAo=",
+      "expectedId": "blob-v2-9cfa8f7fe8e6745749ec5c62e17ee01600676c2d61153963c252ba2c1e490a05",
+      "expectedContentSha256": "9cfa8f7fe8e6745749ec5c62e17ee01600676c2d61153963c252ba2c1e490a05",
+      "mimeType": "text/plain",
+      "byteCount": 38,
+      "appProperties": {
+        "easylabDriveProtocol": "v2-append-only",
+        "easylabWorkspaceId": "ws-v2-22222222222222222222222222222222",
+        "easylabArtifactKind": "blob",
+        "easylabCanonicalId": "blob-v2-9cfa8f7fe8e6745749ec5c62e17ee01600676c2d61153963c252ba2c1e490a05",
+        "easylabContentSha256": "9cfa8f7fe8e6745749ec5c62e17ee01600676c2d61153963c252ba2c1e490a05"
+      }
+    }
+  ],
+  "objects": [
+    {
+      "driveFileId": "fixture-entry-object-drive-id",
+      "parentFolderDriveFileId": "fixture-v2-objects-folder-id",
+      "path": "objects/obj-v2-d818753f488e0d822d3c1906148d5668ee49678c83ac5005eab13033756d79be.json",
+      "mimeType": "application/json",
+      "byteCount": 327,
+      "downloadedText": "{\"baseObjectIds\":[],\"blobIds\":[],\"entityId\":\"entry-interrupted\",\"entityKind\":\"entry\",\"operation\":\"upsert\",\"payload\":{\"id\":\"entry-interrupted\",\"title\":\"Interrupted transaction\"},\"protocol\":\"easylab-drive-v2-append-only\",\"resolutionOf\":[],\"schemaVersion\":2,\"tombstone\":null,\"workspaceId\":\"ws-v2-22222222222222222222222222222222\"}",
+      "downloadedBytesBase64": "eyJiYXNlT2JqZWN0SWRzIjpbXSwiYmxvYklkcyI6W10sImVudGl0eUlkIjoiZW50cnktaW50ZXJydXB0ZWQiLCJlbnRpdHlLaW5kIjoiZW50cnkiLCJvcGVyYXRpb24iOiJ1cHNlcnQiLCJwYXlsb2FkIjp7ImlkIjoiZW50cnktaW50ZXJydXB0ZWQiLCJ0aXRsZSI6IkludGVycnVwdGVkIHRyYW5zYWN0aW9uIn0sInByb3RvY29sIjoiZWFzeWxhYi1kcml2ZS12Mi1hcHBlbmQtb25seSIsInJlc29sdXRpb25PZiI6W10sInNjaGVtYVZlcnNpb24iOjIsInRvbWJzdG9uZSI6bnVsbCwid29ya3NwYWNlSWQiOiJ3cy12Mi0yMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMiJ9",
+      "body": {
+        "protocol": "easylab-drive-v2-append-only",
+        "schemaVersion": 2,
+        "workspaceId": "ws-v2-22222222222222222222222222222222",
+        "entityKind": "entry",
+        "entityId": "entry-interrupted",
+        "operation": "upsert",
+        "baseObjectIds": [],
+        "blobIds": [],
+        "payload": { "id": "entry-interrupted", "title": "Interrupted transaction" },
+        "tombstone": null,
+        "resolutionOf": []
+      },
+      "expectedId": "obj-v2-d818753f488e0d822d3c1906148d5668ee49678c83ac5005eab13033756d79be",
+      "expectedContentSha256": "d818753f488e0d822d3c1906148d5668ee49678c83ac5005eab13033756d79be",
+      "appProperties": {
+        "easylabDriveProtocol": "v2-append-only",
+        "easylabWorkspaceId": "ws-v2-22222222222222222222222222222222",
+        "easylabArtifactKind": "object",
+        "easylabCanonicalId": "obj-v2-d818753f488e0d822d3c1906148d5668ee49678c83ac5005eab13033756d79be",
+        "easylabContentSha256": "d818753f488e0d822d3c1906148d5668ee49678c83ac5005eab13033756d79be"
+      }
+    },
+    {
+      "driveFileId": "fixture-attachment-object-drive-id",
+      "parentFolderDriveFileId": "fixture-v2-objects-folder-id",
+      "path": "objects/obj-v2-73e0d7755c461c79fb7a433d560aadfd70ea3bc267a3bdcecc8e7f705c719e2f.json",
+      "mimeType": "application/json",
+      "byteCount": 548,
+      "downloadedText": "{\"baseObjectIds\":[],\"blobIds\":[\"blob-v2-9cfa8f7fe8e6745749ec5c62e17ee01600676c2d61153963c252ba2c1e490a05\"],\"entityId\":\"attachment-interrupted\",\"entityKind\":\"attachment\",\"operation\":\"upsert\",\"payload\":{\"entryId\":\"entry-interrupted\",\"filename\":\"evidence.txt\",\"id\":\"attachment-interrupted\",\"mimeType\":\"text/plain\",\"sha256\":\"9cfa8f7fe8e6745749ec5c62e17ee01600676c2d61153963c252ba2c1e490a05\",\"size\":38},\"protocol\":\"easylab-drive-v2-append-only\",\"resolutionOf\":[],\"schemaVersion\":2,\"tombstone\":null,\"workspaceId\":\"ws-v2-22222222222222222222222222222222\"}",
+      "downloadedBytesBase64": "eyJiYXNlT2JqZWN0SWRzIjpbXSwiYmxvYklkcyI6WyJibG9iLXYyLTljZmE4ZjdmZThlNjc0NTc0OWVjNWM2MmUxN2VlMDE2MDA2NzZjMmQ2MTE1Mzk2M2MyNTJiYTJjMWU0OTBhMDUiXSwiZW50aXR5SWQiOiJhdHRhY2htZW50LWludGVycnVwdGVkIiwiZW50aXR5S2luZCI6ImF0dGFjaG1lbnQiLCJvcGVyYXRpb24iOiJ1cHNlcnQiLCJwYXlsb2FkIjp7ImVudHJ5SWQiOiJlbnRyeS1pbnRlcnJ1cHRlZCIsImZpbGVuYW1lIjoiZXZpZGVuY2UudHh0IiwiaWQiOiJhdHRhY2htZW50LWludGVycnVwdGVkIiwibWltZVR5cGUiOiJ0ZXh0L3BsYWluIiwic2hhMjU2IjoiOWNmYThmN2ZlOGU2NzQ1NzQ5ZWM1YzYyZTE3ZWUwMTYwMDY3NmMyZDYxMTUzOTYzYzI1MmJhMmMxZTQ5MGEwNSIsInNpemUiOjM4fSwicHJvdG9jb2wiOiJlYXN5bGFiLWRyaXZlLXYyLWFwcGVuZC1vbmx5IiwicmVzb2x1dGlvbk9mIjpbXSwic2NoZW1hVmVyc2lvbiI6MiwidG9tYnN0b25lIjpudWxsLCJ3b3Jrc3BhY2VJZCI6IndzLXYyLTIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyIn0=",
+      "body": {
+        "protocol": "easylab-drive-v2-append-only",
+        "schemaVersion": 2,
+        "workspaceId": "ws-v2-22222222222222222222222222222222",
+        "entityKind": "attachment",
+        "entityId": "attachment-interrupted",
+        "operation": "upsert",
+        "baseObjectIds": [],
+        "blobIds": [
+          "blob-v2-9cfa8f7fe8e6745749ec5c62e17ee01600676c2d61153963c252ba2c1e490a05"
+        ],
+        "payload": {
+          "id": "attachment-interrupted",
+          "entryId": "entry-interrupted",
+          "filename": "evidence.txt",
+          "mimeType": "text/plain",
+          "size": 38,
+          "sha256": "9cfa8f7fe8e6745749ec5c62e17ee01600676c2d61153963c252ba2c1e490a05"
+        },
+        "tombstone": null,
+        "resolutionOf": []
+      },
+      "expectedId": "obj-v2-73e0d7755c461c79fb7a433d560aadfd70ea3bc267a3bdcecc8e7f705c719e2f",
+      "expectedContentSha256": "73e0d7755c461c79fb7a433d560aadfd70ea3bc267a3bdcecc8e7f705c719e2f",
+      "appProperties": {
+        "easylabDriveProtocol": "v2-append-only",
+        "easylabWorkspaceId": "ws-v2-22222222222222222222222222222222",
+        "easylabArtifactKind": "object",
+        "easylabCanonicalId": "obj-v2-73e0d7755c461c79fb7a433d560aadfd70ea3bc267a3bdcecc8e7f705c719e2f",
+        "easylabContentSha256": "73e0d7755c461c79fb7a433d560aadfd70ea3bc267a3bdcecc8e7f705c719e2f"
+      }
+    }
+  ],
+  "commits": [
+    {
+      "driveFileId": "fixture-commit-drive-id",
+      "parentFolderDriveFileId": "fixture-v2-commits-folder-id",
+      "path": "commits/commit-v2-2f087433b80104205d676561cb1c91b5c96361297f55de3a9093917a0619ab0f.json",
+      "mimeType": "application/json",
+      "byteCount": 467,
+      "downloadedText": "{\"blobIds\":[\"blob-v2-9cfa8f7fe8e6745749ec5c62e17ee01600676c2d61153963c252ba2c1e490a05\"],\"createdAt\":\"2026-08-09T10:00:00.000Z\",\"objectIds\":[\"obj-v2-73e0d7755c461c79fb7a433d560aadfd70ea3bc267a3bdcecc8e7f705c719e2f\",\"obj-v2-d818753f488e0d822d3c1906148d5668ee49678c83ac5005eab13033756d79be\"],\"operationId\":\"op-v2-interrupted-genesis\",\"parentCommitIds\":[],\"protocol\":\"easylab-drive-v2-append-only\",\"schemaVersion\":2,\"workspaceId\":\"ws-v2-22222222222222222222222222222222\"}",
+      "downloadedBytesBase64": "eyJibG9iSWRzIjpbImJsb2ItdjItOWNmYThmN2ZlOGU2NzQ1NzQ5ZWM1YzYyZTE3ZWUwMTYwMDY3NmMyZDYxMTUzOTYzYzI1MmJhMmMxZTQ5MGEwNSJdLCJjcmVhdGVkQXQiOiIyMDI2LTA4LTA5VDEwOjAwOjAwLjAwMFoiLCJvYmplY3RJZHMiOlsib2JqLXYyLTczZTBkNzc1NWM0NjFjNzlmYjdhNDMzZDU2MGFhZGZkNzBlYTNiYzI2N2EzYmRjZWNjOGU3ZjcwNWM3MTllMmYiLCJvYmotdjItZDgxODc1M2Y0ODhlMGQ4MjJkM2MxOTA2MTQ4ZDU2NjhlZTQ5Njc4YzgzYWM1MDA1ZWFiMTMwMzM3NTZkNzliZSJdLCJvcGVyYXRpb25JZCI6Im9wLXYyLWludGVycnVwdGVkLWdlbmVzaXMiLCJwYXJlbnRDb21taXRJZHMiOltdLCJwcm90b2NvbCI6ImVhc3lsYWItZHJpdmUtdjItYXBwZW5kLW9ubHkiLCJzY2hlbWFWZXJzaW9uIjoyLCJ3b3Jrc3BhY2VJZCI6IndzLXYyLTIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyIn0=",
+      "body": {
+        "protocol": "easylab-drive-v2-append-only",
+        "schemaVersion": 2,
+        "workspaceId": "ws-v2-22222222222222222222222222222222",
+        "operationId": "op-v2-interrupted-genesis",
+        "createdAt": "2026-08-09T10:00:00.000Z",
+        "parentCommitIds": [],
+        "objectIds": [
+          "obj-v2-73e0d7755c461c79fb7a433d560aadfd70ea3bc267a3bdcecc8e7f705c719e2f",
+          "obj-v2-d818753f488e0d822d3c1906148d5668ee49678c83ac5005eab13033756d79be"
+        ],
+        "blobIds": [
+          "blob-v2-9cfa8f7fe8e6745749ec5c62e17ee01600676c2d61153963c252ba2c1e490a05"
+        ]
+      },
+      "expectedId": "commit-v2-2f087433b80104205d676561cb1c91b5c96361297f55de3a9093917a0619ab0f",
+      "expectedContentSha256": "2f087433b80104205d676561cb1c91b5c96361297f55de3a9093917a0619ab0f",
+      "appProperties": {
+        "easylabDriveProtocol": "v2-append-only",
+        "easylabWorkspaceId": "ws-v2-22222222222222222222222222222222",
+        "easylabArtifactKind": "commit",
+        "easylabCanonicalId": "commit-v2-2f087433b80104205d676561cb1c91b5c96361297f55de3a9093917a0619ab0f",
+        "easylabContentSha256": "2f087433b80104205d676561cb1c91b5c96361297f55de3a9093917a0619ab0f"
+      }
+    },
+    {
+      "driveFileId": "fixture-child-commit-drive-id",
+      "parentFolderDriveFileId": "fixture-v2-commits-folder-id",
+      "path": "commits/commit-v2-b358c9b22f7958c162a8b43b58aaf717b4311cf95901c9c88008a52221d577ce.json",
+      "mimeType": "application/json",
+      "byteCount": 318,
+      "downloadedText": "{\"blobIds\":[],\"createdAt\":\"2026-08-09T10:01:00.000Z\",\"objectIds\":[],\"operationId\":\"op-v2-preflight-child\",\"parentCommitIds\":[\"commit-v2-2f087433b80104205d676561cb1c91b5c96361297f55de3a9093917a0619ab0f\"],\"protocol\":\"easylab-drive-v2-append-only\",\"schemaVersion\":2,\"workspaceId\":\"ws-v2-22222222222222222222222222222222\"}",
+      "downloadedBytesBase64": "eyJibG9iSWRzIjpbXSwiY3JlYXRlZEF0IjoiMjAyNi0wOC0wOVQxMDowMTowMC4wMDBaIiwib2JqZWN0SWRzIjpbXSwib3BlcmF0aW9uSWQiOiJvcC12Mi1wcmVmbGlnaHQtY2hpbGQiLCJwYXJlbnRDb21taXRJZHMiOlsiY29tbWl0LXYyLTJmMDg3NDMzYjgwMTA0MjA1ZDY3NjU2MWNiMWM5MWI1Yzk2MzYxMjk3ZjU1ZGUzYTkwOTM5MTdhMDYxOWFiMGYiXSwicHJvdG9jb2wiOiJlYXN5bGFiLWRyaXZlLXYyLWFwcGVuZC1vbmx5Iiwic2NoZW1hVmVyc2lvbiI6Miwid29ya3NwYWNlSWQiOiJ3cy12Mi0yMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMiJ9",
+      "body": {
+        "protocol": "easylab-drive-v2-append-only",
+        "schemaVersion": 2,
+        "workspaceId": "ws-v2-22222222222222222222222222222222",
+        "operationId": "op-v2-preflight-child",
+        "createdAt": "2026-08-09T10:01:00.000Z",
+        "parentCommitIds": [
+          "commit-v2-2f087433b80104205d676561cb1c91b5c96361297f55de3a9093917a0619ab0f"
+        ],
+        "objectIds": [],
+        "blobIds": []
+      },
+      "expectedId": "commit-v2-b358c9b22f7958c162a8b43b58aaf717b4311cf95901c9c88008a52221d577ce",
+      "expectedContentSha256": "b358c9b22f7958c162a8b43b58aaf717b4311cf95901c9c88008a52221d577ce",
+      "appProperties": {
+        "easylabDriveProtocol": "v2-append-only",
+        "easylabWorkspaceId": "ws-v2-22222222222222222222222222222222",
+        "easylabArtifactKind": "commit",
+        "easylabCanonicalId": "commit-v2-b358c9b22f7958c162a8b43b58aaf717b4311cf95901c9c88008a52221d577ce",
+        "easylabContentSha256": "b358c9b22f7958c162a8b43b58aaf717b4311cf95901c9c88008a52221d577ce"
+      }
+    }
+  ],
+  "phases": [
+    {
+      "presentArtifactIds": [
+        "blob-v2-9cfa8f7fe8e6745749ec5c62e17ee01600676c2d61153963c252ba2c1e490a05"
+      ],
+      "expected": "no-visible-commit"
+    },
+    {
+      "presentArtifactIds": [
+        "blob-v2-9cfa8f7fe8e6745749ec5c62e17ee01600676c2d61153963c252ba2c1e490a05",
+        "obj-v2-d818753f488e0d822d3c1906148d5668ee49678c83ac5005eab13033756d79be",
+        "obj-v2-73e0d7755c461c79fb7a433d560aadfd70ea3bc267a3bdcecc8e7f705c719e2f"
+      ],
+      "expected": "no-visible-commit"
+    },
+    {
+      "presentArtifactIds": [
+        "blob-v2-9cfa8f7fe8e6745749ec5c62e17ee01600676c2d61153963c252ba2c1e490a05",
+        "obj-v2-d818753f488e0d822d3c1906148d5668ee49678c83ac5005eab13033756d79be",
+        "obj-v2-73e0d7755c461c79fb7a433d560aadfd70ea3bc267a3bdcecc8e7f705c719e2f",
+        "commit-v2-2f087433b80104205d676561cb1c91b5c96361297f55de3a9093917a0619ab0f"
+      ],
+      "expected": "verified-visible-commit"
+    }
+  ],
+  "expected": {
+    "visibleCommitIds": [
+      "commit-v2-2f087433b80104205d676561cb1c91b5c96361297f55de3a9093917a0619ab0f"
+    ],
+    "visibleObjectIds": [
+      "obj-v2-73e0d7755c461c79fb7a433d560aadfd70ea3bc267a3bdcecc8e7f705c719e2f",
+      "obj-v2-d818753f488e0d822d3c1906148d5668ee49678c83ac5005eab13033756d79be"
+    ],
+    "commitPublishedLast": true,
+    "orphanPrerequisitesVisible": false,
+    "retryUsesPersistedDriveFileIds": true,
+    "manifestSingletonRequired": false
+  }
+}

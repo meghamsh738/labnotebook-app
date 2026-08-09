@@ -1,0 +1,153 @@
+{
+  "cases": [
+    {
+      "name": "malformed-json",
+      "artifactText": "{\"protocol\":",
+      "expectedError": "malformed-json"
+    },
+    {
+      "name": "unknown-artifact-kind",
+      "artifact": { "kind": "future-index" },
+      "expectedError": "unknown-artifact-kind"
+    },
+    {
+      "name": "artifact-schema-mismatch",
+      "actualFields": ["protocol", "schemaVersion", "workspaceId", "unexpectedField"],
+      "allowedFields": ["protocol", "schemaVersion", "workspaceId"],
+      "expectedError": "artifact-schema-mismatch"
+    },
+    {
+      "name": "canonical-id-mismatch",
+      "claimedId": "obj-v2-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "derivedId": "obj-v2-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "expectedError": "canonical-id-mismatch"
+    },
+    {
+      "name": "missing-commit-parent",
+      "graph": [
+        { "id": "commit-child", "parents": ["commit-missing"] }
+      ],
+      "expectedError": "missing-commit-parent"
+    },
+    {
+      "name": "commit-cycle",
+      "graph": [
+        { "id": "commit-a", "parents": ["commit-b"] },
+        { "id": "commit-b", "parents": ["commit-a"] }
+      ],
+      "expectedError": "commit-cycle"
+    },
+    {
+      "name": "multiple-genesis-commits",
+      "graph": [
+        { "id": "commit-genesis-a", "parents": [] },
+        { "id": "commit-genesis-b", "parents": [] }
+      ],
+      "expectedError": "multiple-genesis-commits"
+    },
+    {
+      "name": "missing-object-reference",
+      "commitReferences": {
+        "objectIds": ["obj-v2-missing"],
+        "blobIds": []
+      },
+      "availableObjectIds": [],
+      "availableBlobIds": [],
+      "expectedError": "missing-object-reference"
+    },
+    {
+      "name": "missing-blob-reference",
+      "commitReferences": {
+        "objectIds": [],
+        "blobIds": ["blob-v2-missing"]
+      },
+      "availableObjectIds": [],
+      "availableBlobIds": [],
+      "expectedError": "missing-blob-reference"
+    },
+    {
+      "name": "divergent-duplicate",
+      "logicalPath": "objects/obj-v2-duplicate.json",
+      "copies": [
+        { "contentSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" },
+        { "contentSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" }
+      ],
+      "expectedError": "divergent-duplicate"
+    },
+    {
+      "name": "divergent-commit-duplicate",
+      "logicalPath": "commits/commit-v2-duplicate.json",
+      "copies": [
+        { "contentSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc" },
+        { "contentSha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd" }
+      ],
+      "expectedError": "divergent-duplicate"
+    },
+    {
+      "name": "missing-object-base",
+      "object": {
+        "entityKind": "entry",
+        "entityId": "entry-invalid",
+        "baseObjectIds": ["obj-v2-missing"]
+      },
+      "availableObjects": [],
+      "expectedError": "missing-object-base"
+    },
+    {
+      "name": "cross-target-object-base",
+      "object": {
+        "entityKind": "entry",
+        "entityId": "entry-invalid",
+        "baseObjectIds": ["obj-v2-other-target"]
+      },
+      "availableObjects": [
+        {
+          "id": "obj-v2-other-target",
+          "entityKind": "entry",
+          "entityId": "entry-other"
+        }
+      ],
+      "expectedError": "cross-target-object-base"
+    },
+    {
+      "name": "regular-upsert-after-tombstone",
+      "parentFrontier": [
+        { "id": "obj-v2-tombstone", "operation": "tombstone" }
+      ],
+      "candidate": {
+        "operation": "upsert",
+        "baseObjectIds": ["obj-v2-tombstone"],
+        "resolutionOf": []
+      },
+      "expectedError": "explicit-restore-required"
+    },
+    {
+      "name": "incomplete-resolution",
+      "parentFrontier": [
+        { "id": "obj-v2-left", "operation": "upsert" },
+        { "id": "obj-v2-right", "operation": "tombstone" }
+      ],
+      "candidate": {
+        "operation": "resolve-upsert",
+        "baseObjectIds": ["obj-v2-left"],
+        "resolutionOf": ["obj-v2-left"]
+      },
+      "expectedError": "incomplete-resolution-frontier"
+    },
+    {
+      "name": "unsorted-set-field",
+      "values": ["z", "a"],
+      "expectedError": "set-field-not-sorted-unique"
+    },
+    {
+      "name": "duplicate-set-field",
+      "values": ["a", "a"],
+      "expectedError": "set-field-not-sorted-unique"
+    }
+  ],
+  "expected": {
+    "everyCaseBlocksRemoteMutation": true,
+    "malformedArtifactCanResurrect": false,
+    "unknownArtifactCanBecomeParent": false
+  }
+}

@@ -28,6 +28,7 @@
     "smoke:packaged-oauth": "node scripts/smoke-packaged-oauth.mjs",
     "test:desktop-oauth": "node --test desktop/oauthScopes.test.cjs",
     "test:drive-v1-parity": "node scripts/verify-drive-v1-parity.mjs",
+    "test:drive-v2-contract": "node scripts/verify-drive-v2-append-only.mjs",
     "test:drive-v1-live-gate": "node --test scripts/drive-v1-live-validation-gate.test.mjs",
     "prepare:drive-v1-live-validation": "node scripts/drive-v1-live-validation.mjs prepare",
     "preflight:drive-v1-live-validation": "node scripts/drive-v1-live-validation.mjs preflight",

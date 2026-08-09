@@ -1,0 +1,93 @@
+{
+  "accountScopeId": "local-account-preflight",
+  "operationId": "op-v2-preflight",
+  "workspaceId": "ws-v2-22222222222222222222222222222222",
+  "savedRootDriveFileId": "fixture-v2-root-drive-id",
+  "root": {
+    "driveFileId": "fixture-v2-root-drive-id",
+    "name": "Easylab Lab Notebook v2",
+    "parentIds": ["root"],
+    "mimeType": "application/vnd.google-apps.folder",
+    "trashed": false,
+    "appProperties": {
+      "easylabDriveProtocol": "v2-append-only",
+      "easylabWorkspaceId": "ws-v2-22222222222222222222222222222222",
+      "easylabArtifactKind": "workspace-root"
+    }
+  },
+  "managedFolders": [
+    {
+      "driveFileId": "fixture-v2-blobs-folder-id",
+      "name": "blobs",
+      "parentIds": ["fixture-v2-root-drive-id"],
+      "mimeType": "application/vnd.google-apps.folder",
+      "trashed": false,
+      "appProperties": {
+        "easylabDriveProtocol": "v2-append-only",
+        "easylabWorkspaceId": "ws-v2-22222222222222222222222222222222",
+        "easylabArtifactKind": "managed-folder",
+        "easylabFolderRole": "blobs"
+      }
+    },
+    {
+      "driveFileId": "fixture-v2-commits-folder-id",
+      "name": "commits",
+      "parentIds": ["fixture-v2-root-drive-id"],
+      "mimeType": "application/vnd.google-apps.folder",
+      "trashed": false,
+      "appProperties": {
+        "easylabDriveProtocol": "v2-append-only",
+        "easylabWorkspaceId": "ws-v2-22222222222222222222222222222222",
+        "easylabArtifactKind": "managed-folder",
+        "easylabFolderRole": "commits"
+      }
+    },
+    {
+      "driveFileId": "fixture-v2-objects-folder-id",
+      "name": "objects",
+      "parentIds": ["fixture-v2-root-drive-id"],
+      "mimeType": "application/vnd.google-apps.folder",
+      "trashed": false,
+      "appProperties": {
+        "easylabDriveProtocol": "v2-append-only",
+        "easylabWorkspaceId": "ws-v2-22222222222222222222222222222222",
+        "easylabArtifactKind": "managed-folder",
+        "easylabFolderRole": "objects"
+      }
+    }
+  ],
+  "artifactFixture": "interrupted-transaction.json",
+  "cases": [
+    { "name": "valid", "mutation": "none", "expected": "plan", "writerCalls": 0 },
+    { "name": "exact-duplicate", "mutation": "add-exact-object-duplicate", "expected": "plan", "writerCalls": 0 },
+    { "name": "account-switch", "mutation": "switch-account", "expected": "account-switch", "writerCalls": 0 },
+    { "name": "saved-root-switch", "mutation": "switch-saved-root", "expected": "saved-root-switch", "writerCalls": 0 },
+    { "name": "workspace-marker-switch", "mutation": "switch-workspace-marker", "expected": "workspace-marker-switch", "writerCalls": 0 },
+    { "name": "managed-folder-switch", "mutation": "switch-managed-folder-id", "expected": "managed-folder-switch", "writerCalls": 0 },
+    { "name": "duplicate-root", "mutation": "add-duplicate-marked-root", "expected": "duplicate-marked-root", "writerCalls": 0 },
+    { "name": "different-workspace-marked-root", "mutation": "add-different-workspace-marked-root", "expected": "duplicate-marked-root", "writerCalls": 0 },
+    { "name": "renamed-marked-root", "mutation": "add-renamed-marked-root", "expected": "duplicate-marked-root", "writerCalls": 0 },
+    { "name": "non-folder-marked-root", "mutation": "add-non-folder-marked-root", "expected": "duplicate-marked-root", "writerCalls": 0 },
+    { "name": "stale-operation", "mutation": "switch-operation-id", "expected": "stale-operation-id", "writerCalls": 0 },
+    { "name": "changed-descriptor", "mutation": "change-journal-descriptor", "expected": "changed-artifact-descriptor", "writerCalls": 0 },
+    { "name": "malformed-json", "mutation": "malform-object-json", "expected": "malformed-json", "writerCalls": 0 },
+    { "name": "invalid-utf8-json", "mutation": "make-object-json-invalid-utf8", "expected": "invalid-utf8", "writerCalls": 0 },
+    { "name": "utf8-bom-json", "mutation": "make-object-json-utf8-bom", "expected": "noncanonical-json-bytes", "writerCalls": 0 },
+    { "name": "lone-surrogate-json", "mutation": "make-object-json-lone-surrogate", "expected": "invalid-unicode-scalar", "writerCalls": 0 },
+    { "name": "noncanonical-json", "mutation": "make-object-json-noncanonical", "expected": "noncanonical-json-bytes", "writerCalls": 0 },
+    { "name": "malformed-commit", "mutation": "remove-commit-field", "expected": "artifact-schema-mismatch", "writerCalls": 0 },
+    { "name": "attachment-missing-entry-link", "mutation": "remove-attachment-entry-link", "expected": "missing-parent-linkage", "writerCalls": 0 },
+    { "name": "file-box-missing-attachment-link", "mutation": "make-malformed-filebox-linkage", "expected": "missing-parent-linkage", "writerCalls": 0 },
+    { "name": "transfer-missing-file-box-link", "mutation": "make-malformed-transfer-linkage", "expected": "missing-parent-linkage", "writerCalls": 0 },
+    { "name": "attachment-missing-entry-target", "mutation": "point-attachment-to-missing-entry", "expected": "missing-parent-target", "writerCalls": 0 },
+    { "name": "file-box-inconsistent-parent-chain", "mutation": "add-inconsistent-filebox-parent-chain", "expected": "inconsistent-parent-linkage", "writerCalls": 0 },
+    { "name": "transfer-inconsistent-parent-chain", "mutation": "add-inconsistent-transfer-parent-chain", "expected": "inconsistent-parent-linkage", "writerCalls": 0 },
+    { "name": "unknown-artifact", "mutation": "add-unknown-artifact", "expected": "unknown-artifact-kind", "writerCalls": 0 },
+    { "name": "divergent-duplicate", "mutation": "add-divergent-object-duplicate", "expected": "divergent-duplicate", "writerCalls": 0 },
+    { "name": "missing-object", "mutation": "remove-referenced-object", "expected": "missing-object-reference", "writerCalls": 0 },
+    { "name": "missing-blob", "mutation": "remove-referenced-blob", "expected": "missing-blob-reference", "writerCalls": 0 },
+    { "name": "missing-parent", "mutation": "remove-parent-commit", "expected": "missing-commit-parent", "writerCalls": 0 },
+    { "name": "cycle-attempt", "mutation": "make-commit-cycle", "expected": "canonical-id-mismatch", "writerCalls": 0 },
+    { "name": "multiple-genesis", "mutation": "add-valid-second-genesis", "expected": "multiple-genesis-commits", "writerCalls": 0 }
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "input": {
+    "z": 0,
+    "a": {
+      "β": "text",
+      "A": 1.5
+    },
+    "numbers": [1e+30, 0.002, 1e-7],
+    "string": "line\n€"
+  },
+  "expectedCanonicalJson": "{\"a\":{\"A\":1.5,\"β\":\"text\"},\"numbers\":[1e+30,0.002,1e-7],\"string\":\"line\\n€\",\"z\":0}",
+  "expectedSha256": "1afd42165efba20fc064a8eff7ea2886309522d6808877b84f026047556eebe0"
+}
