@@ -296,7 +296,7 @@ test.describe('gated Drive v2 live append-only round trip', () => {
     const webObject = await jsonArtifact(rt, 'object', webBody, required('EASYLAB_DRIVE_V2_WEB_ENTRY_FILE_ID'))
     const webCommit = await jsonArtifact(rt, 'commit', commitBody(rt.plan, webOperation, utc(rt.plan, 61_000), [nativeTip], [webObject.canonicalId], []), required('EASYLAB_DRIVE_V2_WEB_COMMIT_FILE_ID'))
     const webTx = await transaction(rt, webOperation, [], [webObject], webCommit)
-    rt.client.setFault('lose-response-after-create')
+    rt.client.setFault('lose-response-after-create', webObject.path)
     await new DriveV2CreateTransactionExecutor(rt.client).execute(webTx)
     expect(rt.client.faultUsed).toBe(true)
 
@@ -336,7 +336,7 @@ test.describe('gated Drive v2 live append-only round trip', () => {
         return rt.client.createOrReconcile(account, artifact, signal)
       },
     }
-    rt.client.setFault('interrupt-before-resumable-content')
+    rt.client.setFault('interrupt-before-resumable-content', blob.path)
     await expect(new DriveV2CreateTransactionExecutor(recordingClient).execute(blobTx)).rejects.toBeInstanceOf(DriveV2CreateTransactionError)
     expect(orderedCalls).toEqual([blob.path])
     const beforeRetry = await rt.client.listChildren(rt.folderIds.objects)

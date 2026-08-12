@@ -14,6 +14,8 @@ export type DriveV2LiveFault =
   | 'lose-response-after-create'
   | 'interrupt-before-resumable-content'
 
+const DEFAULT_RECONCILIATION_DELAYS_MS = Object.freeze([0, 100, 250, 500, 1_000, 2_000])
+
 export type DriveV2LiveFile = {
   readonly id: string
   readonly name: string
@@ -76,22 +78,29 @@ export class DriveV2LiveValidationClient implements DriveV2CreateOnlyClient {
   readonly #accessToken: string
   readonly #accountScopeId: string
   readonly #fetch: typeof fetch
+  readonly #reconciliationDelaysMs: readonly number[]
   #fault: DriveV2LiveFault
+  #faultTargetPath: string | null = null
   #faultUsed = false
 
   constructor(options: {
     accessToken: string
     accountScopeId: string
     runId: string
-    fault?: DriveV2LiveFault
     fetchImpl?: typeof fetch
+    reconciliationDelaysMs?: readonly number[]
   }) {
     if (!options.accessToken.trim()) fail('missing-access-token', 'The validation client requires a short-lived access token.')
     if (!options.accountScopeId.startsWith('drive-v2-live:')) fail('invalid-account-scope', 'The validation account scope is not isolated.')
     if (!/^[a-z0-9][a-z0-9-]{15,95}$/.test(options.runId)) fail('invalid-run-id', 'The validation run id is invalid.')
     this.#accessToken = options.accessToken
     this.#accountScopeId = options.accountScopeId
-    this.#fault = options.fault ?? 'none'
+    const delays = options.reconciliationDelaysMs ?? DEFAULT_RECONCILIATION_DELAYS_MS
+    if (delays.length < 1 || delays.length > 12 || delays.some((delay) => !Number.isInteger(delay) || delay < 0 || delay > 10_000)) {
+      fail('invalid-reconciliation-policy', 'The validation reconciliation retry policy is invalid.')
+    }
+    this.#reconciliationDelaysMs = Object.freeze([...delays])
+    this.#fault = 'none'
     this.#fetch = options.fetchImpl ?? fetch.bind(globalThis)
   }
 
@@ -99,8 +108,12 @@ export class DriveV2LiveValidationClient implements DriveV2CreateOnlyClient {
     return this.#faultUsed
   }
 
-  setFault(fault: DriveV2LiveFault): void {
+  setFault(fault: DriveV2LiveFault, targetPath?: string): void {
+    if (fault !== 'none' && !targetPath?.trim()) {
+      fail('invalid-fault-target', 'A validation-only fault must be pinned to one immutable artifact path.')
+    }
     this.#fault = fault
+    this.#faultTargetPath = fault === 'none' ? null : targetPath!.trim()
     this.#faultUsed = false
   }
 
@@ -166,7 +179,11 @@ export class DriveV2LiveValidationClient implements DriveV2CreateOnlyClient {
     if (!name || artifact.parentFolderDriveFileId.trim() === '') fail('invalid-artifact-path', 'The validation artifact path is invalid.')
 
     const existing = await this.exactOccupants(artifact.parentFolderDriveFileId, name)
-    if (existing.length > 0) return this.reconcileExact(existing, artifact)
+    if (existing.length > 0) {
+      const receipt = await this.reconcileExact(existing, artifact)
+      this.consumeRecoveredTargetFault(artifact)
+      return receipt
+    }
 
     let mutationStarted = false
     try {
@@ -176,21 +193,26 @@ export class DriveV2LiveValidationClient implements DriveV2CreateOnlyClient {
       } else {
         await this.createMultipart(artifact, name, signal)
       }
-      if (this.#fault === 'lose-response-after-create' && !this.#faultUsed) {
-        this.#faultUsed = true
+      if (this.consumeFault('lose-response-after-create', artifact)) {
         throw new TypeError('validation-only simulated lost create response')
       }
       return await this.verifyExact(artifact)
     } catch (error) {
       if (!mutationStarted) throw error
-      const reconciled = await this.tryVerifyExact(artifact)
-      if (reconciled) return reconciled
       if (signal?.aborted) throw signal.reason ?? error
-      throw new DriveV2LiveValidationError(
-        'ambiguous-create',
-        `Drive v2 creation may have committed but could not be reconciled: ${artifact.path}`,
-        { cause: error },
-      )
+      try {
+        const receipt = await this.verifyGeneratedIdAfterAmbiguity(artifact, signal)
+        this.consumeRecoveredTargetFault(artifact)
+        return receipt
+      } catch (reconciliationError) {
+        if (signal?.aborted) throw signal.reason ?? reconciliationError
+        if (reconciliationError instanceof DriveV2LiveValidationError) throw reconciliationError
+        throw new DriveV2LiveValidationError(
+          'ambiguous-create',
+          `Drive v2 creation may have committed but could not be reconciled: ${artifact.path}`,
+          { cause: reconciliationError },
+        )
+      }
     }
   }
 
@@ -250,8 +272,7 @@ export class DriveV2LiveValidationClient implements DriveV2CreateOnlyClient {
     if (sessionUrl.protocol !== 'https:' || !sessionUrl.hostname.endsWith('.googleapis.com')) {
       fail('invalid-resumable-session', 'Drive returned a resumable session outside Google APIs.')
     }
-    if (this.#fault === 'interrupt-before-resumable-content' && !this.#faultUsed) {
-      this.#faultUsed = true
+    if (this.consumeFault('interrupt-before-resumable-content', artifact)) {
       throw new TypeError('validation-only simulated interrupted resumable upload')
     }
     await this.request(sessionUrl.toString(), {
@@ -272,15 +293,42 @@ export class DriveV2LiveValidationClient implements DriveV2CreateOnlyClient {
     return this.verifyExact(artifact)
   }
 
-  private async tryVerifyExact(artifact: DriveV2CreateArtifact): Promise<DriveV2CreateReceipt | undefined> {
-    try {
-      const name = artifact.path.split('/').at(-1)!
-      const occupants = await this.exactOccupants(artifact.parentFolderDriveFileId, name)
-      if (occupants.length !== 1 || occupants[0].id !== artifact.generatedDriveFileId) return undefined
-      return await this.verifyExact(artifact)
-    } catch {
-      return undefined
+  private consumeFault(expected: DriveV2LiveFault, artifact: DriveV2CreateArtifact): boolean {
+    const matches = !this.#faultUsed && this.#fault === expected && this.#faultTargetPath === artifact.path
+    if (matches) this.#faultUsed = true
+    return matches
+  }
+
+  private consumeRecoveredTargetFault(artifact: DriveV2CreateArtifact): void {
+    if (!this.#faultUsed && this.#fault !== 'none' && this.#faultTargetPath === artifact.path) {
+      this.#faultUsed = true
     }
+  }
+
+  private async verifyGeneratedIdAfterAmbiguity(
+    artifact: DriveV2CreateArtifact,
+    signal?: AbortSignal,
+  ): Promise<DriveV2CreateReceipt> {
+    let lastNotFound: DriveV2LiveHttpError | undefined
+    for (const delayMs of this.#reconciliationDelaysMs) {
+      if (signal?.aborted) throw signal.reason ?? new DOMException('Drive v2 validation was cancelled.', 'AbortError')
+      if (delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs))
+      if (signal?.aborted) throw signal.reason ?? new DOMException('Drive v2 validation was cancelled.', 'AbortError')
+      try {
+        return await this.verifyExact(artifact)
+      } catch (error) {
+        if (error instanceof DriveV2LiveHttpError && error.status === 404) {
+          lastNotFound = error
+          continue
+        }
+        throw error
+      }
+    }
+    throw new DriveV2LiveValidationError(
+      'ambiguous-create',
+      `Drive v2 generated file id remained unavailable after bounded reconciliation: ${artifact.path}`,
+      { cause: lastNotFound },
+    )
   }
 
   private async verifyExact(artifact: DriveV2CreateArtifact): Promise<DriveV2CreateReceipt> {
