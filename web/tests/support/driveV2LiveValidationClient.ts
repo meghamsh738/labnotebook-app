@@ -1,0 +1,343 @@
+import { DRIVE_V2_RESUMABLE_THRESHOLD_BYTES } from '../../src/sync/driveV2Graph'
+import {
+  type DriveV2CreateOnlyClient,
+  type DriveV2CreateReceipt,
+  DriveV2CreateArtifact,
+} from '../../src/sync/driveV2OfflinePrimitives'
+
+const DRIVE_API = 'https://www.googleapis.com/drive/v3'
+const DRIVE_UPLOAD_API = 'https://www.googleapis.com/upload/drive/v3'
+const FILE_FIELDS = 'id,name,mimeType,modifiedTime,size,trashed,version,parents,appProperties'
+
+export type DriveV2LiveFault =
+  | 'none'
+  | 'lose-response-after-create'
+  | 'interrupt-before-resumable-content'
+
+export type DriveV2LiveFile = {
+  readonly id: string
+  readonly name: string
+  readonly mimeType?: string
+  readonly size?: string
+  readonly trashed?: boolean
+  readonly version?: string
+  readonly parents?: readonly string[]
+  readonly appProperties?: Readonly<Record<string, string>>
+}
+
+export class DriveV2LiveValidationError extends Error {
+  readonly code: string
+
+  constructor(code: string, message: string, options?: ErrorOptions) {
+    super(message, options)
+    this.name = 'DriveV2LiveValidationError'
+    this.code = code
+  }
+}
+
+class DriveV2LiveHttpError extends Error {
+  readonly status: number
+
+  constructor(status: number) {
+    super(`Drive v2 live validation request failed with status ${status}.`)
+    this.name = 'DriveV2LiveHttpError'
+    this.status = status
+  }
+}
+
+function fail(code: string, message: string): never {
+  throw new DriveV2LiveValidationError(code, message)
+}
+
+function escapeDriveQuery(value: string): string {
+  return value.replace(/\\/g, '\\\\').replace(/'/g, "\\'")
+}
+
+function exactStringMap(left: Readonly<Record<string, string>> | undefined, right: Readonly<Record<string, string>>): boolean {
+  const leftEntries = Object.entries(left ?? {}).sort(([a], [b]) => a.localeCompare(b))
+  const rightEntries = Object.entries(right).sort(([a], [b]) => a.localeCompare(b))
+  return JSON.stringify(leftEntries) === JSON.stringify(rightEntries)
+}
+
+function positiveVersion(value: string | undefined): value is string {
+  return typeof value === 'string' && /^[1-9]\d*$/.test(value)
+}
+
+async function sha256(bytes: Uint8Array): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', bytes)
+  return [...new Uint8Array(digest)].map((value) => value.toString(16).padStart(2, '0')).join('')
+}
+
+/**
+ * Live Drive adapter used only by the explicitly gated v2 Playwright harness.
+ * It has no update or delete operation: every mutation is a pre-generated-id POST.
+ */
+export class DriveV2LiveValidationClient implements DriveV2CreateOnlyClient {
+  readonly #accessToken: string
+  readonly #accountScopeId: string
+  readonly #fetch: typeof fetch
+  #fault: DriveV2LiveFault
+  #faultUsed = false
+
+  constructor(options: {
+    accessToken: string
+    accountScopeId: string
+    runId: string
+    fault?: DriveV2LiveFault
+    fetchImpl?: typeof fetch
+  }) {
+    if (!options.accessToken.trim()) fail('missing-access-token', 'The validation client requires a short-lived access token.')
+    if (!options.accountScopeId.startsWith('drive-v2-live:')) fail('invalid-account-scope', 'The validation account scope is not isolated.')
+    if (!/^[a-z0-9][a-z0-9-]{15,95}$/.test(options.runId)) fail('invalid-run-id', 'The validation run id is invalid.')
+    this.#accessToken = options.accessToken
+    this.#accountScopeId = options.accountScopeId
+    this.#fault = options.fault ?? 'none'
+    this.#fetch = options.fetchImpl ?? fetch.bind(globalThis)
+  }
+
+  get faultUsed(): boolean {
+    return this.#faultUsed
+  }
+
+  setFault(fault: DriveV2LiveFault): void {
+    this.#fault = fault
+    this.#faultUsed = false
+  }
+
+  async generateFileIds(count: number): Promise<readonly string[]> {
+    if (!Number.isInteger(count) || count < 1 || count > 100) fail('invalid-generated-id-count', 'Drive id count is invalid.')
+    const url = new URL(`${DRIVE_API}/files/generateIds`)
+    url.searchParams.set('count', String(count))
+    url.searchParams.set('space', 'drive')
+    url.searchParams.set('fields', 'ids')
+    const payload = await this.jsonRequest<{ ids?: unknown }>(url.toString())
+    const ids = Array.isArray(payload.ids) ? payload.ids.map(String) : []
+    if (ids.length !== count || ids.some((id) => !id.trim()) || new Set(ids).size !== ids.length) {
+      fail('invalid-generated-drive-ids', 'Drive did not return the requested unique file ids.')
+    }
+    return Object.freeze(ids)
+  }
+
+  async listChildren(parentId: string): Promise<readonly DriveV2LiveFile[]> {
+    if (!parentId.trim()) fail('invalid-parent-id', 'Drive parent id is invalid.')
+    const files: DriveV2LiveFile[] = []
+    const seenTokens = new Set<string>()
+    let pageToken = ''
+    do {
+      const url = new URL(`${DRIVE_API}/files`)
+      url.searchParams.set('q', `'${escapeDriveQuery(parentId)}' in parents and trashed = false`)
+      url.searchParams.set('spaces', 'drive')
+      url.searchParams.set('pageSize', '1000')
+      url.searchParams.set('fields', `nextPageToken,files(${FILE_FIELDS})`)
+      if (pageToken) url.searchParams.set('pageToken', pageToken)
+      const payload = await this.jsonRequest<{ files?: DriveV2LiveFile[]; nextPageToken?: string }>(url.toString())
+      if (!Array.isArray(payload.files)) fail('invalid-drive-pagination', 'Drive returned an invalid inventory page.')
+      files.push(...payload.files)
+      const next = String(payload.nextPageToken ?? '').trim()
+      if (next && seenTokens.has(next)) fail('invalid-drive-pagination', 'Drive repeated an inventory page token.')
+      if (next) seenTokens.add(next)
+      pageToken = next
+    } while (pageToken)
+    return Object.freeze(files)
+  }
+
+  async downloadBytes(fileId: string): Promise<Uint8Array> {
+    const response = await this.request(`${DRIVE_API}/files/${encodeURIComponent(fileId)}?alt=media`)
+    return new Uint8Array(await response.arrayBuffer())
+  }
+
+  async metadata(fileId: string): Promise<DriveV2LiveFile> {
+    const url = new URL(`${DRIVE_API}/files/${encodeURIComponent(fileId)}`)
+    url.searchParams.set('fields', FILE_FIELDS)
+    url.searchParams.set('supportsAllDrives', 'false')
+    return this.jsonRequest<DriveV2LiveFile>(url.toString(), {
+      headers: { 'Cache-Control': 'no-cache' },
+    })
+  }
+
+  async createOrReconcile(
+    accountScopeId: string,
+    artifact: DriveV2CreateArtifact,
+    signal?: AbortSignal,
+  ): Promise<DriveV2CreateReceipt> {
+    if (accountScopeId !== this.#accountScopeId) fail('account-switch', 'The validation account changed before creation.')
+    if (signal?.aborted) throw signal.reason ?? new DOMException('Drive v2 validation was cancelled.', 'AbortError')
+    const name = artifact.path.split('/').at(-1) ?? ''
+    if (!name || artifact.parentFolderDriveFileId.trim() === '') fail('invalid-artifact-path', 'The validation artifact path is invalid.')
+
+    const existing = await this.exactOccupants(artifact.parentFolderDriveFileId, name)
+    if (existing.length > 0) return this.reconcileExact(existing, artifact)
+
+    let mutationStarted = false
+    try {
+      mutationStarted = true
+      if (artifact.byteCount >= DRIVE_V2_RESUMABLE_THRESHOLD_BYTES) {
+        await this.createResumable(artifact, name, signal)
+      } else {
+        await this.createMultipart(artifact, name, signal)
+      }
+      if (this.#fault === 'lose-response-after-create' && !this.#faultUsed) {
+        this.#faultUsed = true
+        throw new TypeError('validation-only simulated lost create response')
+      }
+      return await this.verifyExact(artifact)
+    } catch (error) {
+      if (!mutationStarted) throw error
+      const reconciled = await this.tryVerifyExact(artifact)
+      if (reconciled) return reconciled
+      if (signal?.aborted) throw signal.reason ?? error
+      throw new DriveV2LiveValidationError(
+        'ambiguous-create',
+        `Drive v2 creation may have committed but could not be reconciled: ${artifact.path}`,
+        { cause: error },
+      )
+    }
+  }
+
+  private async exactOccupants(parentId: string, name: string): Promise<readonly DriveV2LiveFile[]> {
+    return (await this.listChildren(parentId)).filter((file) => file.name === name)
+  }
+
+  private async createMultipart(artifact: DriveV2CreateArtifact, name: string, signal?: AbortSignal): Promise<void> {
+    if (artifact.resumableOperationId !== null) fail('unexpected-resumable-operation-id', 'Multipart creation included a resumable identity.')
+    const metadata = {
+      id: artifact.generatedDriveFileId,
+      name,
+      mimeType: artifact.mimeType,
+      parents: [artifact.parentFolderDriveFileId],
+      appProperties: artifact.appProperties,
+    }
+    const boundary = `easylab-v2-${crypto.randomUUID()}`
+    const body = new Blob([
+      `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n`,
+      JSON.stringify(metadata),
+      `\r\n--${boundary}\r\nContent-Type: ${artifact.mimeType}\r\n\r\n`,
+      artifact.bytes,
+      `\r\n--${boundary}--\r\n`,
+    ])
+    await this.request(`${DRIVE_UPLOAD_API}/files?uploadType=multipart&fields=${encodeURIComponent(FILE_FIELDS)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': `multipart/related; boundary=${boundary}` },
+      body,
+      signal,
+    })
+  }
+
+  private async createResumable(artifact: DriveV2CreateArtifact, name: string, signal?: AbortSignal): Promise<void> {
+    if (!artifact.resumableOperationId?.trim()) fail('missing-resumable-operation-id', 'Resumable creation requires its immutable operation id.')
+    const initiation = await this.request(
+      `${DRIVE_UPLOAD_API}/files?uploadType=resumable&fields=${encodeURIComponent(FILE_FIELDS)}`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json; charset=UTF-8',
+          'X-Upload-Content-Type': artifact.mimeType,
+          'X-Upload-Content-Length': String(artifact.byteCount),
+        },
+        body: JSON.stringify({
+          id: artifact.generatedDriveFileId,
+          name,
+          mimeType: artifact.mimeType,
+          parents: [artifact.parentFolderDriveFileId],
+          appProperties: artifact.appProperties,
+        }),
+        signal,
+      },
+    )
+    const location = initiation.headers.get('Location')?.trim()
+    if (!location) fail('missing-resumable-session', 'Drive did not return a resumable upload session.')
+    const sessionUrl = new URL(location)
+    if (sessionUrl.protocol !== 'https:' || !sessionUrl.hostname.endsWith('.googleapis.com')) {
+      fail('invalid-resumable-session', 'Drive returned a resumable session outside Google APIs.')
+    }
+    if (this.#fault === 'interrupt-before-resumable-content' && !this.#faultUsed) {
+      this.#faultUsed = true
+      throw new TypeError('validation-only simulated interrupted resumable upload')
+    }
+    await this.request(sessionUrl.toString(), {
+      method: 'PUT',
+      headers: { 'Content-Type': artifact.mimeType },
+      body: new Blob([artifact.bytes], { type: artifact.mimeType }),
+      signal,
+    })
+  }
+
+  private async reconcileExact(
+    occupants: readonly DriveV2LiveFile[],
+    artifact: DriveV2CreateArtifact,
+  ): Promise<DriveV2CreateReceipt> {
+    if (occupants.length !== 1 || occupants[0].id !== artifact.generatedDriveFileId) {
+      fail('create-precondition-conflict', 'The canonical Drive v2 path is occupied or duplicated.')
+    }
+    return this.verifyExact(artifact)
+  }
+
+  private async tryVerifyExact(artifact: DriveV2CreateArtifact): Promise<DriveV2CreateReceipt | undefined> {
+    try {
+      const name = artifact.path.split('/').at(-1)!
+      const occupants = await this.exactOccupants(artifact.parentFolderDriveFileId, name)
+      if (occupants.length !== 1 || occupants[0].id !== artifact.generatedDriveFileId) return undefined
+      return await this.verifyExact(artifact)
+    } catch {
+      return undefined
+    }
+  }
+
+  private async verifyExact(artifact: DriveV2CreateArtifact): Promise<DriveV2CreateReceipt> {
+    const first = await this.metadata(artifact.generatedDriveFileId)
+    const expectedName = artifact.path.split('/').at(-1)!
+    const metadataMatches = first.id === artifact.generatedDriveFileId
+      && first.name === expectedName
+      && first.mimeType === artifact.mimeType
+      && first.trashed !== true
+      && first.size === String(artifact.byteCount)
+      && JSON.stringify(first.parents ?? []) === JSON.stringify([artifact.parentFolderDriveFileId])
+      && exactStringMap(first.appProperties, artifact.appProperties)
+      && positiveVersion(first.version)
+    if (!metadataMatches) fail('create-reconciliation-mismatch', 'Drive v2 created metadata does not match the immutable artifact.')
+    const downloaded = await this.downloadBytes(first.id)
+    if (downloaded.length !== artifact.byteCount || await sha256(downloaded) !== artifact.contentSha256) {
+      fail('create-reconciliation-mismatch', 'Drive v2 created bytes do not match the immutable artifact.')
+    }
+    const second = await this.metadata(artifact.generatedDriveFileId)
+    if (
+      second.id !== first.id
+      || second.name !== first.name
+      || second.mimeType !== first.mimeType
+      || second.version !== first.version
+      || second.size !== first.size
+      || JSON.stringify(second.parents ?? []) !== JSON.stringify(first.parents ?? [])
+      || second.trashed === true
+      || !exactStringMap(second.appProperties, artifact.appProperties)
+    ) {
+      fail('unstable-verification', 'Drive v2 metadata changed during stable verification.')
+    }
+    return Object.freeze({
+      driveFileId: first.id,
+      parentFolderDriveFileId: artifact.parentFolderDriveFileId,
+      path: artifact.path,
+      canonicalId: artifact.canonicalId,
+      contentSha256: artifact.contentSha256,
+      mimeType: artifact.mimeType,
+      appProperties: artifact.appProperties,
+      byteCount: artifact.byteCount,
+      trashed: false,
+      stableSecondRead: true,
+    })
+  }
+
+  private async jsonRequest<T>(url: string, init: RequestInit = {}): Promise<T> {
+    const response = await this.request(url, init)
+    return response.json() as Promise<T>
+  }
+
+  private async request(url: string, init: RequestInit = {}): Promise<Response> {
+    const method = String(init.method ?? 'GET').toUpperCase()
+    if (method === 'PATCH' || method === 'DELETE') fail('forbidden-http-method', 'Drive v2 live validation forbids update and delete requests.')
+    const headers = new Headers(init.headers)
+    headers.set('Authorization', `Bearer ${this.#accessToken}`)
+    const response = await this.#fetch(url, { ...init, method, headers, redirect: 'error' })
+    if (!response.ok) throw new DriveV2LiveHttpError(response.status)
+    return response
+  }
+}

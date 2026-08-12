@@ -130,3 +130,6 @@ This directory is an offline contract only. Android production must continue to
 construct the read-only Drive repository, and the real web provider must remain
 write-disabled. A separate reviewed live harness and exact per-run user approval
 are required before any v2 Drive mutation test.
+
+The default-off harness procedure and its account, folder, source, and evidence
+guards are documented in [LIVE_VALIDATION.md](LIVE_VALIDATION.md).
