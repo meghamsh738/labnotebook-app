@@ -20,6 +20,7 @@ export type DriveV2LiveFile = {
   readonly id: string
   readonly name: string
   readonly mimeType?: string
+  readonly modifiedTime?: string
   readonly size?: string
   readonly trashed?: boolean
   readonly version?: string
@@ -63,6 +64,32 @@ function exactStringMap(left: Readonly<Record<string, string>> | undefined, righ
 
 function positiveVersion(value: string | undefined): value is string {
   return typeof value === 'string' && /^[1-9]\d*$/.test(value)
+}
+
+function validModifiedTime(value: string | undefined): value is string {
+  return typeof value === 'string'
+    && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(value)
+    && Number.isFinite(Date.parse(value))
+}
+
+function abortError(signal?: AbortSignal): unknown {
+  return signal?.reason ?? new DOMException('Drive v2 validation was cancelled.', 'AbortError')
+}
+
+async function boundedDelay(delayMs: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) throw abortError(signal)
+  if (delayMs === 0) return
+  await new Promise<void>((resolve, reject) => {
+    const onAbort = () => {
+      clearTimeout(timer)
+      reject(abortError(signal))
+    }
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort)
+      resolve()
+    }, delayMs)
+    signal?.addEventListener('abort', onAbort, { once: true })
+  })
 }
 
 async function sha256(bytes: Uint8Array): Promise<string> {
@@ -154,17 +181,18 @@ export class DriveV2LiveValidationClient implements DriveV2CreateOnlyClient {
     return Object.freeze(files)
   }
 
-  async downloadBytes(fileId: string): Promise<Uint8Array> {
-    const response = await this.request(`${DRIVE_API}/files/${encodeURIComponent(fileId)}?alt=media`)
+  async downloadBytes(fileId: string, signal?: AbortSignal): Promise<Uint8Array> {
+    const response = await this.request(`${DRIVE_API}/files/${encodeURIComponent(fileId)}?alt=media`, { signal })
     return new Uint8Array(await response.arrayBuffer())
   }
 
-  async metadata(fileId: string): Promise<DriveV2LiveFile> {
+  async metadata(fileId: string, signal?: AbortSignal): Promise<DriveV2LiveFile> {
     const url = new URL(`${DRIVE_API}/files/${encodeURIComponent(fileId)}`)
     url.searchParams.set('fields', FILE_FIELDS)
     url.searchParams.set('supportsAllDrives', 'false')
     return this.jsonRequest<DriveV2LiveFile>(url.toString(), {
       headers: { 'Cache-Control': 'no-cache' },
+      signal,
     })
   }
 
@@ -180,7 +208,7 @@ export class DriveV2LiveValidationClient implements DriveV2CreateOnlyClient {
 
     const existing = await this.exactOccupants(artifact.parentFolderDriveFileId, name)
     if (existing.length > 0) {
-      const receipt = await this.reconcileExact(existing, artifact)
+      const receipt = await this.reconcileExact(existing, artifact, signal)
       this.consumeRecoveredTargetFault(artifact)
       return receipt
     }
@@ -196,12 +224,11 @@ export class DriveV2LiveValidationClient implements DriveV2CreateOnlyClient {
       if (this.consumeFault('lose-response-after-create', artifact)) {
         throw new TypeError('validation-only simulated lost create response')
       }
-      return await this.verifyExact(artifact)
     } catch (error) {
       if (!mutationStarted) throw error
       if (signal?.aborted) throw signal.reason ?? error
       try {
-        const receipt = await this.verifyGeneratedIdAfterAmbiguity(artifact, signal)
+        const receipt = await this.verifyExact(artifact, signal)
         this.consumeRecoveredTargetFault(artifact)
         return receipt
       } catch (reconciliationError) {
@@ -214,6 +241,7 @@ export class DriveV2LiveValidationClient implements DriveV2CreateOnlyClient {
         )
       }
     }
+    return this.verifyExact(artifact, signal)
   }
 
   private async exactOccupants(parentId: string, name: string): Promise<readonly DriveV2LiveFile[]> {
@@ -286,11 +314,12 @@ export class DriveV2LiveValidationClient implements DriveV2CreateOnlyClient {
   private async reconcileExact(
     occupants: readonly DriveV2LiveFile[],
     artifact: DriveV2CreateArtifact,
+    signal?: AbortSignal,
   ): Promise<DriveV2CreateReceipt> {
     if (occupants.length !== 1 || occupants[0].id !== artifact.generatedDriveFileId) {
       fail('create-precondition-conflict', 'The canonical Drive v2 path is occupied or duplicated.')
     }
-    return this.verifyExact(artifact)
+    return this.verifyExact(artifact, signal)
   }
 
   private consumeFault(expected: DriveV2LiveFault, artifact: DriveV2CreateArtifact): boolean {
@@ -305,17 +334,69 @@ export class DriveV2LiveValidationClient implements DriveV2CreateOnlyClient {
     }
   }
 
-  private async verifyGeneratedIdAfterAmbiguity(
-    artifact: DriveV2CreateArtifact,
-    signal?: AbortSignal,
-  ): Promise<DriveV2CreateReceipt> {
+  private metadataMatchesArtifact(file: DriveV2LiveFile, artifact: DriveV2CreateArtifact): boolean {
+    const expectedName = artifact.path.split('/').at(-1)!
+    return file.id === artifact.generatedDriveFileId
+      && file.name === expectedName
+      && file.mimeType === artifact.mimeType
+      && validModifiedTime(file.modifiedTime)
+      && file.trashed !== true
+      && file.size === String(artifact.byteCount)
+      && JSON.stringify(file.parents ?? []) === JSON.stringify([artifact.parentFolderDriveFileId])
+      && exactStringMap(file.appProperties, artifact.appProperties)
+      && positiveVersion(file.version)
+  }
+
+  private metadataPairIsStable(first: DriveV2LiveFile, second: DriveV2LiveFile): boolean {
+    return second.id === first.id
+      && second.name === first.name
+      && second.mimeType === first.mimeType
+      && second.modifiedTime === first.modifiedTime
+      && second.version === first.version
+      && second.size === first.size
+      && JSON.stringify(second.parents ?? []) === JSON.stringify(first.parents ?? [])
+      && second.trashed === first.trashed
+      && exactStringMap(second.appProperties, first.appProperties ?? {})
+  }
+
+  private async verifyExact(artifact: DriveV2CreateArtifact, signal?: AbortSignal): Promise<DriveV2CreateReceipt> {
     let lastNotFound: DriveV2LiveHttpError | undefined
+    let sawUnstablePair = false
     for (const delayMs of this.#reconciliationDelaysMs) {
-      if (signal?.aborted) throw signal.reason ?? new DOMException('Drive v2 validation was cancelled.', 'AbortError')
-      if (delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs))
-      if (signal?.aborted) throw signal.reason ?? new DOMException('Drive v2 validation was cancelled.', 'AbortError')
+      await boundedDelay(delayMs, signal)
+      if (signal?.aborted) throw abortError(signal)
       try {
-        return await this.verifyExact(artifact)
+        const first = await this.metadata(artifact.generatedDriveFileId, signal)
+        if (!this.metadataMatchesArtifact(first, artifact)) {
+          fail('create-reconciliation-mismatch', 'Drive v2 created metadata does not match the immutable artifact.')
+        }
+        const downloaded = await this.downloadBytes(first.id, signal)
+        if (downloaded.length !== artifact.byteCount || await sha256(downloaded) !== artifact.contentSha256) {
+          fail('create-reconciliation-mismatch', 'Drive v2 created bytes do not match the immutable artifact.')
+        }
+        const second = await this.metadata(artifact.generatedDriveFileId, signal)
+        if (!this.metadataMatchesArtifact(second, artifact)) {
+          fail('create-reconciliation-mismatch', 'Drive v2 created metadata changed away from its immutable artifact.')
+        }
+        if (BigInt(second.version!) < BigInt(first.version!) || Date.parse(second.modifiedTime!) < Date.parse(first.modifiedTime!)) {
+          fail('create-reconciliation-mismatch', 'Drive v2 server metadata moved backwards during verification.')
+        }
+        if (!this.metadataPairIsStable(first, second)) {
+          sawUnstablePair = true
+          continue
+        }
+        return Object.freeze({
+          driveFileId: second.id,
+          parentFolderDriveFileId: artifact.parentFolderDriveFileId,
+          path: artifact.path,
+          canonicalId: artifact.canonicalId,
+          contentSha256: artifact.contentSha256,
+          mimeType: artifact.mimeType,
+          appProperties: artifact.appProperties,
+          byteCount: artifact.byteCount,
+          trashed: false,
+          stableSecondRead: true,
+        })
       } catch (error) {
         if (error instanceof DriveV2LiveHttpError && error.status === 404) {
           lastNotFound = error
@@ -324,54 +405,14 @@ export class DriveV2LiveValidationClient implements DriveV2CreateOnlyClient {
         throw error
       }
     }
+    if (sawUnstablePair) {
+      fail('unstable-verification', 'Drive v2 metadata did not produce two consecutive stable reads within the bounded verification window.')
+    }
     throw new DriveV2LiveValidationError(
       'ambiguous-create',
       `Drive v2 generated file id remained unavailable after bounded reconciliation: ${artifact.path}`,
       { cause: lastNotFound },
     )
-  }
-
-  private async verifyExact(artifact: DriveV2CreateArtifact): Promise<DriveV2CreateReceipt> {
-    const first = await this.metadata(artifact.generatedDriveFileId)
-    const expectedName = artifact.path.split('/').at(-1)!
-    const metadataMatches = first.id === artifact.generatedDriveFileId
-      && first.name === expectedName
-      && first.mimeType === artifact.mimeType
-      && first.trashed !== true
-      && first.size === String(artifact.byteCount)
-      && JSON.stringify(first.parents ?? []) === JSON.stringify([artifact.parentFolderDriveFileId])
-      && exactStringMap(first.appProperties, artifact.appProperties)
-      && positiveVersion(first.version)
-    if (!metadataMatches) fail('create-reconciliation-mismatch', 'Drive v2 created metadata does not match the immutable artifact.')
-    const downloaded = await this.downloadBytes(first.id)
-    if (downloaded.length !== artifact.byteCount || await sha256(downloaded) !== artifact.contentSha256) {
-      fail('create-reconciliation-mismatch', 'Drive v2 created bytes do not match the immutable artifact.')
-    }
-    const second = await this.metadata(artifact.generatedDriveFileId)
-    if (
-      second.id !== first.id
-      || second.name !== first.name
-      || second.mimeType !== first.mimeType
-      || second.version !== first.version
-      || second.size !== first.size
-      || JSON.stringify(second.parents ?? []) !== JSON.stringify(first.parents ?? [])
-      || second.trashed === true
-      || !exactStringMap(second.appProperties, artifact.appProperties)
-    ) {
-      fail('unstable-verification', 'Drive v2 metadata changed during stable verification.')
-    }
-    return Object.freeze({
-      driveFileId: first.id,
-      parentFolderDriveFileId: artifact.parentFolderDriveFileId,
-      path: artifact.path,
-      canonicalId: artifact.canonicalId,
-      contentSha256: artifact.contentSha256,
-      mimeType: artifact.mimeType,
-      appProperties: artifact.appProperties,
-      byteCount: artifact.byteCount,
-      trashed: false,
-      stableSecondRead: true,
-    })
   }
 
   private async jsonRequest<T>(url: string, init: RequestInit = {}): Promise<T> {

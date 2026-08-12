@@ -11,7 +11,20 @@ import {
   type DriveV2LiveFile,
 } from './support/driveV2LiveValidationClient'
 
-type Stored = DriveV2LiveFile & { bytes: Uint8Array }
+type Stored = {
+  id: string
+  name: string
+  mimeType?: string
+  modifiedTime?: string
+  size?: string
+  trashed?: boolean
+  version?: string
+  parents?: readonly string[]
+  appProperties?: Readonly<Record<string, string>>
+  bytes: Uint8Array
+}
+
+type MutableMetadata = { -readonly [Key in keyof DriveV2LiveFile]: DriveV2LiveFile[Key] }
 
 function indexOfBytes(haystack: Uint8Array, needle: Uint8Array, start = 0): number {
   outer: for (let index = start; index <= haystack.length - needle.length; index += 1) {
@@ -47,22 +60,36 @@ async function parseMultipartRelated(init: RequestInit): Promise<{ metadata: Rec
 function fakeDrive(options: {
   listLagCallsAfterCreate?: number
   metadataNotFoundReadsAfterCreate?: number
+  downloadNotFoundReadsAfterCreate?: number
+  metadataVersionChangesAfterCreate?: number
+  metadataModifiedTimeChangesAfterCreate?: number
+  metadataVersionSequence?: readonly string[]
+  metadataModifiedTimeSequence?: readonly string[]
+  omitCreatedVersion?: boolean
+  omitCreatedModifiedTime?: boolean
   corruptCreatedBytes?: boolean
 } = {}) {
   const files = new Map<string, Stored>()
   const sessions = new Map<string, Record<string, unknown>>()
   const listLagRemaining = new Map<string, number>()
   const metadataNotFoundRemaining = new Map<string, number>()
+  const downloadNotFoundRemaining = new Map<string, number>()
+  const metadataVersionChangesRemaining = new Map<string, number>()
+  const metadataModifiedTimeChangesRemaining = new Map<string, number>()
+  const metadataVersionSequences = new Map<string, string[]>()
+  const metadataModifiedTimeSequences = new Map<string, string[]>()
   const methods: string[] = []
+  let downloadReads = 0
   let nextId = 1
   const json = (value: unknown, status = 200, headers?: HeadersInit) => new Response(JSON.stringify(value), {
     status,
     headers: { 'Content-Type': 'application/json', ...headers },
   })
-  const metadata = (record: Stored): DriveV2LiveFile => ({
+  const metadata = (record: Stored): MutableMetadata => ({
     id: record.id,
     name: record.name,
     mimeType: record.mimeType,
+    modifiedTime: record.modifiedTime,
     size: record.size,
     trashed: record.trashed,
     version: record.version,
@@ -77,15 +104,21 @@ function fakeDrive(options: {
       id,
       name: String(input.name),
       mimeType: String(input.mimeType),
+      modifiedTime: options.omitCreatedModifiedTime ? undefined : '2026-08-12T12:00:00.000Z',
       size: String(bytes.length),
       trashed: false,
-      version: '1',
+      version: options.omitCreatedVersion ? undefined : '1',
       parents: (input.parents as string[]) ?? [],
       appProperties: (input.appProperties as Record<string, string>) ?? {},
       bytes: storedBytes,
     })
     listLagRemaining.set(id, options.listLagCallsAfterCreate ?? 0)
     metadataNotFoundRemaining.set(id, options.metadataNotFoundReadsAfterCreate ?? 0)
+    downloadNotFoundRemaining.set(id, options.downloadNotFoundReadsAfterCreate ?? 0)
+    metadataVersionChangesRemaining.set(id, options.metadataVersionChangesAfterCreate ?? 0)
+    metadataModifiedTimeChangesRemaining.set(id, options.metadataModifiedTimeChangesAfterCreate ?? 0)
+    metadataVersionSequences.set(id, [...(options.metadataVersionSequence ?? [])])
+    metadataModifiedTimeSequences.set(id, [...(options.metadataModifiedTimeSequence ?? [])])
   }
   const fetchImpl: typeof fetch = async (input, init = {}) => {
     const url = new URL(String(input instanceof Request ? input.url : input))
@@ -132,15 +165,44 @@ function fakeDrive(options: {
     const fileId = decodeURIComponent(url.pathname.split('/').at(-1) ?? '')
     const record = files.get(fileId)
     if (!record) return json({}, 404)
-    if (url.searchParams.get('alt') === 'media') return new Response(record.bytes)
+    if (url.searchParams.get('alt') === 'media') {
+      downloadReads += 1
+      const remainingDownloadNotFound = downloadNotFoundRemaining.get(fileId) ?? 0
+      if (remainingDownloadNotFound > 0) {
+        downloadNotFoundRemaining.set(fileId, remainingDownloadNotFound - 1)
+        return json({}, 404)
+      }
+      return new Response(record.bytes)
+    }
     const remainingNotFound = metadataNotFoundRemaining.get(fileId) ?? 0
     if (remainingNotFound > 0) {
       metadataNotFoundRemaining.set(fileId, remainingNotFound - 1)
       return json({}, 404)
     }
-    return json(metadata(record))
+    const responseMetadata = metadata(record)
+    const versionSequence = metadataVersionSequences.get(fileId) ?? []
+    if (versionSequence.length > 0) {
+      responseMetadata.version = versionSequence.shift()
+      record.version = responseMetadata.version
+    }
+    const modifiedTimeSequence = metadataModifiedTimeSequences.get(fileId) ?? []
+    if (modifiedTimeSequence.length > 0) {
+      responseMetadata.modifiedTime = modifiedTimeSequence.shift()
+      record.modifiedTime = responseMetadata.modifiedTime
+    }
+    const remainingVersionChanges = metadataVersionChangesRemaining.get(fileId) ?? 0
+    if (remainingVersionChanges > 0) {
+      metadataVersionChangesRemaining.set(fileId, remainingVersionChanges - 1)
+      record.version = String(Number(record.version) + 1)
+    }
+    const remainingModifiedTimeChanges = metadataModifiedTimeChangesRemaining.get(fileId) ?? 0
+    if (remainingModifiedTimeChanges > 0) {
+      metadataModifiedTimeChangesRemaining.set(fileId, remainingModifiedTimeChanges - 1)
+      record.modifiedTime = new Date(Date.parse(record.modifiedTime!) + 1_000).toISOString()
+    }
+    return json(responseMetadata)
   }
-  return { files, methods, fetchImpl }
+  return { files, methods, fetchImpl, get downloadReads() { return downloadReads } }
 }
 
 async function blobArtifact(options: {
@@ -242,6 +304,103 @@ test('v2 direct-id lost-response reconciliation preserves an exact byte mismatch
   expect(drive.files.size).toBe(1)
 })
 
+test('v2 stable verification waits for two consecutive identical Drive versions', async () => {
+  const drive = fakeDrive({ metadataVersionChangesAfterCreate: 1 })
+  const live = client(drive.fetchImpl, [0, 0])
+  const artifact = await blobArtifact({ bytes: new Uint8Array([5, 10, 15]), driveFileId: 'generated-version-settle' })
+
+  const receipt = await live.createOrReconcile('drive-v2-live:allowed-test-account', artifact)
+
+  expect(receipt.stableSecondRead).toBe(true)
+  expect(drive.files.get('generated-version-settle')?.version).toBe('2')
+  expect(drive.downloadReads).toBe(2)
+  expect(drive.files.size).toBe(1)
+})
+
+test('v2 stable verification waits for Drive modifiedTime to settle', async () => {
+  const drive = fakeDrive({ metadataModifiedTimeChangesAfterCreate: 1 })
+  const live = client(drive.fetchImpl, [0, 0])
+  const artifact = await blobArtifact({ bytes: new Uint8Array([7, 14, 21]), driveFileId: 'generated-time-settle' })
+
+  const receipt = await live.createOrReconcile('drive-v2-live:allowed-test-account', artifact)
+
+  expect(receipt.stableSecondRead).toBe(true)
+  expect(drive.files.get('generated-time-settle')?.modifiedTime).toBe('2026-08-12T12:00:01.000Z')
+  expect(drive.downloadReads).toBe(2)
+})
+
+test('v2 stable verification requires adjacent stable reads after repeated version changes', async () => {
+  const drive = fakeDrive({ metadataVersionSequence: ['1', '2', '2', '3', '3', '3'] })
+  const live = client(drive.fetchImpl, [0, 0, 0])
+  const artifact = await blobArtifact({ bytes: new Uint8Array([8, 16, 24]), driveFileId: 'generated-adjacent-stability' })
+
+  const receipt = await live.createOrReconcile('drive-v2-live:allowed-test-account', artifact)
+
+  expect(receipt.stableSecondRead).toBe(true)
+  expect(drive.downloadReads).toBe(3)
+  expect(drive.files.size).toBe(1)
+})
+
+test('v2 stable verification fails closed when Drive versions never settle', async () => {
+  const drive = fakeDrive({ metadataVersionChangesAfterCreate: 100 })
+  const live = client(drive.fetchImpl, [0, 0])
+  const artifact = await blobArtifact({ bytes: new Uint8Array([6, 12, 18]), driveFileId: 'generated-version-unstable' })
+
+  await expect(live.createOrReconcile('drive-v2-live:allowed-test-account', artifact)).rejects.toMatchObject({
+    code: 'unstable-verification',
+  })
+  expect(drive.downloadReads).toBe(2)
+  expect(drive.files.size).toBe(1)
+})
+
+test('v2 transient download 404 retries the full verification without duplicating', async () => {
+  const drive = fakeDrive({ downloadNotFoundReadsAfterCreate: 1 })
+  const live = client(drive.fetchImpl, [0, 0])
+  const artifact = await blobArtifact({ bytes: new Uint8Array([9, 18, 27]), driveFileId: 'generated-download-404' })
+
+  const receipt = await live.createOrReconcile('drive-v2-live:allowed-test-account', artifact)
+
+  expect(receipt.driveFileId).toBe('generated-download-404')
+  expect(drive.downloadReads).toBe(2)
+  expect(drive.files.size).toBe(1)
+})
+
+test('v2 invalid or decreasing server metadata fails closed', async () => {
+  const invalidCases = [
+    { omitCreatedVersion: true },
+    { omitCreatedModifiedTime: true },
+    { metadataVersionSequence: ['0'] },
+    { metadataModifiedTimeSequence: ['not-rfc3339'] },
+    { metadataVersionSequence: ['2', '1'] },
+    { metadataModifiedTimeSequence: ['2026-08-12T12:00:01.000Z', '2026-08-12T12:00:00.000Z'] },
+  ] as const
+  for (const [index, options] of invalidCases.entries()) {
+    const drive = fakeDrive(options)
+    const live = client(drive.fetchImpl, [0])
+    const artifact = await blobArtifact({ bytes: new Uint8Array([10, 20, 30]), driveFileId: `generated-invalid-${index}` })
+    await expect(live.createOrReconcile('drive-v2-live:allowed-test-account', artifact)).rejects.toMatchObject({
+      code: 'create-reconciliation-mismatch',
+    })
+    expect(drive.files.size).toBe(1)
+  }
+})
+
+test('v2 cancellation during reconciliation backoff issues no later request', async () => {
+  const drive = fakeDrive({ metadataNotFoundReadsAfterCreate: 100 })
+  const live = client(drive.fetchImpl, [0, 250])
+  const artifact = await blobArtifact({ bytes: new Uint8Array([11, 22, 33]), driveFileId: 'generated-cancel-backoff' })
+  const controller = new AbortController()
+  const pending = live.createOrReconcile('drive-v2-live:allowed-test-account', artifact, controller.signal)
+  await new Promise((resolve) => setTimeout(resolve, 25))
+  controller.abort(new DOMException('cancelled by test', 'AbortError'))
+
+  await expect(pending).rejects.toMatchObject({ name: 'AbortError' })
+  const requestCount = drive.methods.length
+  await new Promise((resolve) => setTimeout(resolve, 50))
+  expect(drive.methods).toHaveLength(requestCount)
+  expect(drive.files.size).toBe(1)
+})
+
 test('v2 an existing fault target is reconciled without moving the fault to the next artifact', async () => {
   const drive = fakeDrive()
   const live = client(drive.fetchImpl)
@@ -270,7 +429,7 @@ test('v2 orphan retry reuses its generated id, suppresses an early commit, and p
   expect(drive.files.has('generated-orphan')).toBe(true)
   expect(drive.files.has('generated-commit')).toBe(false)
 
-  const resumed = client(drive.fetchImpl, [0, 0])
+  const resumed = client(drive.fetchImpl, [0, 0, 0])
   resumed.setFault('lose-response-after-create', orphan.path)
   await resumed.createOrReconcile('drive-v2-live:allowed-test-account', orphan)
   await resumed.createOrReconcile('drive-v2-live:allowed-test-account', commit)
