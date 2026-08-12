@@ -60,24 +60,34 @@ internal class DriveV2BlobRecord(
     bytes: ByteArray,
     val mimeType: String,
 ) {
-    val bytes: ByteArray = bytes.copyOf()
+    private val contentBytes: ByteArray = bytes.copyOf()
+    val bytes: ByteArray get() = contentBytes.copyOf()
 
     override fun equals(other: Any?): Boolean =
         other is DriveV2BlobRecord &&
             expectedId == other.expectedId &&
-            bytes.contentEquals(other.bytes) &&
+            contentBytes.contentEquals(other.contentBytes) &&
             mimeType == other.mimeType
 
-    override fun hashCode(): Int = 31 * (31 * expectedId.hashCode() + bytes.contentHashCode()) + mimeType.hashCode()
+    override fun hashCode(): Int =
+        31 * (31 * expectedId.hashCode() + contentBytes.contentHashCode()) + mimeType.hashCode()
 }
 
-internal data class DriveV2WorkspaceState(
-    val tips: List<String>,
-    val frontiers: Map<String, List<String>>,
-    val objectMap: Map<String, DriveV2ObjectRecord>,
-    val visibleCommitIds: List<String>,
-    val visibleObjectIds: List<String>,
-)
+internal class DriveV2WorkspaceState(
+    tips: Collection<String>,
+    frontiers: Map<String, List<String>>,
+    objectMap: Map<String, DriveV2ObjectRecord>,
+    visibleCommitIds: Collection<String>,
+    visibleObjectIds: Collection<String>,
+) {
+    val tips: List<String> = immutableGraphList(tips)
+    val frontiers: Map<String, List<String>> = immutableGraphMap(
+        frontiers.mapValues { (_, ids) -> immutableGraphList(ids) },
+    )
+    val objectMap: Map<String, DriveV2ObjectRecord> = immutableGraphMap(objectMap)
+    val visibleCommitIds: List<String> = immutableGraphList(visibleCommitIds)
+    val visibleObjectIds: List<String> = immutableGraphList(visibleObjectIds)
+}
 
 internal data class DriveV2FrontierDecision(
     val decision: String,
@@ -196,6 +206,15 @@ internal object DriveV2GraphValidator {
         val objectMap = uniqueMap(objects, DriveV2ObjectRecord::expectedId, "divergent-duplicate")
         val blobMap = uniqueMap(blobs, DriveV2BlobRecord::expectedId, "divergent-duplicate")
         val commitMap = uniqueMap(commits, DriveV2CommitRecord::expectedId, "divergent-duplicate")
+        if (commitMap.isEmpty()) {
+            return DriveV2WorkspaceState(
+                tips = emptyList(),
+                frontiers = emptyMap(),
+                objectMap = objectMap,
+                visibleCommitIds = emptyList(),
+                visibleObjectIds = emptyList(),
+            )
+        }
         val tips = graphTips(commitMap)
         require(commits.count { it.body.stringList("parentCommitIds").isEmpty() } == 1, "multiple-genesis-commits")
 
@@ -468,6 +487,12 @@ private fun JsonObject.text(name: String): String {
     if (!primitive.isString) throw DriveV2ContractException("artifact-schema-mismatch")
     return primitive.content
 }
+
+private fun <T> immutableGraphList(value: Collection<T>): List<T> =
+    java.util.Collections.unmodifiableList(ArrayList(value))
+
+private fun <K, V> immutableGraphMap(value: Map<K, V>): Map<K, V> =
+    java.util.Collections.unmodifiableMap(LinkedHashMap(value))
 
 private fun JsonObject.optionalText(name: String): String? {
     val value = get(name) ?: return null

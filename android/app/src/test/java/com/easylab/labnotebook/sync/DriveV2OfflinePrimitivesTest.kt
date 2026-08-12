@@ -341,6 +341,222 @@ class DriveV2OfflinePrimitivesTest {
     }
 
     @Test
+    fun firstCommitAndInterruptedCreateValidateCompleteProposedGraphBeforeWriting() = runTest {
+        val first = createTransaction(remoteArtifactsForPreflight = emptyList())
+        assertEquals(emptyList<String>(), first.readiness.state.tips)
+        assertEquals(emptyList<String>(), first.readiness.state.visibleObjectIds)
+        val firstCalls = mutableListOf<String>()
+        val firstClient = DriveV2CreateOnlyClient { _, artifact ->
+            firstCalls += artifact.path
+            Result.success(artifact.receipt())
+        }
+        DriveV2CreateTransactionExecutor(firstClient).execute(first).getOrThrow()
+        assertEquals(first.commit.path, firstCalls.last())
+
+        val interrupted = fixture("interrupted-transaction.json")
+        val orphans = buildList {
+            interrupted.arrayValue("blobs").forEach { add(it.jsonObject.remoteArtifact("blob")) }
+            interrupted.arrayValue("objects").forEach { add(it.jsonObject.remoteArtifact("object")) }
+        }
+        val resumed = createTransaction(remoteArtifactsForPreflight = orphans)
+        assertEquals(emptyList<String>(), resumed.readiness.state.tips)
+        assertEquals(emptyList<String>(), resumed.readiness.state.visibleObjectIds)
+        assertEquals(orphans.size, resumed.readiness.remoteBlobs.size + resumed.readiness.remoteObjects.size)
+
+        val validationParent = "isolated-validation-container-id"
+        val isolated = createTransaction(
+            remoteArtifactsForPreflight = emptyList(),
+            rootParentDriveFileId = validationParent,
+        )
+        assertEquals(validationParent, isolated.readiness.rootParentDriveFileId)
+        val wrongParent = buildPreflight(
+            plannedDescriptors = (isolated.blobs + isolated.objects + isolated.commit)
+                .map(DriveV2CreateArtifact::descriptor),
+            operationIdOverride = isolated.operationId,
+            remoteArtifactsOverride = emptyList(),
+            rootParentDriveFileId = validationParent,
+            rootItemParentDriveFileId = "root",
+        )
+        assertCode("workspace-marker-switch") {
+            DriveV2Preflight.validateBeforePlan(wrongParent)
+        }
+
+        val current = buildPreflight()
+        val invalidBody = commitBody(
+            workspaceId = current.currentWorkspaceId,
+            operationId = "op-v2-missing-observed-tip",
+            objectIds = emptyList(),
+        )
+        val invalidId = DriveV2Contract.commitId(invalidBody)
+        val invalidBytes = DriveV2CanonicalJson.encode(invalidBody).toByteArray(StandardCharsets.UTF_8)
+        val invalidCommit = DriveV2CreateArtifact(
+            kind = "commit",
+            generatedDriveFileId = "generated-missing-observed-tip",
+            parentFolderDriveFileId = current.currentManagedFolderIds.getValue("commits"),
+            canonicalId = invalidId,
+            path = DriveV2Contract.commitPath(invalidId),
+            mimeType = DriveV2Contract.JSON_MIME_TYPE,
+            bytes = invalidBytes,
+            appProperties = DriveV2Contract.appProperties(
+                current.currentWorkspaceId,
+                "commit",
+                invalidId,
+                DriveV2CanonicalJson.sha256(invalidBytes),
+            ),
+        )
+        val invalidReadiness = DriveV2Preflight.validateBeforePlan(
+            buildPreflight(
+                plannedDescriptors = listOf(invalidCommit.descriptor()),
+                operationIdOverride = "op-v2-missing-observed-tip",
+            ),
+        )
+        assertCode("incomplete-parent-frontier") {
+            DriveV2CreateTransaction(invalidReadiness, emptyList(), emptyList(), invalidCommit)
+        }
+
+        val missingParentBody = objectBody(
+            workspaceId = current.currentWorkspaceId,
+            kind = "attachment",
+            id = "attachment-with-missing-entry",
+            payload = buildJsonObject {
+                put("entryId", "missing-entry")
+                put("name", "unreachable.txt")
+            },
+        )
+        val missingParentObject = jsonArtifact(
+            kind = "object",
+            generatedDriveFileId = "generated-missing-parent-object",
+            parentFolderDriveFileId = current.currentManagedFolderIds.getValue("objects"),
+            body = missingParentBody,
+        )
+        val missingParentCommitBody = commitBody(
+            workspaceId = current.currentWorkspaceId,
+            operationId = "op-v2-missing-parent",
+            objectIds = listOf(missingParentObject.canonicalId),
+        )
+        val missingParentCommit = jsonArtifact(
+            kind = "commit",
+            generatedDriveFileId = "generated-missing-parent-commit",
+            parentFolderDriveFileId = current.currentManagedFolderIds.getValue("commits"),
+            body = missingParentCommitBody,
+        )
+        val missingParentReadiness = DriveV2Preflight.validateBeforePlan(
+            buildPreflight(
+                plannedDescriptors = listOf(missingParentObject, missingParentCommit)
+                    .map(DriveV2CreateArtifact::descriptor),
+                operationIdOverride = "op-v2-missing-parent",
+                remoteArtifactsOverride = emptyList(),
+            ),
+        )
+        val invalidGraphCalls = mutableListOf<String>()
+        DriveV2CreateTransactionExecutor(
+            DriveV2CreateOnlyClient { _, artifact ->
+                invalidGraphCalls += artifact.path
+                Result.success(artifact.receipt())
+            },
+        )
+        assertCode("missing-parent-target") {
+            DriveV2CreateTransaction(
+                missingParentReadiness,
+                emptyList(),
+                listOf(missingParentObject),
+                missingParentCommit,
+            )
+        }
+        assertTrue(invalidGraphCalls.isEmpty())
+    }
+
+    @Test
+    fun readinessSnapshotCannotDropAnObservedTipBeforePlanning() {
+        val base = buildPreflight()
+        val baseCommitId = DriveV2Preflight.validateBeforePlan(
+            buildPreflight(
+                plannedDescriptors = emptyList(),
+                operationIdOverride = "op-v2-read-base-tip",
+            ),
+        ).state.tips.single()
+        val branchArtifacts = listOf("a", "b").flatMap { suffix ->
+            val body = objectBody(
+                workspaceId = base.currentWorkspaceId,
+                kind = "entry",
+                id = "entry-branch-$suffix",
+                payload = buildJsonObject { put("title", "Branch $suffix") },
+            )
+            val objectArtifact = jsonArtifact(
+                kind = "object",
+                generatedDriveFileId = "generated-branch-object-$suffix",
+                parentFolderDriveFileId = base.currentManagedFolderIds.getValue("objects"),
+                body = body,
+            )
+            val commitArtifact = jsonArtifact(
+                kind = "commit",
+                generatedDriveFileId = "generated-branch-commit-$suffix",
+                parentFolderDriveFileId = base.currentManagedFolderIds.getValue("commits"),
+                body = commitBody(
+                    workspaceId = base.currentWorkspaceId,
+                    operationId = "op-v2-branch-$suffix",
+                    objectIds = listOf(objectArtifact.canonicalId),
+                    parentCommitIds = listOf(baseCommitId),
+                ),
+            )
+            listOf(objectArtifact.remoteArtifact(), commitArtifact.remoteArtifact())
+        }
+        val nextOperationId = "op-v2-must-join-both-tips"
+        val observed = DriveV2Preflight.validateBeforePlan(
+            buildPreflight(
+                plannedDescriptors = emptyList(),
+                operationIdOverride = nextOperationId,
+                remoteArtifactsOverride = base.artifacts + branchArtifacts,
+            ),
+        )
+        assertEquals(2, observed.state.tips.size)
+        val retainedTip = observed.state.tips.first()
+        assertThrows(UnsupportedOperationException::class.java) {
+            @Suppress("UNCHECKED_CAST")
+            (observed.state.tips as MutableList<String>).removeAt(1)
+        }
+        assertEquals(2, observed.state.tips.size)
+        val remoteBlob = observed.remoteBlobs.single()
+        val originalRemoteBlobBytes = remoteBlob.bytes
+        remoteBlob.bytes.fill(0)
+        assertArrayEquals(originalRemoteBlobBytes, remoteBlob.bytes)
+        assertThrows(UnsupportedOperationException::class.java) {
+            @Suppress("UNCHECKED_CAST")
+            (observed.remoteBlobs as MutableList<DriveV2BlobRecord>).clear()
+        }
+
+        val incompleteCommit = jsonArtifact(
+            kind = "commit",
+            generatedDriveFileId = "generated-incomplete-join",
+            parentFolderDriveFileId = base.currentManagedFolderIds.getValue("commits"),
+            body = commitBody(
+                workspaceId = base.currentWorkspaceId,
+                operationId = nextOperationId,
+                objectIds = emptyList(),
+                parentCommitIds = listOf(retainedTip),
+            ),
+        )
+        val readiness = DriveV2Preflight.validateBeforePlan(
+            buildPreflight(
+                plannedDescriptors = listOf(incompleteCommit.descriptor()),
+                operationIdOverride = nextOperationId,
+                remoteArtifactsOverride = base.artifacts + branchArtifacts,
+            ),
+        )
+        val calls = mutableListOf<String>()
+        DriveV2CreateTransactionExecutor(
+            DriveV2CreateOnlyClient { _, artifact ->
+                calls += artifact.path
+                Result.success(artifact.receipt())
+            },
+        )
+        assertCode("incomplete-parent-frontier") {
+            DriveV2CreateTransaction(readiness, emptyList(), emptyList(), incompleteCommit)
+        }
+        assertTrue(calls.isEmpty())
+    }
+
+    @Test
     fun createOnlyExecutorFreezesBytesAndPublishesCommitLast() = runTest {
         val transaction = createTransaction()
         val expectedBlob = transaction.blobs.single().bytes.copyOf()
@@ -398,7 +614,12 @@ class DriveV2OfflinePrimitivesTest {
         assertFalse(DriveV2PlanReadiness::class.java.declaredMethods.any { it.name == "copy" })
         assertThrows(IllegalArgumentException::class.java) {
             DriveV2PlanReadiness(
-                state = valid.readiness.state,
+                inventory = DriveV2ValidatedInventory(
+                    state = valid.readiness.state,
+                    objects = valid.readiness.remoteObjects,
+                    blobs = valid.readiness.remoteBlobs,
+                    commits = valid.readiness.remoteCommits,
+                ),
                 projection = valid.readiness.projection,
                 journal = buildPreflight().journal,
                 validationSeal = Any(),
@@ -585,18 +806,24 @@ class DriveV2OfflinePrimitivesTest {
     private fun buildPreflight(
         plannedDescriptors: List<DriveV2ArtifactDescriptor>? = null,
         operationIdOverride: String? = null,
+        remoteArtifactsOverride: List<DriveV2RemoteArtifact>? = null,
+        rootParentDriveFileId: String = "root",
+        rootItemParentDriveFileId: String = rootParentDriveFileId,
     ): DriveV2PreflightSnapshot {
         val preflight = fixture("preflight.json")
         val interrupted = fixture("interrupted-transaction.json")
         val workspaceId = preflight.text("workspaceId")
-        val roots = listOf(preflight.objectValue("root").workspaceItem())
+        val roots = listOf(
+            preflight.objectValue("root").workspaceItem().copy(parentIds = listOf(rootItemParentDriveFileId)),
+        )
         val folders = preflight.arrayValue("managedFolders").map { it.jsonObject.workspaceItem() }
         val folderIds = folders.associate { it.name to it.driveFileId }
-        val artifacts = buildList {
+        val defaultArtifacts = buildList {
             interrupted.arrayValue("blobs").forEach { add(it.jsonObject.remoteArtifact("blob")) }
             interrupted.arrayValue("objects").forEach { add(it.jsonObject.remoteArtifact("object")) }
             interrupted.arrayValue("commits").forEach { add(it.jsonObject.remoteArtifact("commit")) }
         }
+        val artifacts = remoteArtifactsOverride ?: defaultArtifacts
         val descriptors = plannedDescriptors?.sortedBy { it.canonicalId }
             ?: artifacts.map(DriveV2RemoteArtifact::descriptor).sortedBy { it.canonicalId }
         val operationId = operationIdOverride ?: preflight.text("operationId")
@@ -608,6 +835,7 @@ class DriveV2OfflinePrimitivesTest {
             operationId,
             folderIds,
             descriptors,
+            rootParentDriveFileId,
         )
         return DriveV2PreflightSnapshot(
             currentAccountId = accountId,
@@ -623,7 +851,10 @@ class DriveV2OfflinePrimitivesTest {
         )
     }
 
-    private fun createTransaction(): DriveV2CreateTransaction {
+    private fun createTransaction(
+        remoteArtifactsForPreflight: List<DriveV2RemoteArtifact>? = null,
+        rootParentDriveFileId: String = "root",
+    ): DriveV2CreateTransaction {
         val fixture = fixture("interrupted-transaction.json")
         val workspaceId = fixture.text("workspaceId")
         val remoteArtifacts = buildList {
@@ -649,6 +880,8 @@ class DriveV2OfflinePrimitivesTest {
             buildPreflight(
                 plannedDescriptors = (blobs + objects + commit).map(DriveV2CreateArtifact::descriptor),
                 operationIdOverride = operationId,
+                remoteArtifactsOverride = remoteArtifactsForPreflight,
+                rootParentDriveFileId = rootParentDriveFileId,
             ),
         )
         return DriveV2CreateTransaction(
@@ -696,19 +929,63 @@ class DriveV2OfflinePrimitivesTest {
         operationId: String,
         objectIds: List<String>,
         blobIds: List<String> = emptyList(),
+        parentCommitIds: List<String> = emptyList(),
     ) = buildJsonObject {
         put("protocol", DriveV2Contract.PROTOCOL)
         put("schemaVersion", 2)
         put("workspaceId", workspaceId)
         put("operationId", operationId)
         put("createdAt", "2026-08-09T13:00:00.000Z")
-        put("parentCommitIds", JsonArray(emptyList()))
+        put("parentCommitIds", buildJsonArray { parentCommitIds.sorted().forEach { add(JsonPrimitive(it)) } })
         put("objectIds", buildJsonArray { objectIds.sorted().forEach { add(JsonPrimitive(it)) } })
         put("blobIds", buildJsonArray { blobIds.sorted().forEach { add(JsonPrimitive(it)) } })
     }
 
     private fun objectRecord(body: JsonObject) = DriveV2ObjectRecord(DriveV2Contract.objectId(body), body)
     private fun commitRecord(body: JsonObject) = DriveV2CommitRecord(DriveV2Contract.commitId(body), body)
+
+    private fun jsonArtifact(
+        kind: String,
+        generatedDriveFileId: String,
+        parentFolderDriveFileId: String,
+        body: JsonObject,
+    ): DriveV2CreateArtifact {
+        val bytes = DriveV2CanonicalJson.encode(body).toByteArray(StandardCharsets.UTF_8)
+        val canonicalId = if (kind == "object") DriveV2Contract.objectId(body) else DriveV2Contract.commitId(body)
+        val workspaceId = body.getValue("workspaceId").jsonPrimitive.content
+        return DriveV2CreateArtifact(
+            kind = kind,
+            generatedDriveFileId = generatedDriveFileId,
+            parentFolderDriveFileId = parentFolderDriveFileId,
+            canonicalId = canonicalId,
+            path = if (kind == "object") {
+                DriveV2Contract.objectPath(canonicalId)
+            } else {
+                DriveV2Contract.commitPath(canonicalId)
+            },
+            mimeType = DriveV2Contract.JSON_MIME_TYPE,
+            bytes = bytes,
+            appProperties = DriveV2Contract.appProperties(
+                workspaceId,
+                kind,
+                canonicalId,
+                DriveV2CanonicalJson.sha256(bytes),
+            ),
+        )
+    }
+
+    private fun DriveV2CreateArtifact.remoteArtifact() = DriveV2RemoteArtifact(
+        kind = kind,
+        driveFileId = generatedDriveFileId,
+        parentFolderDriveFileId = parentFolderDriveFileId,
+        path = path,
+        mimeType = mimeType,
+        byteCount = byteCount,
+        expectedId = canonicalId,
+        expectedContentSha256 = contentSha256,
+        appProperties = appProperties,
+        bytes = bytes,
+    )
 
     private fun JsonObject.remoteArtifact(kind: String): DriveV2RemoteArtifact {
         val bytes = when (kind) {

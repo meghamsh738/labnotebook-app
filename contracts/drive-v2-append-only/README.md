@@ -18,6 +18,10 @@ wall-clock time.
 - V2 uses the exact root name `Easylab Lab Notebook v2` and a protocol marker.
 - Creating a v2 workspace is an explicit single-client operation. Automatic
   provisioning during normal sync is forbidden. Duplicate marked roots block.
+- A test-only live harness may place the exact v2 root beneath a timestamped
+  validation container. Its Drive parent ID is bound in the local operation
+  journal and a parent switch blocks before mutation; normal workspaces remain
+  top-level.
 - V1 migration is a verified read-only import that creates a v2 genesis commit.
   It never turns the old v1 files into writable state.
 
@@ -72,6 +76,13 @@ commit lists exact prerequisite hashes and all graph tips observed during
 planning. Until the commit is present and all references verify, none of its
 objects are visible. Unreferenced prerequisites are inert orphans and cannot
 resurrect data.
+
+An explicitly provisioned empty workspace, or one containing only verified
+orphan prerequisites from an interrupted first transaction, has an empty
+visible graph. Before the first writer call, the create-only transaction adds
+its proposed commit to the verified inventory and validates the complete
+resulting graph, including all observed commit tips, entity ancestry,
+relationships, and blob references.
 
 Commits form a directed acyclic graph, while each entity has its own object
 history graph. The visible frontier for an entity is calculated across every

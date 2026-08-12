@@ -54,6 +54,7 @@ export type DriveV2OperationJournalInput = {
   readonly operationId: string
   readonly managedFolderIds: Readonly<Record<string, string>>
   readonly artifactDescriptors: readonly DriveV2ArtifactDescriptor[]
+  readonly rootParentDriveFileId?: string
 }
 
 const validatedOperationJournals = new WeakSet<DriveV2OperationJournal>()
@@ -93,6 +94,7 @@ export class DriveV2OperationJournal {
   readonly operationId: string
   readonly managedFolderIds: Readonly<Record<string, string>>
   readonly artifactDescriptors: readonly DriveV2ArtifactDescriptor[]
+  readonly rootParentDriveFileId: string
 
   constructor(input: DriveV2OperationJournalInput) {
     requireCondition(Boolean(
@@ -105,6 +107,8 @@ export class DriveV2OperationJournal {
     this.savedRootDriveFileId = input.savedRootDriveFileId
     this.workspaceId = input.workspaceId
     this.operationId = input.operationId
+    this.rootParentDriveFileId = input.rootParentDriveFileId ?? 'root'
+    requireCondition(Boolean(this.rootParentDriveFileId.trim()), 'invalid-operation-identity')
     this.managedFolderIds = cloneFreeze(input.managedFolderIds)
     this.artifactDescriptors = cloneFreeze(input.artifactDescriptors)
     validatedOperationJournals.add(this)
@@ -210,15 +214,17 @@ export class DriveV2PlanReadiness {
   readonly operationId: string
   readonly managedFolderIds: Readonly<Record<string, string>>
   readonly artifactDescriptors: readonly DriveV2ArtifactDescriptor[]
+  readonly rootParentDriveFileId: string
+  readonly remoteArtifacts: readonly DriveV2RemoteArtifact[]
 
   constructor(
-    state: DriveV2WorkspaceState,
+    inventory: DriveV2ValidatedInventory,
     projection: DriveV2Projection,
     journal: DriveV2OperationJournal,
     validationSeal: symbol,
   ) {
     requireCondition(validationSeal === readinessSeal, 'unvalidated-readiness')
-    this.state = state
+    this.state = inventory.state
     this.projection = projection
     this.accountScopeId = journal.accountScopeId
     this.savedRootDriveFileId = journal.savedRootDriveFileId
@@ -226,12 +232,19 @@ export class DriveV2PlanReadiness {
     this.operationId = journal.operationId
     this.managedFolderIds = cloneFreeze(journal.managedFolderIds)
     this.artifactDescriptors = cloneFreeze(journal.artifactDescriptors)
+    this.rootParentDriveFileId = journal.rootParentDriveFileId
+    this.remoteArtifacts = Object.freeze([...inventory.artifacts])
     validatedReadiness.add(this)
     Object.freeze(this)
   }
 }
 
 const readinessSeal = Symbol('DriveV2ValidatedReadiness')
+
+type DriveV2ValidatedInventory = {
+  readonly state: DriveV2WorkspaceState
+  readonly artifacts: readonly DriveV2RemoteArtifact[]
+}
 
 function validateJournalAndFolders(snapshot: DriveV2PreflightSnapshot) {
   const journal = snapshot.journal
@@ -253,7 +266,7 @@ function validateJournalAndFolders(snapshot: DriveV2PreflightSnapshot) {
   }
   requireCondition(
     root.name === DRIVE_V2_WORKSPACE_ROOT_NAME
-      && exact(root.parentIds, ['root'])
+      && exact(root.parentIds, [journal.rootParentDriveFileId])
       && root.mimeType === DRIVE_V2_FOLDER_MIME_TYPE
       && !root.trashed
       && exact(root.appProperties, expectedRootProperties),
@@ -289,7 +302,7 @@ function validateJournalAndFolders(snapshot: DriveV2PreflightSnapshot) {
   requireCondition(snapshot.folders.length === DRIVE_V2_MANAGED_FOLDER_ROLES.length, 'managed-folder-switch')
 }
 
-async function validateArtifacts(snapshot: DriveV2PreflightSnapshot): Promise<DriveV2WorkspaceState> {
+async function validateArtifacts(snapshot: DriveV2PreflightSnapshot): Promise<DriveV2ValidatedInventory> {
   const byPath = new Map<string, DriveV2RemoteArtifact[]>()
   for (const artifact of snapshot.artifacts) {
     const copies = byPath.get(artifact.path) ?? []
@@ -339,7 +352,10 @@ async function validateArtifacts(snapshot: DriveV2PreflightSnapshot): Promise<Dr
       }
     }
   }
-  return validateDriveV2Workspace(snapshot.journal.workspaceId, objects, blobs, commits)
+  return Object.freeze({
+    state: await validateDriveV2Workspace(snapshot.journal.workspaceId, objects, blobs, commits),
+    artifacts: Object.freeze(representatives),
+  })
 }
 
 export async function validateDriveV2BeforePlan(snapshot: DriveV2PreflightSnapshot): Promise<DriveV2PlanReadiness> {
@@ -351,6 +367,7 @@ export async function validateDriveV2BeforePlan(snapshot: DriveV2PreflightSnapsh
     operationId: snapshot.journal.operationId,
     managedFolderIds: snapshot.journal.managedFolderIds,
     artifactDescriptors: snapshot.journal.artifactDescriptors,
+    rootParentDriveFileId: snapshot.journal.rootParentDriveFileId,
   })
   const frozenSnapshot: DriveV2PreflightSnapshot = {
     currentAccountScopeId: snapshot.currentAccountScopeId,
@@ -376,8 +393,13 @@ export async function validateDriveV2BeforePlan(snapshot: DriveV2PreflightSnapsh
     })),
   }
   validateJournalAndFolders(frozenSnapshot)
-  const state = await validateArtifacts(frozenSnapshot)
-  return new DriveV2PlanReadiness(state, await projectDriveV2Workspace(state), frozenSnapshot.journal, readinessSeal)
+  const inventory = await validateArtifacts(frozenSnapshot)
+  return new DriveV2PlanReadiness(
+    inventory,
+    await projectDriveV2Workspace(inventory.state),
+    frozenSnapshot.journal,
+    readinessSeal,
+  )
 }
 
 export type DriveV2CreateArtifactInput = {
@@ -529,6 +551,55 @@ export class DriveV2CreateTransaction {
     requireCondition(commitBody.operationId === readiness.operationId, 'stale-operation-id')
     requireCondition(exact(commitBody.objectIds, objects.map((artifact) => artifact.canonicalId).sort()), 'missing-object-reference')
     requireCondition(exact(commitBody.blobIds, blobs.map((artifact) => artifact.canonicalId).sort()), 'missing-blob-reference')
+    const existingObjects: DriveV2ObjectRecord[] = []
+    const existingBlobs: DriveV2BlobRecord[] = []
+    const existingCommits: DriveV2CommitRecord[] = []
+    for (const artifact of readiness.remoteArtifacts) {
+      if (artifact.kind === 'object') {
+        existingObjects.push({ expectedId: artifact.expectedId, body: driveV2DecodeCanonicalObject(artifact.bytes) })
+      } else if (artifact.kind === 'blob') {
+        existingBlobs.push({ expectedId: artifact.expectedId, bytes: artifact.bytes, mimeType: artifact.mimeType })
+      } else {
+        existingCommits.push({ expectedId: artifact.expectedId, body: driveV2DecodeCanonicalObject(artifact.bytes) })
+      }
+    }
+    const plannedObjects = objects.map((artifact) => ({
+      expectedId: artifact.canonicalId,
+      body: driveV2DecodeCanonicalObject(artifact.bytes),
+    }))
+    const plannedBlobs = blobs.map((artifact) => ({
+      expectedId: artifact.canonicalId,
+      bytes: artifact.bytes,
+      mimeType: artifact.mimeType,
+    }))
+    const plannedCommit = { expectedId: commit.canonicalId, body: commitBody }
+    const commitAlreadyVisible = existingCommits.some((record) => record.expectedId === plannedCommit.expectedId)
+    if (!commitAlreadyVisible) requireCondition(exact(commitBody.parentCommitIds, readiness.state.tips), 'incomplete-parent-frontier')
+    const mergeExact = <T>(
+      existing: readonly T[],
+      planned: readonly T[],
+      id: (value: T) => string,
+      same: (left: T, right: T) => boolean,
+    ): T[] => {
+      const merged = new Map<string, T>()
+      for (const value of [...existing, ...planned]) {
+        const key = id(value)
+        const previous = merged.get(key)
+        requireCondition(previous === undefined || same(previous, value), 'divergent-duplicate')
+        if (previous === undefined) merged.set(key, value)
+      }
+      return [...merged.values()]
+    }
+    const sameBlob = (left: DriveV2BlobRecord, right: DriveV2BlobRecord) =>
+      left.mimeType === right.mimeType
+        && left.bytes.length === right.bytes.length
+        && left.bytes.every((byte, index) => byte === right.bytes[index])
+    await validateDriveV2Workspace(
+      readiness.workspaceId,
+      mergeExact(existingObjects, plannedObjects, (record) => record.expectedId, (left, right) => exact(left.body, right.body)),
+      mergeExact(existingBlobs, plannedBlobs, (record) => record.expectedId, sameBlob),
+      mergeExact(existingCommits, [plannedCommit], (record) => record.expectedId, (left, right) => exact(left.body, right.body)),
+    )
     return new DriveV2CreateTransaction(readiness, blobs, objects, commit, createTransactionSeal)
   }
 }

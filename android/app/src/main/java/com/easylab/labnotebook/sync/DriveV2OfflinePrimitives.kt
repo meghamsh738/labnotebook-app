@@ -37,7 +37,12 @@ internal class DriveV2OperationJournal(
     val operationId: String,
     managedFolderIds: Map<String, String>,
     artifactDescriptors: List<DriveV2ArtifactDescriptor>,
+    val rootParentDriveFileId: String = "root",
 ) {
+    init {
+        require(rootParentDriveFileId.isNotBlank())
+    }
+
     val managedFolderIds: Map<String, String> = immutableMap(managedFolderIds)
     val artifactDescriptors: List<DriveV2ArtifactDescriptor> = immutableList(artifactDescriptors)
 }
@@ -98,7 +103,7 @@ internal data class DriveV2PreflightSnapshot(
 private object DriveV2ValidatedReadinessSeal
 
 internal class DriveV2PlanReadiness internal constructor(
-    val state: DriveV2WorkspaceState,
+    inventory: DriveV2ValidatedInventory,
     val projection: DriveV2Projection,
     journal: DriveV2OperationJournal,
     validationSeal: Any,
@@ -115,15 +120,27 @@ internal class DriveV2PlanReadiness internal constructor(
     val operationId: String = journal.operationId
     val managedFolderIds: Map<String, String> = immutableMap(journal.managedFolderIds)
     val artifactDescriptors: List<DriveV2ArtifactDescriptor> = immutableList(journal.artifactDescriptors)
+    val rootParentDriveFileId: String = journal.rootParentDriveFileId
+    val state: DriveV2WorkspaceState = inventory.state
+    val remoteObjects: List<DriveV2ObjectRecord> = immutableList(inventory.objects)
+    val remoteBlobs: List<DriveV2BlobRecord> = immutableList(inventory.blobs)
+    val remoteCommits: List<DriveV2CommitRecord> = immutableList(inventory.commits)
 }
+
+internal data class DriveV2ValidatedInventory(
+    val state: DriveV2WorkspaceState,
+    val objects: List<DriveV2ObjectRecord>,
+    val blobs: List<DriveV2BlobRecord>,
+    val commits: List<DriveV2CommitRecord>,
+)
 
 internal object DriveV2Preflight {
     fun validateBeforePlan(snapshot: DriveV2PreflightSnapshot): DriveV2PlanReadiness {
         validateJournalAndFolders(snapshot)
-        val state = validateArtifacts(snapshot)
+        val inventory = validateArtifacts(snapshot)
         return DriveV2PlanReadiness(
-            state,
-            DriveV2GraphValidator.project(state),
+            inventory,
+            DriveV2GraphValidator.project(inventory.state),
             snapshot.journal,
             DriveV2ValidatedReadinessSeal,
         )
@@ -152,7 +169,7 @@ internal object DriveV2Preflight {
         )
         require(
             root.name == DriveV2Contract.ROOT_NAME &&
-                root.parentIds == listOf("root") &&
+                root.parentIds == listOf(snapshot.journal.rootParentDriveFileId) &&
                 root.mimeType == DriveV2Contract.FOLDER_MIME_TYPE &&
                 !root.trashed &&
                 root.appProperties == expectedRootProperties,
@@ -188,7 +205,7 @@ internal object DriveV2Preflight {
         require(snapshot.folders.size == DriveV2Contract.MANAGED_FOLDER_ROLES.size, "managed-folder-switch")
     }
 
-    private fun validateArtifacts(snapshot: DriveV2PreflightSnapshot): DriveV2WorkspaceState {
+    private fun validateArtifacts(snapshot: DriveV2PreflightSnapshot): DriveV2ValidatedInventory {
         val representatives = snapshot.artifacts.groupBy(DriveV2RemoteArtifact::path).values.map { copies ->
             require(copies.drop(1).all(copies.first()::remoteIdentityEquals), "divergent-duplicate")
             copies.first()
@@ -248,11 +265,17 @@ internal object DriveV2Preflight {
                 }
             }
         }
-        return DriveV2GraphValidator.validateWorkspace(
+        val state = DriveV2GraphValidator.validateWorkspace(
             workspaceId = snapshot.journal.workspaceId,
             objects = objects,
             blobs = blobs,
             commits = commits,
+        )
+        return DriveV2ValidatedInventory(
+            state = state,
+            objects = objects.toList(),
+            blobs = blobs.toList(),
+            commits = commits.toList(),
         )
     }
 
@@ -387,6 +410,35 @@ internal class DriveV2CreateTransaction(
         require(commitBody.getValue("operationId").jsonPrimitive.content == operationId)
         require(commitBody.stringIds("objectIds") == objects.map(DriveV2CreateArtifact::canonicalId).sorted())
         require(commitBody.stringIds("blobIds") == blobs.map(DriveV2CreateArtifact::canonicalId).sorted())
+        validateResultingWorkspace(commitBody)
+    }
+
+    private fun validateResultingWorkspace(commitBody: JsonObject) {
+        val plannedObjects = objects.map { artifact ->
+            DriveV2ObjectRecord(
+                artifact.canonicalId,
+                DriveV2CanonicalJson.decodeCanonicalObject(artifact.bytes),
+            )
+        }
+        val plannedBlobs = blobs.map { artifact ->
+            DriveV2BlobRecord(artifact.canonicalId, artifact.bytes, artifact.mimeType)
+        }
+        val plannedCommit = DriveV2CommitRecord(
+            commit.canonicalId,
+            commitBody,
+        )
+        val commitAlreadyVisible = readiness.remoteCommits.any { it.expectedId == plannedCommit.expectedId }
+        if (!commitAlreadyVisible) {
+            if (commitBody.stringIds("parentCommitIds") != readiness.state.tips) {
+                throw DriveV2ContractException("incomplete-parent-frontier")
+            }
+        }
+        DriveV2GraphValidator.validateWorkspace(
+            workspaceId = readiness.workspaceId,
+            objects = mergeExact(readiness.remoteObjects, plannedObjects) { it.expectedId },
+            blobs = mergeExact(readiness.remoteBlobs, plannedBlobs) { it.expectedId },
+            commits = mergeExact(readiness.remoteCommits, listOf(plannedCommit)) { it.expectedId },
+        )
     }
 
     fun snapshot() = DriveV2CreateTransaction(
@@ -509,6 +561,16 @@ private fun JsonObject.stringIds(name: String): List<String> =
             ?.map { it.jsonPrimitive.content }
             ?: throw DriveV2ContractException("artifact-schema-mismatch")
     }
+
+private fun <T> mergeExact(existing: List<T>, planned: List<T>, id: (T) -> String): List<T> {
+    val merged = LinkedHashMap<String, T>()
+    (existing + planned).forEach { value ->
+        val key = id(value)
+        val previous = merged.putIfAbsent(key, value)
+        if (previous != null && previous != value) throw DriveV2ContractException("divergent-duplicate")
+    }
+    return merged.values.toList()
+}
 
 internal fun DriveV2RemoteArtifact.bytesBase64(): String = Base64.encodeToString(bytes, Base64.NO_WRAP)
 

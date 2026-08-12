@@ -8,6 +8,7 @@
     "protocolMarker": "easylabDriveProtocol=v2-append-only",
     "managedFolders": ["objects", "blobs", "commits"],
     "provisioning": "explicit-single-client-only",
+    "isolatedValidationContainer": "allowed-only-when-its-drive-id-is-bound-in-the-local-operation-journal",
     "duplicateMarkedRoots": "block",
     "v1Boundary": "read-only-import-source"
   },
@@ -132,6 +133,8 @@
     "genesis": "exactly-one-parentless-commit",
     "commitParents": "all-observed-valid-tips",
     "unreferencedPrerequisites": "inert-orphans",
+    "emptyWorkspaceBeforeGenesis": "valid-zero-visible-state",
+    "plannedCommitValidation": "full-resulting-graph-before-first-remote-request",
     "partialTransactionVisible": false,
     "checkpointBeforeVerifiedCommit": false
   },
@@ -177,6 +180,7 @@
     "accountSwitch": "block-with-zero-remote-mutation",
     "savedRootSwitch": "block-with-zero-remote-mutation",
     "workspaceMarkerSwitch": "block-with-zero-remote-mutation",
+    "rootParentSwitch": "block-with-zero-remote-mutation",
     "managedFolderSwitch": "block-with-zero-remote-mutation",
     "duplicateMarkedRoot": "block-with-zero-remote-mutation",
     "crossAccountJournalReadAllowed": false

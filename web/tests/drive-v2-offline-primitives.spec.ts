@@ -136,14 +136,17 @@ function cloneRemote(artifact: DriveV2RemoteArtifact, overrides: Partial<DriveV2
 async function buildPreflight(options: {
   descriptors?: readonly DriveV2ArtifactDescriptor[]
   operationId?: string
+  artifacts?: readonly DriveV2RemoteArtifact[]
+  rootParentDriveFileId?: string
 } = {}): Promise<DriveV2PreflightSnapshot> {
   const preflight = await fixture<PreflightFixture>('preflight.json')
   const interrupted = await fixture<InterruptedFixture>('interrupted-transaction.json')
-  const artifacts = [
+  const defaultArtifacts = [
     ...interrupted.blobs.map((record) => remoteArtifact(record, 'blob')),
     ...interrupted.objects.map((record) => remoteArtifact(record, 'object')),
     ...interrupted.commits.map((record) => remoteArtifact(record, 'commit')),
   ]
+  const artifacts = options.artifacts === undefined ? defaultArtifacts : [...options.artifacts]
   const managedFolderIds = Object.fromEntries(preflight.managedFolders.map((folder) => [folder.name, folder.driveFileId]))
   const descriptors = [...(options.descriptors ?? artifacts.map((artifact) => artifact.descriptor()))]
     .sort((left, right) => left.canonicalId.localeCompare(right.canonicalId))
@@ -155,7 +158,12 @@ async function buildPreflight(options: {
     operationId,
     managedFolderIds,
     artifactDescriptors: descriptors,
+    rootParentDriveFileId: options.rootParentDriveFileId,
   })
+  const root = {
+    ...preflight.root,
+    parentIds: [options.rootParentDriveFileId ?? 'root'],
+  }
   return {
     currentAccountScopeId: preflight.accountScopeId,
     currentSavedRootDriveFileId: preflight.savedRootDriveFileId,
@@ -164,7 +172,7 @@ async function buildPreflight(options: {
     currentManagedFolderIds: managedFolderIds,
     currentArtifactDescriptors: descriptors,
     journal,
-    roots: [preflight.root],
+    roots: [root],
     folders: preflight.managedFolders,
     artifacts,
   }
@@ -184,7 +192,10 @@ async function createArtifact(remote: DriveV2RemoteArtifact, resumableOperationI
   })
 }
 
-async function createTransaction() {
+async function createTransaction(options: {
+  remoteArtifacts?: readonly DriveV2RemoteArtifact[]
+  rootParentDriveFileId?: string
+} = {}) {
   const interrupted = await fixture<InterruptedFixture>('interrupted-transaction.json')
   const remotes = [
     ...interrupted.blobs.map((record) => remoteArtifact(record, 'blob')),
@@ -200,6 +211,8 @@ async function createTransaction() {
   const readiness = await validateDriveV2BeforePlan(await buildPreflight({
     descriptors: artifacts.map((artifact) => artifact.descriptor()),
     operationId,
+    artifacts: options.remoteArtifacts,
+    rootParentDriveFileId: options.rootParentDriveFileId,
   }))
   return DriveV2CreateTransaction.create(readiness, blobs, objects, commit)
 }
@@ -450,7 +463,12 @@ test('web preflight snapshots account, root, folders, descriptors, bytes, and du
   const readiness = await validateDriveV2BeforePlan(valid)
   expect(readiness.projection.visibleTargets).toContain('entry:entry-interrupted')
   await expectCode(
-    () => new DriveV2PlanReadiness(readiness.state, readiness.projection, valid.journal, Symbol('forged')),
+    () => new DriveV2PlanReadiness(
+      { state: readiness.state, artifacts: readiness.remoteArtifacts },
+      readiness.projection,
+      valid.journal,
+      Symbol('forged'),
+    ),
     'unvalidated-readiness',
   )
   const forgedJournal = {
@@ -484,6 +502,167 @@ test('web preflight snapshots account, root, folders, descriptors, bytes, and du
   const pending = validateDriveV2BeforePlan(valid)
   callerBytes.fill(0)
   await pending
+})
+
+test('first-commit and interrupted-create planning validate the complete proposed graph before writing', async () => {
+  const first = await createTransaction({ remoteArtifacts: [] })
+  expect(first.readiness.state.tips).toEqual([])
+  expect(first.readiness.state.visibleObjectIds).toEqual([])
+  const firstCalls: string[] = []
+  await new DriveV2CreateTransactionExecutor({
+    async createOrReconcile(_accountScopeId, artifact) {
+      firstCalls.push(artifact.path)
+      return receipt(artifact)
+    },
+  }).execute(first)
+  expect(firstCalls.at(-1)).toBe(first.commit.path)
+
+  const interrupted = await fixture<InterruptedFixture>('interrupted-transaction.json')
+  const orphanArtifacts = [
+    ...interrupted.blobs.map((record) => remoteArtifact(record, 'blob')),
+    ...interrupted.objects.map((record) => remoteArtifact(record, 'object')),
+  ]
+  const resumed = await createTransaction({ remoteArtifacts: orphanArtifacts })
+  expect(resumed.readiness.state.tips).toEqual([])
+  expect(resumed.readiness.state.visibleObjectIds).toEqual([])
+  expect(resumed.readiness.remoteArtifacts).toHaveLength(orphanArtifacts.length)
+
+  const validationParent = 'isolated-validation-container-id'
+  const isolated = await createTransaction({ remoteArtifacts: [], rootParentDriveFileId: validationParent })
+  expect(isolated.readiness.rootParentDriveFileId).toBe(validationParent)
+  const wrongParent = await buildPreflight({
+    descriptors: [...isolated.blobs, ...isolated.objects, isolated.commit].map((artifact) => artifact.descriptor()),
+    operationId: isolated.operationId,
+    artifacts: [],
+    rootParentDriveFileId: validationParent,
+  })
+  await expectCode(
+    () => validateDriveV2BeforePlan({
+      ...wrongParent,
+      roots: wrongParent.roots.map((root) => ({ ...root, parentIds: ['root'] })),
+    }),
+    'workspace-marker-switch',
+  )
+
+  const current = await buildPreflight()
+  const currentReadiness = await validateDriveV2BeforePlan(current)
+  const invalidCommitBody: DriveV2JsonObject = {
+    protocol: 'easylab-drive-v2-append-only',
+    schemaVersion: 2,
+    workspaceId: current.currentWorkspaceId,
+    operationId: 'op-v2-missing-observed-tip',
+    createdAt: '2026-08-09T13:05:00.000Z',
+    parentCommitIds: [],
+    objectIds: [],
+    blobIds: [],
+  }
+  const invalidCommitId = await driveV2CommitId(invalidCommitBody)
+  const invalidCommitBytes = driveV2CanonicalBytes(invalidCommitBody)
+  const invalidCommit = await DriveV2CreateArtifact.create({
+    kind: 'commit',
+    generatedDriveFileId: 'generated-missing-observed-tip',
+    parentFolderDriveFileId: current.currentManagedFolderIds.commits,
+    canonicalId: invalidCommitId,
+    path: driveV2CommitPath(invalidCommitId),
+    mimeType: DRIVE_V2_JSON_MIME_TYPE,
+    bytes: invalidCommitBytes,
+    appProperties: driveV2AppProperties(
+      current.currentWorkspaceId,
+      'commit',
+      invalidCommitId,
+      await driveV2Sha256(invalidCommitBytes),
+    ),
+  })
+  const invalidSnapshot = await buildPreflight({
+    descriptors: [invalidCommit.descriptor()],
+    operationId: 'op-v2-missing-observed-tip',
+  })
+  const invalidReadiness = await validateDriveV2BeforePlan(invalidSnapshot)
+  await expectCode(
+    () => DriveV2CreateTransaction.create(invalidReadiness, [], [], invalidCommit),
+    'incomplete-parent-frontier',
+  )
+  expect(currentReadiness.state.tips).not.toEqual([])
+
+  const missingParentBody: DriveV2JsonObject = {
+    protocol: 'easylab-drive-v2-append-only',
+    schemaVersion: 2,
+    workspaceId: current.currentWorkspaceId,
+    entityKind: 'attachment',
+    entityId: 'attachment-with-missing-entry',
+    operation: 'upsert',
+    baseObjectIds: [],
+    blobIds: [],
+    payload: { entryId: 'missing-entry', name: 'unreachable.txt' },
+    tombstone: null,
+    resolutionOf: [],
+  }
+  const missingParentObjectId = await driveV2ObjectId(missingParentBody)
+  const missingParentObjectBytes = driveV2CanonicalBytes(missingParentBody)
+  const missingParentObject = await DriveV2CreateArtifact.create({
+    kind: 'object',
+    generatedDriveFileId: 'generated-missing-parent-object',
+    parentFolderDriveFileId: current.currentManagedFolderIds.objects,
+    canonicalId: missingParentObjectId,
+    path: driveV2ObjectPath(missingParentObjectId),
+    mimeType: DRIVE_V2_JSON_MIME_TYPE,
+    bytes: missingParentObjectBytes,
+    appProperties: driveV2AppProperties(
+      current.currentWorkspaceId,
+      'object',
+      missingParentObjectId,
+      await driveV2Sha256(missingParentObjectBytes),
+    ),
+  })
+  const missingParentCommitBody: DriveV2JsonObject = {
+    protocol: 'easylab-drive-v2-append-only',
+    schemaVersion: 2,
+    workspaceId: current.currentWorkspaceId,
+    operationId: 'op-v2-missing-parent',
+    createdAt: '2026-08-09T13:05:00.000Z',
+    parentCommitIds: [],
+    objectIds: [missingParentObjectId],
+    blobIds: [],
+  }
+  const missingParentCommitId = await driveV2CommitId(missingParentCommitBody)
+  const missingParentCommitBytes = driveV2CanonicalBytes(missingParentCommitBody)
+  const missingParentCommit = await DriveV2CreateArtifact.create({
+    kind: 'commit',
+    generatedDriveFileId: 'generated-missing-parent-commit',
+    parentFolderDriveFileId: current.currentManagedFolderIds.commits,
+    canonicalId: missingParentCommitId,
+    path: driveV2CommitPath(missingParentCommitId),
+    mimeType: DRIVE_V2_JSON_MIME_TYPE,
+    bytes: missingParentCommitBytes,
+    appProperties: driveV2AppProperties(
+      current.currentWorkspaceId,
+      'commit',
+      missingParentCommitId,
+      await driveV2Sha256(missingParentCommitBytes),
+    ),
+  })
+  const missingParentReadiness = await validateDriveV2BeforePlan(await buildPreflight({
+    descriptors: [missingParentObject, missingParentCommit].map((artifact) => artifact.descriptor()),
+    operationId: 'op-v2-missing-parent',
+    artifacts: [],
+  }))
+  const invalidGraphCalls: string[] = []
+  new DriveV2CreateTransactionExecutor({
+    async createOrReconcile(_accountScopeId, artifact) {
+      invalidGraphCalls.push(artifact.path)
+      return receipt(artifact)
+    },
+  })
+  await expectCode(
+    () => DriveV2CreateTransaction.create(
+      missingParentReadiness,
+      [],
+      [missingParentObject],
+      missingParentCommit,
+    ),
+    'missing-parent-target',
+  )
+  expect(invalidGraphCalls).toEqual([])
 })
 
 test('web create-only executor is commit-last, verifies receipts, suppresses commit on failure, and propagates cancellation', async () => {

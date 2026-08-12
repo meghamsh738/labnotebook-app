@@ -460,6 +460,16 @@ function validateWorkspaceSnapshot(fixtureValue, selectedCommitIds = fixtureValu
   const commitMap = new Map(commitRecords.map((record) => [record.expectedId, record]))
   assert.equal(commitMap.size, commitRecords.length)
 
+  if (commitRecords.length === 0) {
+    return {
+      tips: [],
+      frontiers: {},
+      objectMap,
+      visibleCommitIds: [],
+      visibleObjectIds: [],
+    }
+  }
+
   const tips = rawGraphTips(commitRecords.map((record) => ({
     id: record.expectedId,
     parents: record.body.parentCommitIds,
@@ -1120,6 +1130,10 @@ assert.equal(policy.writeGate, 'disabled-until-v2-runtime-parity')
 assert.equal(policy.workspace.rootFolderName, 'Easylab Lab Notebook v2')
 assert.deepEqual(policy.workspace.managedFolders, ['objects', 'blobs', 'commits'])
 assert.equal(policy.workspace.provisioning, 'explicit-single-client-only')
+assert.equal(
+  policy.workspace.isolatedValidationContainer,
+  'allowed-only-when-its-drive-id-is-bound-in-the-local-operation-journal',
+)
 assert.equal(policy.workspace.duplicateMarkedRoots, 'block')
 assert.equal(policy.workspace.v1Boundary, 'read-only-import-source')
 assert.equal(policy.remoteMutation.mode, 'create-only')
@@ -1162,6 +1176,8 @@ assert.equal(policy.transaction.commitLast, true)
 assert.equal(policy.transaction.genesis, 'exactly-one-parentless-commit')
 assert.equal(policy.transaction.commitParents, 'all-observed-valid-tips')
 assert.equal(policy.transaction.unreferencedPrerequisites, 'inert-orphans')
+assert.equal(policy.transaction.emptyWorkspaceBeforeGenesis, 'valid-zero-visible-state')
+assert.equal(policy.transaction.plannedCommitValidation, 'full-resulting-graph-before-first-remote-request')
 assert.equal(policy.transaction.partialTransactionVisible, false)
 assert.equal(policy.transaction.checkpointBeforeVerifiedCommit, false)
 assert.equal(policy.frontier.scope, 'per-entity-across-all-valid-reachable-commits')
@@ -1183,6 +1199,7 @@ assert.deepEqual(
   ['accountScopeId', 'savedRootDriveFileId', 'workspaceId', 'operationId'],
 )
 assert.equal(policy.localOperationIdentity.crossAccountJournalReadAllowed, false)
+assert.equal(policy.localOperationIdentity.rootParentSwitch, 'block-with-zero-remote-mutation')
 assert.equal(policy.upload.multipartMaximumExclusiveBytes, 5 * 1024 * 1024)
 assert.equal(policy.upload.resumableMinimumInclusiveBytes, 5 * 1024 * 1024)
 assert.equal(policy.upload.allModesCreateOnly, true)
@@ -1378,6 +1395,10 @@ for (const phase of interrupted.phases) {
     .filter((id) => phase.presentArtifactIds.includes(id))
   if (presentCommitIds.length === 0) {
     assert.equal(phase.expected, 'no-visible-commit')
+    const state = validateWorkspaceSnapshot(interrupted, [])
+    assert.deepEqual(state.tips, [])
+    assert.deepEqual(state.frontiers, {})
+    assert.deepEqual(state.visibleObjectIds, [])
     continue
   }
   const required = interrupted.commits

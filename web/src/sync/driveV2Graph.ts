@@ -423,6 +423,15 @@ export async function validateDriveV2Workspace(
   const objectMap = unique(objects, (record) => record.expectedId)
   const blobMap = unique(blobs, (record) => record.expectedId)
   const commitMap = unique(commits, (record) => record.expectedId)
+  if (commitMap.size === 0) {
+    return Object.freeze({
+      tips: Object.freeze([]),
+      frontiers: Object.freeze({}),
+      objectMap: new DriveV2ImmutableMap(objectMap),
+      visibleCommitIds: Object.freeze([]),
+      visibleObjectIds: Object.freeze([]),
+    })
+  }
   const tips = graphTips(commitMap)
   requireCondition(commits.filter((record) => stringList(record.body, 'parentCommitIds').length === 0).length === 1, 'multiple-genesis-commits')
 
