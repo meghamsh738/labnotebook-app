@@ -40,6 +40,74 @@ import org.junit.Test
  */
 class DriveV2LiveValidationHarnessTest {
     @Test
+    fun workspaceBoundaryUsesTopLevelListingWithoutReadingRootMetadata() = runBlocking {
+        val workspaceId = "ws-v2-0123456789abcdef0123456789abcdef"
+        val managedFolderIds = mapOf(
+            "objects" to "objects-folder-id",
+            "blobs" to "blobs-folder-id",
+            "commits" to "commits-folder-id",
+        )
+        val live = LiveContext(
+            runId = "2026-08-12t22-36-51-034z-regression",
+            timestamp = "2026-08-12T22:36:51.034Z",
+            accountId = AccountId("drive-v2-live:regression"),
+            accessToken = "test-token",
+            containerFolderId = "container-folder-id",
+            rootFolderId = "workspace-root-id",
+            workspaceId = workspaceId,
+            managedFolderIds = managedFolderIds,
+            nativeBlobDriveFileId = "blob-file-id",
+            nativeEntryDriveFileId = "entry-file-id",
+            nativeAttachmentDriveFileId = "attachment-file-id",
+            nativeCommitDriveFileId = "commit-file-id",
+        )
+        val container = liveFileJson(
+            id = live.containerFolderId,
+            name = "Easylab Lab Notebook Safety Validation ${live.runId}",
+            parents = listOf("actual-my-drive-root-id"),
+            appProperties = mapOf("easylabValidationRun" to live.runId),
+        )
+        val workspace = liveFileJson(
+            id = live.rootFolderId,
+            name = DriveV2Contract.ROOT_NAME,
+            parents = listOf(live.containerFolderId),
+            appProperties = rootProperties(workspaceId),
+        )
+        val managed = DriveV2Contract.MANAGED_FOLDER_ROLES.map { role ->
+            liveFileJson(
+                id = managedFolderIds.getValue(role),
+                name = role,
+                parents = listOf(live.rootFolderId),
+                appProperties = managedFolderProperties(workspaceId, role),
+            )
+        }
+        val requests = mutableListOf<DriveHttpRequest>()
+        val transport = object : DriveWriteTransport {
+            override suspend fun execute(request: DriveHttpRequest): DriveHttpResponse {
+                requests += request
+                require(!request.url.contains("/files/root?")) {
+                    "The drive.file validation seam must not request root metadata."
+                }
+                val body = when {
+                    request.url.contains("/files/${live.containerFolderId}?") -> container
+                    request.url.contains("/files/${live.rootFolderId}?") -> workspace
+                    request.url.contains(encodeQuery("'root' in parents and trashed = false")) ->
+                        buildJsonObject { put("files", buildJsonArray { add(container) }) }
+                    request.url.contains(encodeQuery("'${live.rootFolderId}' in parents and trashed = false")) ->
+                        buildJsonObject { put("files", buildJsonArray { managed.forEach(::add) }) }
+                    else -> error("Unexpected Drive v2 boundary request: ${request.url}")
+                }
+                return DriveHttpResponse(200, body = body.toString().toByteArray(StandardCharsets.UTF_8))
+            }
+        }
+
+        LiveCreateOnlyClient(live, transport).verifyWorkspaceBoundary()
+
+        assertFalse(requests.any { it.url.contains("/files/root?") })
+        assertTrue(requests.any { it.url.contains(encodeQuery("'root' in parents and trashed = false")) })
+    }
+
+    @Test
     fun nativeCreatesGenesisWithLargeBlobAndCommitLast() = runBlocking {
         val live = requireLivePhase("native-create")
         val client = LiveCreateOnlyClient(live)
@@ -455,12 +523,18 @@ class DriveV2LiveValidationHarnessTest {
         }
 
         suspend fun verifyWorkspaceBoundary() {
-            val driveRootId = metadata("root").id
+            val expectedContainerName = "Easylab Lab Notebook Safety Validation ${live.runId}"
+            val listedContainers = listChildren("root").filter { it.name == expectedContainerName }
+            require(listedContainers.size == 1 && listedContainers.single().id == live.containerFolderId) {
+                "Native v2 validation requires one exact top-level validation container."
+            }
+            val listedContainer = listedContainers.single()
             val container = metadata(live.containerFolderId)
             require(
-                container.name.startsWith("Easylab Lab Notebook Safety Validation ") &&
+                container == listedContainer &&
+                    container.name == expectedContainerName &&
                     container.mimeType == DriveV2Contract.FOLDER_MIME_TYPE &&
-                    container.parents == listOf(driveRootId) &&
+                    container.parents.size == 1 &&
                     container.appProperties == mapOf("easylabValidationRun" to live.runId) &&
                     !container.trashed,
             ) { "Native v2 validation refused an unmarked container." }
@@ -704,6 +778,24 @@ class DriveV2LiveValidationHarnessTest {
         val parents: List<String>,
         val appProperties: Map<String, String>,
     )
+
+    private fun liveFileJson(
+        id: String,
+        name: String,
+        parents: List<String>,
+        appProperties: Map<String, String>,
+    ) = buildJsonObject {
+        put("id", id)
+        put("name", name)
+        put("mimeType", DriveV2Contract.FOLDER_MIME_TYPE)
+        put("size", "0")
+        put("trashed", false)
+        put("version", "1")
+        put("parents", buildJsonArray { parents.forEach { add(JsonPrimitive(it)) } })
+        put("appProperties", buildJsonObject {
+            appProperties.forEach { (key, value) -> put(key, value) }
+        })
+    }
 
     private fun JsonObject.liveFile(): LiveFile = LiveFile(
         id = requiredText("id"),
