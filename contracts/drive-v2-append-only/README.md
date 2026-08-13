@@ -126,10 +126,18 @@ the same across clients without performing a Drive request.
 
 ## Runtime gate
 
-This directory is an offline contract only. Android production must continue to
-construct the read-only Drive repository, and the real web provider must remain
-write-disabled. A separate reviewed live harness and exact per-run user approval
-are required before any v2 Drive mutation test.
+The offline contract and the isolated, default-off live validation have passed.
+The live round trip exercised native creation, web append and resumable recovery,
+Electron tombstones, and a final native read proving non-resurrection. The
+committed evidence is a redacted status summary with boolean checks and contains
+no account, token, Drive file, folder, run, or resumable-session identifiers.
+
+This is not production authorization. Android production must continue to
+construct the read-only Drive repository, and Drive v2 artifact writes must
+remain unwired in the real web/PWA and Electron clients. Existing non-v2 Drive
+behavior is outside this readiness claim. Production v2 rollout requires a
+separate explicit decision and review. The test-only harness still requires
+exact per-run user approval for any future live mutation test.
 
 The default-off harness procedure and its account, folder, source, and evidence
 guards are documented in [LIVE_VALIDATION.md](LIVE_VALIDATION.md).

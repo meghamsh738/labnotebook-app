@@ -2,7 +2,7 @@
   "gateVersion": 1,
   "driveContractVersion": 2,
   "protocol": "easylab-drive-v2-append-only",
-  "writeGate": "disabled-until-v2-runtime-parity",
+  "writeGate": "disabled-pending-explicit-production-rollout-approval",
   "workspace": {
     "rootFolderName": "Easylab Lab Notebook v2",
     "protocolMarker": "easylabDriveProtocol=v2-append-only",
@@ -199,6 +199,8 @@
     "webProductionWired": false,
     "electronProductionWired": false,
     "nativeDriveWritesAllowed": false,
-    "liveDriveValidationPerformed": false
+    "liveDriveValidationPerformed": true,
+    "liveDriveValidationPassed": true,
+    "liveValidationScope": "isolated-test-only"
   }
 }

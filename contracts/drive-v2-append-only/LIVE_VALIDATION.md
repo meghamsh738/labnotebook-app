@@ -110,3 +110,21 @@ is reported so the user can inspect or remove it manually.
 
 Passing this harness does **not** enable Android, web/PWA, or Electron production
 writes. Production remains read-only/disabled until a separate rollout decision.
+
+## Recorded validation status
+
+The isolated append-only round trip has passed against the reviewed source at
+commit `1d0a3d1450390ed64252589fcbcda233cc7d9a0f`. All expected artifacts were
+present exactly once, no artifact was trashed or physically deleted, and the
+final native read verified the single valid graph tip, large-blob integrity,
+unknown-field preservation, tombstones, descendant suppression, and
+non-resurrection. A finite browser read deadline stopped the combined runner
+after its mutation phases; the same source-bound run was then completed by the
+dedicated read-only native final phase, without replaying any Drive writes.
+
+Only a redacted status summary with allowlisted metadata and boolean checks is
+committed in `live-validation-result.json`.
+The validation folder remains in the disposable account for manual inspection
+or removal. Normal Android Drive v2 artifact writes remain read-only, and Drive
+v2 artifact writes remain unwired in web/PWA and Electron. Existing non-v2
+Drive behavior is outside this readiness claim.

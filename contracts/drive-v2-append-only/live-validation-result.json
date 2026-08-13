@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "protocol": "easylab-drive-v2-append-only",
+  "validationMode": "isolated-test-only",
+  "validatedSourceCommit": "1d0a3d1450390ed64252589fcbcda233cc7d9a0f",
+  "checks": {
+    "accountExclusionPassed": true,
+    "driveFileOnlyScopePassed": true,
+    "appendOnlyRoundTripPassed": true,
+    "commitLastPassed": true,
+    "stalePlanRejected": true,
+    "ambiguousCreateReconciled": true,
+    "interruptedResumableRecovered": true,
+    "crossClientReadPassed": true,
+    "nonResurrectionPassed": true,
+    "duplicateArtifactsAbsent": true,
+    "physicalDeletionAvoided": true,
+    "productionDriveV2WritesRemainDisabled": true
+  },
+  "production": {
+    "androidDriveV2ArtifactWritesEnabled": false,
+    "webDriveV2ArtifactWritesEnabled": false,
+    "electronDriveV2ArtifactWritesEnabled": false
+  }
+}

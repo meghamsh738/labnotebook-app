@@ -18,6 +18,7 @@ const expectedJsonFiles = [
   'interrupted-transaction.json',
   'invalid-artifacts.json',
   'isolation.json',
+  'live-validation-result.json',
   'policy.json',
   'preflight.json',
   'tombstone-convergence.json',
@@ -1126,7 +1127,7 @@ const policy = await fixture('policy.json')
 assert.equal(policy.gateVersion, 1)
 assert.equal(policy.driveContractVersion, 2)
 assert.equal(policy.protocol, protocol)
-assert.equal(policy.writeGate, 'disabled-until-v2-runtime-parity')
+assert.equal(policy.writeGate, 'disabled-pending-explicit-production-rollout-approval')
 assert.equal(policy.workspace.rootFolderName, 'Easylab Lab Notebook v2')
 assert.deepEqual(policy.workspace.managedFolders, ['objects', 'blobs', 'commits'])
 assert.equal(policy.workspace.provisioning, 'explicit-single-client-only')
@@ -1211,7 +1212,59 @@ assert.equal(policy.runtime.androidProductionWired, false)
 assert.equal(policy.runtime.webProductionWired, false)
 assert.equal(policy.runtime.electronProductionWired, false)
 assert.equal(policy.runtime.nativeDriveWritesAllowed, false)
-assert.equal(policy.runtime.liveDriveValidationPerformed, false)
+assert.equal(policy.runtime.liveDriveValidationPerformed, true)
+assert.equal(policy.runtime.liveDriveValidationPassed, true)
+assert.equal(policy.runtime.liveValidationScope, 'isolated-test-only')
+
+const liveValidation = await fixture('live-validation-result.json')
+assert.deepEqual(Object.keys(liveValidation).sort(), [
+  'checks',
+  'production',
+  'protocol',
+  'validatedSourceCommit',
+  'validationMode',
+  'version',
+].sort())
+assert.equal(liveValidation.version, 1)
+assert.equal(liveValidation.protocol, protocol)
+assert.equal(liveValidation.validationMode, 'isolated-test-only')
+assert.equal(liveValidation.validatedSourceCommit, '1d0a3d1450390ed64252589fcbcda233cc7d9a0f')
+assert.deepEqual(Object.keys(liveValidation.checks).sort(), [
+  'accountExclusionPassed',
+  'ambiguousCreateReconciled',
+  'appendOnlyRoundTripPassed',
+  'commitLastPassed',
+  'crossClientReadPassed',
+  'driveFileOnlyScopePassed',
+  'duplicateArtifactsAbsent',
+  'interruptedResumableRecovered',
+  'nonResurrectionPassed',
+  'physicalDeletionAvoided',
+  'productionDriveV2WritesRemainDisabled',
+  'stalePlanRejected',
+].sort())
+assert.equal(liveValidation.checks.accountExclusionPassed, true)
+assert.equal(liveValidation.checks.driveFileOnlyScopePassed, true)
+assert.equal(liveValidation.checks.appendOnlyRoundTripPassed, true)
+assert.equal(liveValidation.checks.commitLastPassed, true)
+assert.equal(liveValidation.checks.stalePlanRejected, true)
+assert.equal(liveValidation.checks.ambiguousCreateReconciled, true)
+assert.equal(liveValidation.checks.interruptedResumableRecovered, true)
+assert.equal(liveValidation.checks.crossClientReadPassed, true)
+assert.equal(liveValidation.checks.nonResurrectionPassed, true)
+assert.equal(liveValidation.checks.duplicateArtifactsAbsent, true)
+assert.equal(liveValidation.checks.physicalDeletionAvoided, true)
+assert.equal(liveValidation.checks.productionDriveV2WritesRemainDisabled, true)
+assert.deepEqual(Object.keys(liveValidation.production).sort(), [
+  'androidDriveV2ArtifactWritesEnabled',
+  'electronDriveV2ArtifactWritesEnabled',
+  'webDriveV2ArtifactWritesEnabled',
+].sort())
+assert.deepEqual(liveValidation.production, {
+  androidDriveV2ArtifactWritesEnabled: false,
+  webDriveV2ArtifactWritesEnabled: false,
+  electronDriveV2ArtifactWritesEnabled: false,
+})
 
 const canonicalization = await fixture('canonicalization.json')
 assert.equal(canonicalJson(canonicalization.input), canonicalization.expectedCanonicalJson)
