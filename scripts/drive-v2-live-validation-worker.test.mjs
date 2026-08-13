@@ -10,6 +10,7 @@ import {
 
 const source = fs.readFileSync(new URL('./drive-v2-live-validation-worker.mjs', import.meta.url), 'utf8')
 const browserSource = fs.readFileSync(new URL('../web/tests/drive-v2-live-validation-round-trip.spec.ts', import.meta.url), 'utf8')
+const playwrightConfigSource = fs.readFileSync(new URL('../web/playwright.config.ts', import.meta.url), 'utf8')
 
 test('PKCE challenge is deterministic SHA-256 base64url', () => {
   const bytes = Buffer.alloc(32, 7)
@@ -114,6 +115,33 @@ test('browser round trip is default-off, source-bound, append-only, and staged c
   assert.match(browserSource, /interrupt-before-resumable-content/)
   assert.match(browserSource, /incomplete-parent-frontier/)
   assert.match(browserSource, /device-electron-live-v2/)
-  assert.match(browserSource, /orderedCalls\)\.toEqual\(\[blob\.path, attachment\.path, blobCommit\.path\]\)/)
+  assert.match(browserSource, /orderedCalls\)\.toEqual\(\[large\.blob\.path, large\.attachment\.path, large\.blobCommit\.path\]\)/)
   assert.doesNotMatch(browserSource, /\.putJson|\.putBlob|\.putManifest|GoogleDriveProvider|GoogleDriveSyncProvider/)
+})
+
+test('live browser phase has finite local budgets, zero retries, and sanitized step diagnostics', () => {
+  assert.match(playwrightConfigSource, /timeout:\s*30_000/)
+  assert.match(browserSource, /const LIVE_TEST_TIMEOUT_MS = 300_000/)
+  assert.match(browserSource, /const LIVE_TEST_ABORT_MS = 285_000/)
+  assert.match(browserSource, /test\.describe\.configure\(\{\s*timeout:\s*LIVE_TEST_TIMEOUT_MS,\s*retries:\s*0\s*\}\)/)
+  assert.match(browserSource, /const overall = new AbortController\(\)/)
+  assert.match(browserSource, /overall\.abort\(timeoutError\('Drive v2 live validation exceeded its overall deadline\.'\)\)/)
+  assert.match(browserSource, /controller\.abort\(timeoutError\(`Drive v2 live phase exceeded its finite deadline:/)
+  assert.match(browserSource, /overall deadline pre-empts a longer live phase and prevents late work/)
+  for (const phase of [
+    'inspect native genesis',
+    'publish web lost-response append',
+    'verify web append and reject stale frontier',
+    'interrupt resumable large append',
+    'resume and publish large append',
+    'publish Electron tombstones',
+    'verify final non-resurrection projection',
+  ]) {
+    assert.match(browserSource, new RegExp(`liveStep\\('${phase}'`))
+  }
+  const finiteStepTimeouts = [...browserSource.matchAll(/liveStep\('[^']+',\s*(\d[\d_]*)/g)]
+  assert.ok(finiteStepTimeouts.length >= 7)
+  assert.ok(finiteStepTimeouts.every((match) => Number(match[1].replaceAll('_', '')) > 0))
+  assert.ok([...browserSource.matchAll(/DriveV2CreateTransactionExecutor\([^)]*\)\.execute\([^,]+,\s*signal\)/g)].length >= 4)
+  assert.match(source, /EASYLAB_DRIVE_V2_BROWSER_PHASE:\s*'web-append-electron-tombstone',[\s\S]*PLAYWRIGHT_LIST_PRINT_STEPS:\s*'1'/)
 })

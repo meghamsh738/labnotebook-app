@@ -37,6 +37,9 @@ import { DriveV2LiveValidationClient } from './support/driveV2LiveValidationClie
 const enabled = process.env.EASYLAB_DRIVE_V2_BROWSER_PHASE === 'web-append-electron-tombstone'
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const requiredForbiddenAccountSha256 = 'e39ed3e99d1d992cf2d81d2c4701dc22000d713fc37b2ae1047f7ca520fecd8b'
+const LIVE_TEST_TIMEOUT_MS = 300_000
+const LIVE_TEST_ABORT_MS = 285_000
+const PHASE_ABORT_MARGIN_MS = 5_000
 const required = (name: string): string => {
   const value = String(process.env[name] ?? '').trim()
   if (!value) throw new Error(`Drive v2 live validation requires ${name}.`)
@@ -119,8 +122,8 @@ function runtime(): Runtime {
   }
 }
 
-async function workspaceItem(client: DriveV2LiveValidationClient, id: string): Promise<DriveV2WorkspaceItem> {
-  const file = await client.metadata(id)
+async function workspaceItem(client: DriveV2LiveValidationClient, id: string, signal?: AbortSignal): Promise<DriveV2WorkspaceItem> {
+  const file = await client.metadata(id, signal)
   return {
     driveFileId: file.id,
     name: file.name,
@@ -131,10 +134,10 @@ async function workspaceItem(client: DriveV2LiveValidationClient, id: string): P
   }
 }
 
-async function loadRemote(rt: Runtime) {
+async function loadRemote(rt: Runtime, signal?: AbortSignal) {
   const artifacts: DriveV2RemoteArtifact[] = []
   for (const role of ['objects', 'blobs', 'commits'] as const) {
-    for (const file of await rt.client.listChildren(rt.folderIds[role])) {
+    for (const file of await rt.client.listChildren(rt.folderIds[role], signal)) {
       const kind = role === 'objects' ? 'object' : role === 'blobs' ? 'blob' : 'commit'
       const expectedId = String(file.appProperties?.easylabCanonicalId ?? '')
       const expectedDigest = String(file.appProperties?.easylabContentSha256 ?? '')
@@ -149,10 +152,10 @@ async function loadRemote(rt: Runtime) {
         expect(file.mimeType).toBe(DRIVE_V2_JSON_MIME_TYPE)
       }
       expect(file.version).toMatch(/^[1-9]\d*$/)
-      const bytes = await rt.client.downloadBytes(file.id)
+      const bytes = await rt.client.downloadBytes(file.id, signal)
       expect(file.size).toBe(String(bytes.byteLength))
       expect(await driveV2Sha256(bytes)).toBe(expectedDigest)
-      const stable = await rt.client.metadata(file.id)
+      const stable = await rt.client.metadata(file.id, signal)
       expect(stable).toEqual(file)
       artifacts.push(new DriveV2RemoteArtifact({
         kind,
@@ -168,13 +171,13 @@ async function loadRemote(rt: Runtime) {
       }))
     }
   }
-  const roots = [await workspaceItem(rt.client, rt.rootId)]
-  const folders = await Promise.all(Object.values(rt.folderIds).map((id) => workspaceItem(rt.client, id)))
+  const roots = [await workspaceItem(rt.client, rt.rootId, signal)]
+  const folders = await Promise.all(Object.values(rt.folderIds).map((id) => workspaceItem(rt.client, id, signal)))
   return { artifacts, roots, folders }
 }
 
-async function readiness(rt: Runtime, operationId: string, descriptors: readonly DriveV2ArtifactDescriptor[]) {
-  const remote = await loadRemote(rt)
+async function readiness(rt: Runtime, operationId: string, descriptors: readonly DriveV2ArtifactDescriptor[], signal?: AbortSignal) {
+  const remote = await loadRemote(rt, signal)
   const journal = new DriveV2OperationJournal({
     accountScopeId: rt.accountScopeId,
     savedRootDriveFileId: rt.rootId,
@@ -263,114 +266,211 @@ function commitBody(plan: GatePlan, operationId: string, createdAt: string, pare
   }
 }
 
-async function transaction(rt: Runtime, operationId: string, blobs: DriveV2CreateArtifact[], objects: DriveV2CreateArtifact[], commit: DriveV2CreateArtifact) {
+async function transaction(
+  rt: Runtime,
+  operationId: string,
+  blobs: DriveV2CreateArtifact[],
+  objects: DriveV2CreateArtifact[],
+  commit: DriveV2CreateArtifact,
+  signal?: AbortSignal,
+) {
   const descriptors = [...blobs, ...objects, commit].map((artifact) => artifact.descriptor())
-  return DriveV2CreateTransaction.create(await readiness(rt, operationId, descriptors), blobs, objects, commit)
+  return DriveV2CreateTransaction.create(await readiness(rt, operationId, descriptors, signal), blobs, objects, commit)
 }
 
+function timeoutError(message: string): DOMException {
+  return new DOMException(message, 'TimeoutError')
+}
+
+function createPhaseDeadline(overallSignal: AbortSignal, abortAfterMs: number, name: string) {
+  const controller = new AbortController()
+  const forwardOverallAbort = () => controller.abort(overallSignal.reason ?? timeoutError('Drive v2 live validation exceeded its overall deadline.'))
+  if (overallSignal.aborted) forwardOverallAbort()
+  else overallSignal.addEventListener('abort', forwardOverallAbort, { once: true })
+  const timer = setTimeout(() => {
+    controller.abort(timeoutError(`Drive v2 live phase exceeded its finite deadline: ${name}.`))
+  }, abortAfterMs)
+  return {
+    signal: controller.signal,
+    dispose() {
+      clearTimeout(timer)
+      overallSignal.removeEventListener('abort', forwardOverallAbort)
+      if (!controller.signal.aborted) controller.abort(new DOMException('Drive v2 live phase completed.', 'AbortError'))
+    },
+  }
+}
+
+async function liveStep<T>(
+  name: string,
+  reportingTimeoutMs: number,
+  overallSignal: AbortSignal,
+  action: (signal: AbortSignal) => Promise<T>,
+): Promise<T> {
+  if (!Number.isInteger(reportingTimeoutMs) || reportingTimeoutMs <= PHASE_ABORT_MARGIN_MS) {
+    throw new Error('Drive v2 live phase timeout is invalid.')
+  }
+  return test.step(name, async () => {
+    const phase = createPhaseDeadline(overallSignal, reportingTimeoutMs - PHASE_ABORT_MARGIN_MS, name)
+    try {
+      return await action(phase.signal)
+    } finally {
+      phase.dispose()
+    }
+  }, { timeout: reportingTimeoutMs })
+}
+
+test('Drive v2 overall deadline pre-empts a longer live phase and prevents late work', async () => {
+  const overall = new AbortController()
+  const phase = createPhaseDeadline(overall.signal, 1_000, 'offline deadline regression')
+  const lateCalls: string[] = []
+  const pending = new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      lateCalls.push('late-work')
+      resolve()
+    }, 50)
+    phase.signal.addEventListener('abort', () => {
+      clearTimeout(timer)
+      reject(phase.signal.reason)
+    }, { once: true })
+  })
+  overall.abort(timeoutError('overall deadline regression'))
+  await expect(pending).rejects.toMatchObject({ name: 'TimeoutError' })
+  await new Promise((resolve) => setTimeout(resolve, 60))
+  expect(lateCalls).toEqual([])
+  phase.dispose()
+})
+
 test.describe('gated Drive v2 live append-only round trip', () => {
+  test.describe.configure({ timeout: LIVE_TEST_TIMEOUT_MS, retries: 0 })
   test.skip(!enabled, 'Default-off: requires the separately gated Drive v2 live worker.')
 
   test('web append, retry, Electron tombstones, and final non-resurrection', async () => {
-    const rt = runtime()
-    const initial = await readiness(rt, 'inspect-native-genesis', [])
-    expect(initial.state.tips).toHaveLength(1)
-    const nativeTip = initial.state.tips[0]
-    const entryKey = Object.keys(initial.state.frontiers).find((key) => key.startsWith('entry:'))
-    const attachmentKey = Object.keys(initial.state.frontiers).find((key) => key.startsWith('attachment:'))
-    expect(entryKey).toBeTruthy(); expect(attachmentKey).toBeTruthy()
-    const nativeEntryId = initial.state.frontiers[entryKey!][0]
-    const nativeAttachmentId = initial.state.frontiers[attachmentKey!][0]
-    const nativeEntry = initial.state.objectMap.get(nativeEntryId)!.body
-    const nativeAttachment = initial.state.objectMap.get(nativeAttachmentId)!.body
-    const nativePayload = nativeEntry.payload as DriveV2JsonObject
-    expect(nativePayload.futureRemote).toBeDefined()
-    const originalDriveIds = (await loadRemote(rt)).artifacts.map((artifact) => artifact.driveFileId)
+    const overall = new AbortController()
+    const overallTimer = setTimeout(() => {
+      overall.abort(timeoutError('Drive v2 live validation exceeded its overall deadline.'))
+    }, LIVE_TEST_ABORT_MS)
+    try {
+      const rt = runtime()
+      const genesis = await liveStep('inspect native genesis', 60_000, overall.signal, async (signal) => {
+      const initial = await readiness(rt, 'inspect-native-genesis', [], signal)
+      expect(initial.state.tips).toHaveLength(1)
+      const entryKey = Object.keys(initial.state.frontiers).find((key) => key.startsWith('entry:'))
+      const attachmentKey = Object.keys(initial.state.frontiers).find((key) => key.startsWith('attachment:'))
+      expect(entryKey).toBeTruthy(); expect(attachmentKey).toBeTruthy()
+      const nativeEntryId = initial.state.frontiers[entryKey!][0]
+      const nativeAttachmentId = initial.state.frontiers[attachmentKey!][0]
+      const nativeEntry = initial.state.objectMap.get(nativeEntryId)!.body
+      const nativeAttachment = initial.state.objectMap.get(nativeAttachmentId)!.body
+      const nativePayload = nativeEntry.payload as DriveV2JsonObject
+      expect(nativePayload.futureRemote).toBeDefined()
+      const originalDriveIds = (await loadRemote(rt, signal)).artifacts.map((artifact) => artifact.driveFileId)
+      return { nativeTip: initial.state.tips[0], entryKey: entryKey!, attachmentKey: attachmentKey!, nativeEntryId, nativeAttachmentId, nativeEntry, nativeAttachment, nativePayload, originalDriveIds }
+      })
 
-    const webOperation = `op-v2-web-live-${rt.plan.runId}`
-    const webBody = objectBody(rt.plan, {
-      entityKind: 'entry', entityId: String(nativeEntry.entityId), operation: 'upsert', bases: [nativeEntryId],
-      payload: { ...nativePayload, title: 'Web append-only validation edit', updatedAt: utc(rt.plan, 60_000), updatedByDeviceId: 'device-web-live-v2' },
-    })
-    expect((webBody.payload as DriveV2JsonObject).futureRemote).toEqual(nativePayload.futureRemote)
-    const webObject = await jsonArtifact(rt, 'object', webBody, required('EASYLAB_DRIVE_V2_WEB_ENTRY_FILE_ID'))
-    const webCommit = await jsonArtifact(rt, 'commit', commitBody(rt.plan, webOperation, utc(rt.plan, 61_000), [nativeTip], [webObject.canonicalId], []), required('EASYLAB_DRIVE_V2_WEB_COMMIT_FILE_ID'))
-    const webTx = await transaction(rt, webOperation, [], [webObject], webCommit)
-    rt.client.setFault('lose-response-after-create', webObject.path)
-    await new DriveV2CreateTransactionExecutor(rt.client).execute(webTx)
-    expect(rt.client.faultUsed).toBe(true)
+      const web = await liveStep('publish web lost-response append', 60_000, overall.signal, async (signal) => {
+      const webOperation = `op-v2-web-live-${rt.plan.runId}`
+      const webBody = objectBody(rt.plan, {
+        entityKind: 'entry', entityId: String(genesis.nativeEntry.entityId), operation: 'upsert', bases: [genesis.nativeEntryId],
+        payload: { ...genesis.nativePayload, title: 'Web append-only validation edit', updatedAt: utc(rt.plan, 60_000), updatedByDeviceId: 'device-web-live-v2' },
+      })
+      expect((webBody.payload as DriveV2JsonObject).futureRemote).toEqual(genesis.nativePayload.futureRemote)
+      const webObject = await jsonArtifact(rt, 'object', webBody, required('EASYLAB_DRIVE_V2_WEB_ENTRY_FILE_ID'))
+      const webCommit = await jsonArtifact(rt, 'commit', commitBody(rt.plan, webOperation, utc(rt.plan, 61_000), [genesis.nativeTip], [webObject.canonicalId], []), required('EASYLAB_DRIVE_V2_WEB_COMMIT_FILE_ID'))
+      const webTx = await transaction(rt, webOperation, [], [webObject], webCommit, signal)
+      rt.client.setFault('lose-response-after-create', webObject.path)
+      await new DriveV2CreateTransactionExecutor(rt.client).execute(webTx, signal)
+      expect(rt.client.faultUsed).toBe(true)
+      return { webObject, webCommit }
+      })
 
-    const afterWeb = await readiness(rt, 'inspect-web-append', [])
-    expect(afterWeb.state.tips).toEqual([webCommit.canonicalId])
-    const webRecord = afterWeb.state.objectMap.get(webObject.canonicalId)!.body
-    expect((webRecord.payload as DriveV2JsonObject).futureRemote).toEqual(nativePayload.futureRemote)
+      await liveStep('verify web append and reject stale frontier', 60_000, overall.signal, async (signal) => {
+      const afterWeb = await readiness(rt, 'inspect-web-append', [], signal)
+      expect(afterWeb.state.tips).toEqual([web.webCommit.canonicalId])
+      const webRecord = afterWeb.state.objectMap.get(web.webObject.canonicalId)!.body
+      expect((webRecord.payload as DriveV2JsonObject).futureRemote).toEqual(genesis.nativePayload.futureRemote)
+      const staleBody = objectBody(rt.plan, {
+        entityKind: 'entry', entityId: String(genesis.nativeEntry.entityId), operation: 'upsert', bases: [web.webObject.canonicalId],
+        payload: { ...(webRecord.payload as DriveV2JsonObject), title: 'must never publish' },
+      })
+      const staleObject = await jsonArtifact(rt, 'object', staleBody, 'never-used-stale-object-id')
+      const staleOperation = `op-v2-stale-${rt.plan.runId}`
+      const staleCommit = await jsonArtifact(rt, 'commit', commitBody(rt.plan, staleOperation, utc(rt.plan, 62_000), [genesis.nativeTip], [staleObject.canonicalId], []), 'never-used-stale-commit-id')
+      const staleWriterCalls = rt.methods.filter((method) => method !== 'GET').length
+      await expect(transaction(rt, staleOperation, [], [staleObject], staleCommit, signal)).rejects.toMatchObject({ code: 'incomplete-parent-frontier' })
+      expect(rt.methods.filter((method) => method !== 'GET')).toHaveLength(staleWriterCalls)
+      })
 
-    const staleBody = objectBody(rt.plan, {
-      entityKind: 'entry', entityId: String(nativeEntry.entityId), operation: 'upsert', bases: [webObject.canonicalId],
-      payload: { ...(webRecord.payload as DriveV2JsonObject), title: 'must never publish' },
-    })
-    const staleObject = await jsonArtifact(rt, 'object', staleBody, 'never-used-stale-object-id')
-    const staleOperation = `op-v2-stale-${rt.plan.runId}`
-    const staleCommit = await jsonArtifact(rt, 'commit', commitBody(rt.plan, staleOperation, utc(rt.plan, 62_000), [nativeTip], [staleObject.canonicalId], []), 'never-used-stale-commit-id')
-    const staleWriterCalls = rt.methods.filter((method) => method !== 'GET').length
-    await expect(transaction(rt, staleOperation, [], [staleObject], staleCommit)).rejects.toMatchObject({ code: 'incomplete-parent-frontier' })
-    expect(rt.methods.filter((method) => method !== 'GET')).toHaveLength(staleWriterCalls)
+      const large = await liveStep('interrupt resumable large append', 60_000, overall.signal, async (signal) => {
+      const largeBytes = new Uint8Array(5 * 1024 * 1024 + 257)
+      for (let index = 0; index < largeBytes.length; index += 1) largeBytes[index] = (index + 17) % 251
+      const blobOperation = `op-v2-web-large-${rt.plan.runId}`
+      const blob = await blobArtifact(rt, largeBytes, required('EASYLAB_DRIVE_V2_WEB_LARGE_BLOB_FILE_ID'), `upload-${blobOperation}`)
+      const attachmentPayload = genesis.nativeAttachment.payload as DriveV2JsonObject
+      const attachmentBody = objectBody(rt.plan, {
+        entityKind: 'attachment', entityId: String(genesis.nativeAttachment.entityId), operation: 'upsert', bases: [genesis.nativeAttachmentId],
+        blobIds: [blob.canonicalId],
+        payload: { ...attachmentPayload, blobId: blob.canonicalId, sha256: blob.contentSha256, bytes: blob.byteCount, updatedAt: utc(rt.plan, 120_000) },
+      })
+      const attachment = await jsonArtifact(rt, 'object', attachmentBody, required('EASYLAB_DRIVE_V2_WEB_ATTACHMENT_FILE_ID'))
+      const blobCommit = await jsonArtifact(rt, 'commit', commitBody(rt.plan, blobOperation, utc(rt.plan, 121_000), [web.webCommit.canonicalId], [attachment.canonicalId], [blob.canonicalId]), required('EASYLAB_DRIVE_V2_WEB_BLOB_COMMIT_FILE_ID'))
+      const blobTx = await transaction(rt, blobOperation, [blob], [attachment], blobCommit, signal)
+      const orderedCalls: string[] = []
+      const recordingClient = {
+        createOrReconcile: async (account: string, artifact: DriveV2CreateArtifact, signal?: AbortSignal) => {
+          orderedCalls.push(artifact.path)
+          return rt.client.createOrReconcile(account, artifact, signal)
+        },
+      }
+      rt.client.setFault('interrupt-before-resumable-content', blob.path)
+      await expect(new DriveV2CreateTransactionExecutor(recordingClient).execute(blobTx, signal)).rejects.toBeInstanceOf(DriveV2CreateTransactionError)
+      expect(orderedCalls).toEqual([blob.path])
+      const beforeRetry = await rt.client.listChildren(rt.folderIds.objects, signal)
+      expect(beforeRetry.some((file) => file.id === attachment.generatedDriveFileId)).toBe(false)
+      expect((await rt.client.listChildren(rt.folderIds.commits, signal)).some((file) => file.id === blobCommit.generatedDriveFileId)).toBe(false)
+      return { blob, attachment, blobCommit, blobTx, orderedCalls, recordingClient }
+      })
 
-    const largeBytes = new Uint8Array(5 * 1024 * 1024 + 257)
-    for (let index = 0; index < largeBytes.length; index += 1) largeBytes[index] = (index + 17) % 251
-    const blobOperation = `op-v2-web-large-${rt.plan.runId}`
-    const blob = await blobArtifact(rt, largeBytes, required('EASYLAB_DRIVE_V2_WEB_LARGE_BLOB_FILE_ID'), `upload-${blobOperation}`)
-    const attachmentPayload = nativeAttachment.payload as DriveV2JsonObject
-    const attachmentBody = objectBody(rt.plan, {
-      entityKind: 'attachment', entityId: String(nativeAttachment.entityId), operation: 'upsert', bases: [nativeAttachmentId],
-      blobIds: [blob.canonicalId],
-      payload: { ...attachmentPayload, blobId: blob.canonicalId, sha256: blob.contentSha256, bytes: blob.byteCount, updatedAt: utc(rt.plan, 120_000) },
-    })
-    const attachment = await jsonArtifact(rt, 'object', attachmentBody, required('EASYLAB_DRIVE_V2_WEB_ATTACHMENT_FILE_ID'))
-    const blobCommit = await jsonArtifact(rt, 'commit', commitBody(rt.plan, blobOperation, utc(rt.plan, 121_000), [webCommit.canonicalId], [attachment.canonicalId], [blob.canonicalId]), required('EASYLAB_DRIVE_V2_WEB_BLOB_COMMIT_FILE_ID'))
-    const blobTx = await transaction(rt, blobOperation, [blob], [attachment], blobCommit)
-    const orderedCalls: string[] = []
-    const recordingClient = {
-      createOrReconcile: async (account: string, artifact: DriveV2CreateArtifact, signal?: AbortSignal) => {
-        orderedCalls.push(artifact.path)
-        return rt.client.createOrReconcile(account, artifact, signal)
-      },
+      const largeResult = await liveStep('resume and publish large append', 120_000, overall.signal, async (signal) => {
+      rt.client.setFault('none'); large.orderedCalls.length = 0
+      await new DriveV2CreateTransactionExecutor(large.recordingClient).execute(large.blobTx, signal)
+      expect(large.orderedCalls).toEqual([large.blob.path, large.attachment.path, large.blobCommit.path])
+      const afterBlob = await readiness(rt, 'inspect-large-append', [], signal)
+      expect(afterBlob.state.tips).toEqual([large.blobCommit.canonicalId])
+      return {
+        entryFrontier: afterBlob.state.frontiers[genesis.entryKey],
+        attachmentFrontier: afterBlob.state.frontiers[genesis.attachmentKey],
+      }
+      })
+
+      await liveStep('publish Electron tombstones', 60_000, overall.signal, async (signal) => {
+      const deletedAt = utc(rt.plan, 180_000)
+      const entryTombstoneBody = objectBody(rt.plan, { entityKind: 'entry', entityId: String(genesis.nativeEntry.entityId), operation: 'tombstone', bases: [...largeResult.entryFrontier], deletedAt })
+      const attachmentTombstoneBody = objectBody(rt.plan, { entityKind: 'attachment', entityId: String(genesis.nativeAttachment.entityId), operation: 'tombstone', bases: [...largeResult.attachmentFrontier], deletedAt })
+      const entryTombstone = await jsonArtifact(rt, 'object', entryTombstoneBody, required('EASYLAB_DRIVE_V2_ELECTRON_ENTRY_TOMBSTONE_FILE_ID'))
+      const attachmentTombstone = await jsonArtifact(rt, 'object', attachmentTombstoneBody, required('EASYLAB_DRIVE_V2_ELECTRON_ATTACHMENT_TOMBSTONE_FILE_ID'))
+      const electronOperation = `op-v2-electron-delete-${rt.plan.runId}`
+      const electronCommit = await jsonArtifact(rt, 'commit', commitBody(rt.plan, electronOperation, utc(rt.plan, 181_000), [large.blobCommit.canonicalId], [entryTombstone.canonicalId, attachmentTombstone.canonicalId], []), required('EASYLAB_DRIVE_V2_ELECTRON_COMMIT_FILE_ID'))
+      const electronTx = await transaction(rt, electronOperation, [], [entryTombstone, attachmentTombstone], electronCommit, signal)
+      await new DriveV2CreateTransactionExecutor(rt.client).execute(electronTx, signal)
+      })
+
+      await liveStep('verify final non-resurrection projection', 90_000, overall.signal, async (signal) => {
+      const final = await readiness(rt, 'inspect-final-electron-projection', [], signal)
+      const projection = await projectDriveV2Workspace(final.state)
+      expect(projection.visibleTargets).not.toContain(genesis.entryKey)
+      expect(projection.visibleTargets).not.toContain(genesis.attachmentKey)
+      expect(projection.suppressedTargets).toContain(genesis.entryKey)
+      expect(projection.suppressedTargets).toContain(genesis.attachmentKey)
+      const all = (await loadRemote(rt, signal)).artifacts
+      const paths = all.map((artifact) => artifact.path)
+      expect(new Set(paths).size).toBe(paths.length)
+      expect(genesis.originalDriveIds.every((id) => all.some((artifact) => artifact.driveFileId === id))).toBe(true)
+      expect(rt.methods).not.toContain('PATCH')
+      expect(rt.methods).not.toContain('DELETE')
+      })
+    } finally {
+      clearTimeout(overallTimer)
+      if (!overall.signal.aborted) overall.abort(new DOMException('Drive v2 live validation completed.', 'AbortError'))
     }
-    rt.client.setFault('interrupt-before-resumable-content', blob.path)
-    await expect(new DriveV2CreateTransactionExecutor(recordingClient).execute(blobTx)).rejects.toBeInstanceOf(DriveV2CreateTransactionError)
-    expect(orderedCalls).toEqual([blob.path])
-    const beforeRetry = await rt.client.listChildren(rt.folderIds.objects)
-    expect(beforeRetry.some((file) => file.id === attachment.generatedDriveFileId)).toBe(false)
-    expect((await rt.client.listChildren(rt.folderIds.commits)).some((file) => file.id === blobCommit.generatedDriveFileId)).toBe(false)
-    rt.client.setFault('none'); orderedCalls.length = 0
-    await new DriveV2CreateTransactionExecutor(recordingClient).execute(blobTx)
-    expect(orderedCalls).toEqual([blob.path, attachment.path, blobCommit.path])
-
-    const afterBlob = await readiness(rt, 'inspect-large-append', [])
-    expect(afterBlob.state.tips).toEqual([blobCommit.canonicalId])
-    const entryFrontier = afterBlob.state.frontiers[entryKey!]
-    const attachmentFrontier = afterBlob.state.frontiers[attachmentKey!]
-    const deletedAt = utc(rt.plan, 180_000)
-    const entryTombstoneBody = objectBody(rt.plan, { entityKind: 'entry', entityId: String(nativeEntry.entityId), operation: 'tombstone', bases: [...entryFrontier], deletedAt })
-    const attachmentTombstoneBody = objectBody(rt.plan, { entityKind: 'attachment', entityId: String(nativeAttachment.entityId), operation: 'tombstone', bases: [...attachmentFrontier], deletedAt })
-    const entryTombstone = await jsonArtifact(rt, 'object', entryTombstoneBody, required('EASYLAB_DRIVE_V2_ELECTRON_ENTRY_TOMBSTONE_FILE_ID'))
-    const attachmentTombstone = await jsonArtifact(rt, 'object', attachmentTombstoneBody, required('EASYLAB_DRIVE_V2_ELECTRON_ATTACHMENT_TOMBSTONE_FILE_ID'))
-    const electronOperation = `op-v2-electron-delete-${rt.plan.runId}`
-    const electronCommit = await jsonArtifact(rt, 'commit', commitBody(rt.plan, electronOperation, utc(rt.plan, 181_000), [blobCommit.canonicalId], [entryTombstone.canonicalId, attachmentTombstone.canonicalId], []), required('EASYLAB_DRIVE_V2_ELECTRON_COMMIT_FILE_ID'))
-    const electronTx = await transaction(rt, electronOperation, [], [entryTombstone, attachmentTombstone], electronCommit)
-    await new DriveV2CreateTransactionExecutor(rt.client).execute(electronTx)
-
-    const final = await readiness(rt, 'inspect-final-electron-projection', [])
-    const projection = await projectDriveV2Workspace(final.state)
-    expect(projection.visibleTargets).not.toContain(entryKey)
-    expect(projection.visibleTargets).not.toContain(attachmentKey)
-    expect(projection.suppressedTargets).toContain(entryKey)
-    expect(projection.suppressedTargets).toContain(attachmentKey)
-    const all = (await loadRemote(rt)).artifacts
-    const paths = all.map((artifact) => artifact.path)
-    expect(new Set(paths).size).toBe(paths.length)
-    expect(originalDriveIds.every((id) => all.some((artifact) => artifact.driveFileId === id))).toBe(true)
-    expect(rt.methods).not.toContain('PATCH')
-    expect(rt.methods).not.toContain('DELETE')
   })
 })

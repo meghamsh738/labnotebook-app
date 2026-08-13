@@ -739,6 +739,34 @@ test('web create-only executor is commit-last, verifies receipts, suppresses com
   await expect(genericAbort).rejects.toMatchObject({ name: 'AbortError' })
   expect(genericAbortCalls).toHaveLength(1)
   expect(genericAbortCalls).not.toContain(transaction.commit.path)
+
+  const timeoutCalls: string[] = []
+  const timedOutPrerequisite = new DriveV2CreateTransactionExecutor({
+    async createOrReconcile(_accountScopeId, artifact) {
+      timeoutCalls.push(artifact.path)
+      throw new DOMException('finite request deadline exceeded', 'TimeoutError')
+    },
+  }).execute(transaction)
+  await expect(timedOutPrerequisite).rejects.toMatchObject({
+    cause: expect.objectContaining({ name: 'TimeoutError' }),
+  })
+  expect(timeoutCalls).toHaveLength(1)
+  expect(timeoutCalls).not.toContain(transaction.commit.path)
+
+  const phaseController = new AbortController()
+  const latePrerequisiteCalls: string[] = []
+  const latePrerequisite = new DriveV2CreateTransactionExecutor({
+    async createOrReconcile(_accountScopeId, artifact) {
+      latePrerequisiteCalls.push(artifact.path)
+      await new Promise((resolve) => setTimeout(resolve, 40))
+      return receipt(artifact)
+    },
+  }).execute(transaction, phaseController.signal)
+  setTimeout(() => phaseController.abort(new DOMException('phase deadline exceeded', 'TimeoutError')), 10)
+  await expect(latePrerequisite).rejects.toMatchObject({ name: 'AbortError' })
+  await new Promise((resolve) => setTimeout(resolve, 50))
+  expect(latePrerequisiteCalls).toHaveLength(1)
+  expect(latePrerequisiteCalls).not.toContain(transaction.commit.path)
 })
 
 test('web create artifacts enforce the exact 5 MiB boundary and immutable resumable identity', async () => {

@@ -486,6 +486,7 @@ function runBrowserPhase(context, accessToken, selectedAccountSha256, journal, n
         'browser-append-electron-tombstone',
       ),
       EASYLAB_DRIVE_V2_BROWSER_PHASE: 'web-append-electron-tombstone',
+      PLAYWRIGHT_LIST_PRINT_STEPS: '1',
     },
     stdio: 'inherit',
   })

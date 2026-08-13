@@ -15,6 +15,7 @@ export type DriveV2LiveFault =
   | 'interrupt-before-resumable-content'
 
 const DEFAULT_RECONCILIATION_DELAYS_MS = Object.freeze([0, 100, 250, 500, 1_000, 2_000])
+const DEFAULT_REQUEST_TIMEOUT_MS = 30_000
 
 export type DriveV2LiveFile = {
   readonly id: string
@@ -106,6 +107,7 @@ export class DriveV2LiveValidationClient implements DriveV2CreateOnlyClient {
   readonly #accountScopeId: string
   readonly #fetch: typeof fetch
   readonly #reconciliationDelaysMs: readonly number[]
+  readonly #requestTimeoutMs: number
   #fault: DriveV2LiveFault
   #faultTargetPath: string | null = null
   #faultUsed = false
@@ -116,6 +118,7 @@ export class DriveV2LiveValidationClient implements DriveV2CreateOnlyClient {
     runId: string
     fetchImpl?: typeof fetch
     reconciliationDelaysMs?: readonly number[]
+    requestTimeoutMs?: number
   }) {
     if (!options.accessToken.trim()) fail('missing-access-token', 'The validation client requires a short-lived access token.')
     if (!options.accountScopeId.startsWith('drive-v2-live:')) fail('invalid-account-scope', 'The validation account scope is not isolated.')
@@ -127,6 +130,11 @@ export class DriveV2LiveValidationClient implements DriveV2CreateOnlyClient {
       fail('invalid-reconciliation-policy', 'The validation reconciliation retry policy is invalid.')
     }
     this.#reconciliationDelaysMs = Object.freeze([...delays])
+    const requestTimeoutMs = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
+    if (!Number.isInteger(requestTimeoutMs) || requestTimeoutMs < 1 || requestTimeoutMs > 120_000) {
+      fail('invalid-request-timeout', 'The validation request timeout must be a finite positive duration.')
+    }
+    this.#requestTimeoutMs = requestTimeoutMs
     this.#fault = 'none'
     this.#fetch = options.fetchImpl ?? fetch.bind(globalThis)
   }
@@ -158,7 +166,7 @@ export class DriveV2LiveValidationClient implements DriveV2CreateOnlyClient {
     return Object.freeze(ids)
   }
 
-  async listChildren(parentId: string): Promise<readonly DriveV2LiveFile[]> {
+  async listChildren(parentId: string, signal?: AbortSignal): Promise<readonly DriveV2LiveFile[]> {
     if (!parentId.trim()) fail('invalid-parent-id', 'Drive parent id is invalid.')
     const files: DriveV2LiveFile[] = []
     const seenTokens = new Set<string>()
@@ -170,7 +178,7 @@ export class DriveV2LiveValidationClient implements DriveV2CreateOnlyClient {
       url.searchParams.set('pageSize', '1000')
       url.searchParams.set('fields', `nextPageToken,files(${FILE_FIELDS})`)
       if (pageToken) url.searchParams.set('pageToken', pageToken)
-      const payload = await this.jsonRequest<{ files?: DriveV2LiveFile[]; nextPageToken?: string }>(url.toString())
+      const payload = await this.jsonRequest<{ files?: DriveV2LiveFile[]; nextPageToken?: string }>(url.toString(), { signal })
       if (!Array.isArray(payload.files)) fail('invalid-drive-pagination', 'Drive returned an invalid inventory page.')
       files.push(...payload.files)
       const next = String(payload.nextPageToken ?? '').trim()
@@ -182,8 +190,12 @@ export class DriveV2LiveValidationClient implements DriveV2CreateOnlyClient {
   }
 
   async downloadBytes(fileId: string, signal?: AbortSignal): Promise<Uint8Array> {
-    const response = await this.request(`${DRIVE_API}/files/${encodeURIComponent(fileId)}?alt=media`, { signal })
-    return new Uint8Array(await response.arrayBuffer())
+    return this.withRequestDeadline(signal, async (deadlineSignal) => {
+      const response = await this.rawRequest(`${DRIVE_API}/files/${encodeURIComponent(fileId)}?alt=media`, {
+        signal: deadlineSignal,
+      })
+      return new Uint8Array(await response.arrayBuffer())
+    })
   }
 
   async metadata(fileId: string, signal?: AbortSignal): Promise<DriveV2LiveFile> {
@@ -206,7 +218,7 @@ export class DriveV2LiveValidationClient implements DriveV2CreateOnlyClient {
     const name = artifact.path.split('/').at(-1) ?? ''
     if (!name || artifact.parentFolderDriveFileId.trim() === '') fail('invalid-artifact-path', 'The validation artifact path is invalid.')
 
-    const existing = await this.exactOccupants(artifact.parentFolderDriveFileId, name)
+    const existing = await this.exactOccupants(artifact.parentFolderDriveFileId, name, signal)
     if (existing.length > 0) {
       const receipt = await this.reconcileExact(existing, artifact, signal)
       this.consumeRecoveredTargetFault(artifact)
@@ -244,8 +256,8 @@ export class DriveV2LiveValidationClient implements DriveV2CreateOnlyClient {
     return this.verifyExact(artifact, signal)
   }
 
-  private async exactOccupants(parentId: string, name: string): Promise<readonly DriveV2LiveFile[]> {
-    return (await this.listChildren(parentId)).filter((file) => file.name === name)
+  private async exactOccupants(parentId: string, name: string, signal?: AbortSignal): Promise<readonly DriveV2LiveFile[]> {
+    return (await this.listChildren(parentId, signal)).filter((file) => file.name === name)
   }
 
   private async createMultipart(artifact: DriveV2CreateArtifact, name: string, signal?: AbortSignal): Promise<void> {
@@ -416,11 +428,39 @@ export class DriveV2LiveValidationClient implements DriveV2CreateOnlyClient {
   }
 
   private async jsonRequest<T>(url: string, init: RequestInit = {}): Promise<T> {
-    const response = await this.request(url, init)
-    return response.json() as Promise<T>
+    return this.withRequestDeadline(init.signal, async (deadlineSignal) => {
+      const response = await this.rawRequest(url, { ...init, signal: deadlineSignal })
+      return response.json() as Promise<T>
+    })
   }
 
   private async request(url: string, init: RequestInit = {}): Promise<Response> {
+    return this.withRequestDeadline(init.signal, (deadlineSignal) => this.rawRequest(url, {
+      ...init,
+      signal: deadlineSignal,
+    }))
+  }
+
+  private async withRequestDeadline<T>(
+    callerSignal: AbortSignal | null | undefined,
+    action: (deadlineSignal: AbortSignal) => Promise<T>,
+  ): Promise<T> {
+    const requestController = new AbortController()
+    const forwardAbort = () => requestController.abort(callerSignal?.reason ?? new DOMException('Drive v2 validation was cancelled.', 'AbortError'))
+    if (callerSignal?.aborted) forwardAbort()
+    else callerSignal?.addEventListener('abort', forwardAbort, { once: true })
+    const timer = setTimeout(() => {
+      requestController.abort(new DOMException('Drive v2 validation request exceeded its finite deadline.', 'TimeoutError'))
+    }, this.#requestTimeoutMs)
+    try {
+      return await action(requestController.signal)
+    } finally {
+      clearTimeout(timer)
+      callerSignal?.removeEventListener('abort', forwardAbort)
+    }
+  }
+
+  private async rawRequest(url: string, init: RequestInit = {}): Promise<Response> {
     const method = String(init.method ?? 'GET').toUpperCase()
     if (method === 'PATCH' || method === 'DELETE') fail('forbidden-http-method', 'Drive v2 live validation forbids update and delete requests.')
     const headers = new Headers(init.headers)

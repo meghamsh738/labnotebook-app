@@ -68,6 +68,8 @@ function fakeDrive(options: {
   omitCreatedVersion?: boolean
   omitCreatedModifiedTime?: boolean
   corruptCreatedBytes?: boolean
+  hangMultipartResponseAfterCreate?: boolean
+  hangResumablePutResponseAfterCreate?: boolean
 } = {}) {
   const files = new Map<string, Stored>()
   const sessions = new Map<string, Record<string, unknown>>()
@@ -146,6 +148,14 @@ function fakeDrive(options: {
       const parsed = await parseMultipartRelated(init)
       if (files.has(String(parsed.metadata.id))) return json({}, 409)
       store(parsed.metadata, parsed.bytes)
+      if (options.hangMultipartResponseAfterCreate) {
+        return new Promise<Response>((_resolve, reject) => {
+          const signal = init.signal
+          const rejectForAbort = () => reject(signal?.reason ?? new DOMException('request aborted', 'AbortError'))
+          if (signal?.aborted) rejectForAbort()
+          else signal?.addEventListener('abort', rejectForAbort, { once: true })
+        })
+      }
       return json(metadata(files.get(String(parsed.metadata.id))!))
     }
     if (url.pathname.endsWith('/upload/drive/v3/files') && method === 'POST' && url.searchParams.get('uploadType') === 'resumable') {
@@ -160,6 +170,14 @@ function fakeDrive(options: {
       if (!parsed) return json({}, 404)
       const body = init.body as Blob
       store(parsed, new Uint8Array(await body.arrayBuffer()))
+      if (options.hangResumablePutResponseAfterCreate) {
+        return new Promise<Response>((_resolve, reject) => {
+          const signal = init.signal
+          const rejectForAbort = () => reject(signal?.reason ?? new DOMException('request aborted', 'AbortError'))
+          if (signal?.aborted) rejectForAbort()
+          else signal?.addEventListener('abort', rejectForAbort, { once: true })
+        })
+      }
       return json(metadata(files.get(String(parsed.id))!))
     }
     const fileId = decodeURIComponent(url.pathname.split('/').at(-1) ?? '')
@@ -227,14 +245,30 @@ async function blobArtifact(options: {
   })
 }
 
-function client(fetchImpl: typeof fetch, reconciliationDelaysMs: readonly number[] = [0]) {
+function client(
+  fetchImpl: typeof fetch,
+  reconciliationDelaysMs: readonly number[] = [0],
+  requestTimeoutMs = 30_000,
+) {
   return new DriveV2LiveValidationClient({
     accessToken: 'ephemeral-test-token',
     accountScopeId: 'drive-v2-live:allowed-test-account',
     runId: '2026-08-12t12-00-00-000z-0123456789ab',
     fetchImpl,
     reconciliationDelaysMs,
+    requestTimeoutMs,
   })
+}
+
+function hangingBodyResponse(signal: AbortSignal | null | undefined, contentType: string): Response {
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      const rejectForAbort = () => controller.error(signal?.reason ?? new DOMException('request aborted', 'AbortError'))
+      if (signal?.aborted) rejectForAbort()
+      else signal?.addEventListener('abort', rejectForAbort, { once: true })
+    },
+  })
+  return new Response(body, { status: 200, headers: { 'Content-Type': contentType } })
 }
 
 test('v2 live client uses pre-generated-id multipart creation and exact lost-response reconciliation', async () => {
@@ -399,6 +433,118 @@ test('v2 cancellation during reconciliation backoff issues no later request', as
   await new Promise((resolve) => setTimeout(resolve, 50))
   expect(drive.methods).toHaveLength(requestCount)
   expect(drive.files.size).toBe(1)
+})
+
+test('v2 request deadline aborts a hung inventory read before any mutation', async () => {
+  const methods: string[] = []
+  const hangingFetch: typeof fetch = async (_input, init = {}) => {
+    methods.push(String(init.method ?? 'GET').toUpperCase())
+    return new Promise<Response>((_resolve, reject) => {
+      const signal = init.signal
+      const rejectForAbort = () => reject(signal?.reason ?? new DOMException('request aborted', 'AbortError'))
+      if (signal?.aborted) rejectForAbort()
+      else signal?.addEventListener('abort', rejectForAbort, { once: true })
+    })
+  }
+  const live = client(hangingFetch, [0], 20)
+  const artifact = await blobArtifact({ bytes: new Uint8Array([12, 24, 36]), driveFileId: 'generated-hung-read' })
+
+  await expect(live.createOrReconcile('drive-v2-live:allowed-test-account', artifact)).rejects.toMatchObject({
+    name: 'TimeoutError',
+  })
+  expect(methods).toEqual(['GET'])
+})
+
+test('v2 request deadline covers stalled JSON and media response bodies', async () => {
+  for (const target of ['json', 'media'] as const) {
+    const methods: string[] = []
+    const bodyStallingFetch: typeof fetch = async (_input, init = {}) => {
+      methods.push(String(init.method ?? 'GET').toUpperCase())
+      return hangingBodyResponse(init.signal, target === 'json' ? 'application/json' : 'application/octet-stream')
+    }
+    const live = client(bodyStallingFetch, [0], 20)
+    const pending = target === 'json'
+      ? live.listChildren('blobs-folder')
+      : live.downloadBytes('generated-stalled-media')
+
+    await expect(pending).rejects.toMatchObject({ name: 'TimeoutError' })
+    expect(methods).toEqual(['GET'])
+    await new Promise((resolve) => setTimeout(resolve, 25))
+    expect(methods).toEqual(['GET'])
+  }
+})
+
+test('v2 timed-out create response reconciles the exact generated id without a duplicate', async () => {
+  const drive = fakeDrive({ hangMultipartResponseAfterCreate: true })
+  const live = client(drive.fetchImpl, [0], 20)
+  const artifact = await blobArtifact({ bytes: new Uint8Array([13, 26, 39]), driveFileId: 'generated-timeout-reconcile' })
+
+  const receipt = await live.createOrReconcile('drive-v2-live:allowed-test-account', artifact)
+
+  expect(receipt.driveFileId).toBe(artifact.generatedDriveFileId)
+  expect(drive.files.size).toBe(1)
+  expect(drive.methods.filter((method) => method === 'POST')).toHaveLength(1)
+})
+
+test('v2 timed-out resumable PUT reconciles one exact large file without another upload', async () => {
+  const drive = fakeDrive({ hangResumablePutResponseAfterCreate: true })
+  const live = client(drive.fetchImpl, [0], 20)
+  const bytes = new Uint8Array(5 * 1024 * 1024)
+  bytes[0] = 77
+  const artifact = await blobArtifact({
+    bytes,
+    driveFileId: 'generated-timeout-resumable',
+    operationId: 'resumable-timeout-operation',
+  })
+
+  const receipt = await live.createOrReconcile('drive-v2-live:allowed-test-account', artifact)
+
+  expect(receipt.driveFileId).toBe(artifact.generatedDriveFileId)
+  expect(drive.files.size).toBe(1)
+  expect(drive.methods.filter((method) => method === 'POST')).toHaveLength(1)
+  expect(drive.methods.filter((method) => method === 'PUT')).toHaveLength(1)
+})
+
+test('v2 timed-out resumable PUT that cannot reconcile remains one inert file', async () => {
+  const drive = fakeDrive({
+    hangResumablePutResponseAfterCreate: true,
+    metadataNotFoundReadsAfterCreate: 10,
+  })
+  const live = client(drive.fetchImpl, [0], 20)
+  const bytes = new Uint8Array(5 * 1024 * 1024)
+  bytes[0] = 88
+  const artifact = await blobArtifact({
+    bytes,
+    driveFileId: 'generated-ambiguous-resumable',
+    operationId: 'resumable-ambiguous-operation',
+  })
+
+  await expect(live.createOrReconcile('drive-v2-live:allowed-test-account', artifact)).rejects.toMatchObject({
+    code: 'ambiguous-create',
+  })
+  expect(drive.files.size).toBe(1)
+  expect(drive.methods.filter((method) => method === 'POST')).toHaveLength(1)
+  expect(drive.methods.filter((method) => method === 'PUT')).toHaveLength(1)
+})
+
+test('v2 timed-out ambiguous create resumes by the same id without another POST', async () => {
+  const drive = fakeDrive({
+    hangMultipartResponseAfterCreate: true,
+    metadataNotFoundReadsAfterCreate: 2,
+  })
+  const artifact = await blobArtifact({ bytes: new Uint8Array([14, 28, 42]), driveFileId: 'generated-timeout-orphan' })
+  const first = client(drive.fetchImpl, [0], 20)
+  await expect(first.createOrReconcile('drive-v2-live:allowed-test-account', artifact)).rejects.toMatchObject({
+    code: 'ambiguous-create',
+  })
+  expect(drive.files.size).toBe(1)
+
+  const resumed = client(drive.fetchImpl, [0, 0], 20)
+  const receipt = await resumed.createOrReconcile('drive-v2-live:allowed-test-account', artifact)
+
+  expect(receipt.driveFileId).toBe(artifact.generatedDriveFileId)
+  expect(drive.files.size).toBe(1)
+  expect(drive.methods.filter((method) => method === 'POST')).toHaveLength(1)
 })
 
 test('v2 an existing fault target is reconciled without moving the fault to the next artifact', async () => {
