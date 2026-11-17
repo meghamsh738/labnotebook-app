@@ -4585,3 +4585,15 @@ body [data-testid='sync-pane'] .sync-diagnostics > summary > .status-chip {
     display: none !important;
   }
 }
+
+/* The offline notebook is taller than a single viewport. Keep its cards at
+   their content height so the workspace scrolls instead of clipping rows. */
+.local-workspace-pane > .connected-page-head,
+.local-workspace-pane > .connected-card,
+.local-workspace-pane > .connected-grid {
+  flex: 0 0 auto !important;
+}
+
+.local-workspace-pane > .connected-card {
+  overflow: visible !important;
+}
