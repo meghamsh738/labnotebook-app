@@ -7,7 +7,7 @@ import { Slate, Editable, withReact, ReactEditor, useSlateStatic } from 'slate-r
 import { createPortal } from 'react-dom'
 import { PDFDocument, StandardFonts, rgb, type PDFFont } from 'pdf-lib'
 import type { RenderElementProps, RenderLeafProps } from 'slate-react'
-import { cacheFile, deleteCachedFile, getCachedFile } from './idb'
+import { cacheFile, deleteCachedFile, deleteCachedFileFromScope, getCachedFile, getCachedFileReadonly } from './idb'
 import { writeFileToCache, restoreCacheHandle, ensureCacheDir, pickCacheDir, clearCacheHandle } from './fileCache'
 import { GuidedTutorial, type TutorialStep } from './GuidedTutorial'
 import './App.css'
@@ -74,6 +74,43 @@ import {
   restoreJournalBackup,
   type JournalBackupRestoreResult,
 } from './sync/backup'
+import { LOCAL_WORKSPACE_SCOPE, readCachedAttachmentBlob, readCachedNotebookSources, type CachedNotebookSource } from './localWorkspace'
+
+function extractPortablePackageMetadata(value: unknown): Attachment['portablePackage'] {
+  if (!isRecord(value)) return undefined
+  if (value.format === 'easylab.qpcr' && value.schemaVersion === 1 && isRecord(value.run) && typeof value.run.runId === 'string' && Number.isSafeInteger(value.run.revision)) {
+    return {
+      system: 'qPCR analysis',
+      id: value.run.runId,
+      name: typeof value.run.name === 'string' ? value.run.name : undefined,
+      revision: value.run.revision as number,
+    }
+  }
+
+  if (value.format === 'easylab.cdna' && value.version === 1 && isRecord(value.payload) && value.payload.engine === 'next-cdna-1') {
+    const experiment = value.payload.experiment
+    if (isRecord(experiment) && typeof experiment.id === 'string' && typeof experiment.name === 'string' && Number.isSafeInteger(experiment.revision)) {
+      return { system: 'cDNA Calculator', id: experiment.id, name: experiment.name, revision: experiment.revision as number }
+    }
+  }
+
+  if (value.format === 'easylab.elisa' && value.version === 1 && isRecord(value.payload) && value.payload.engineVersion === 'next-elisa-1') {
+    const experiment = value.payload.experiment
+    if (isRecord(experiment) && typeof experiment.id === 'string' && typeof experiment.name === 'string' && Number.isSafeInteger(experiment.revision)) {
+      return { system: 'ELISA analysis', id: experiment.id, name: experiment.name, revision: experiment.revision as number }
+    }
+  }
+
+  if (value.kind === 'easylab-next:qpcr-planner:experiment' && value.version === 1 && isRecord(value.settings)) {
+    return {
+      system: 'qPCR Planner',
+      id: typeof value.settings.experimentId === 'string' ? value.settings.experimentId : undefined,
+      name: typeof value.name === 'string' ? value.name : undefined,
+    }
+  }
+
+  return undefined
+}
 
 const dateOnly = new Intl.DateTimeFormat('en-US', {
   month: 'short',
@@ -266,33 +303,13 @@ const SEED_VERSION_KEY = 'labnote.seedVersion'
 const ACCOUNT_STORAGE_PREFIX = 'labnote.account'
 const LEGACY_STORAGE_OWNER_KEY = 'labnote.legacyCacheOwner'
 
-const shouldResetSeed = () => {
-  if (typeof window === 'undefined') return true
-  try {
-    const existingEntries = window.localStorage.getItem('labnote.entries')
-    if (existingEntries) {
-      try {
-        const parsed = JSON.parse(existingEntries) as Record<string, Entry>
-        if (parsed && Object.keys(parsed).length > 0) return false
-      } catch {
-        // If we can't parse existing entries, avoid clearing to prevent data loss.
-        return false
-      }
-    }
-    return window.localStorage.getItem(SEED_VERSION_KEY) !== seedVersion
-  } catch (err) {
-    console.warn('Unable to read seed version', err)
-    return true
-  }
-}
-
 function googleAccountStorageId(account?: GoogleAccountProfile) {
   return resolveGoogleAccountStorageScope(account)
 }
 
 function accountScopedStorageKey(baseKey: string, account?: GoogleAccountProfile) {
-  const accountId = googleAccountStorageId(account)
-  return accountId ? `${ACCOUNT_STORAGE_PREFIX}.${accountId}.${baseKey}` : baseKey
+  const scope = googleAccountStorageId(account) || LOCAL_WORKSPACE_SCOPE
+  return `${ACCOUNT_STORAGE_PREFIX}.${scope}.${baseKey}`
 }
 
 function readAccountScopedJson<T>(baseKey: string, fallback: T, account?: GoogleAccountProfile): T {
@@ -314,7 +331,7 @@ function readAccountScopedJson<T>(baseKey: string, fallback: T, account?: Google
   }
   const keys = accountId
     ? [accountScopedStorageKey(baseKey, account), ...(allowLegacyFallback ? [baseKey] : [])]
-    : [baseKey]
+    : [accountScopedStorageKey(baseKey)]
   for (const key of keys) {
     try {
       const raw = window.localStorage.getItem(key)
@@ -328,8 +345,6 @@ function readAccountScopedJson<T>(baseKey: string, fallback: T, account?: Google
 
 function writeAccountScopedJson<T>(baseKey: string, value: T, account?: GoogleAccountProfile) {
   if (typeof window === 'undefined') return
-  const accountId = googleAccountStorageId(account)
-  if (!accountId) return
   window.localStorage.setItem(accountScopedStorageKey(baseKey, account), JSON.stringify(value))
 }
 
@@ -454,10 +469,10 @@ const getSuggestedPaths = (): AppPaths => {
 
 const suggestedPaths: AppPaths = getSuggestedPaths()
 
-const readStoredPaths = (): AppPaths | null => {
+const readStoredPaths = (localWorkspace = false): AppPaths | null => {
   if (typeof window === 'undefined') return null
   try {
-    const saved = window.localStorage.getItem(APP_PATHS_KEY)
+    const saved = window.localStorage.getItem(localWorkspace ? accountScopedStorageKey(APP_PATHS_KEY) : APP_PATHS_KEY)
     if (!saved) return null
     const parsed = JSON.parse(saved) as Partial<AppPaths>
     if (!parsed || typeof parsed !== 'object') return null
@@ -488,20 +503,20 @@ const formatDisplayPath = (value?: string | null) => {
   return raw.replace(/\/+/g, '/')
 }
 
-const writeStoredPaths = (paths: AppPaths) => {
+const writeStoredPaths = (paths: AppPaths, localWorkspace = false) => {
   if (typeof window === 'undefined') return
   try {
-    window.localStorage.setItem(APP_PATHS_KEY, JSON.stringify(paths))
-    window.localStorage.setItem(APP_SETUP_KEY, '1')
+    window.localStorage.setItem(localWorkspace ? accountScopedStorageKey(APP_PATHS_KEY) : APP_PATHS_KEY, JSON.stringify(paths))
+    window.localStorage.setItem(localWorkspace ? accountScopedStorageKey(APP_SETUP_KEY) : APP_SETUP_KEY, '1')
   } catch (err) {
     console.warn('Unable to persist app paths', err)
   }
 }
 
-const isSetupComplete = () => {
+const isSetupComplete = (localWorkspace = false) => {
   if (typeof window === 'undefined') return false
   try {
-    return window.localStorage.getItem(APP_SETUP_KEY) === '1'
+    return window.localStorage.getItem(localWorkspace ? accountScopedStorageKey(APP_SETUP_KEY) : APP_SETUP_KEY) === '1'
   } catch {
     return false
   }
@@ -1961,14 +1976,16 @@ async function readAttachmentBlob(
   if (attachment.cachedPath?.startsWith('idb://')) {
     const key = attachment.cachedPath.replace('idb://', '')
     try {
-      const cached = await getCachedFile(key, accountScope)
+      const cached = accountScope === LOCAL_WORKSPACE_SCOPE
+        ? await getCachedFileReadonly(key, accountScope)
+        : await getCachedFile(key, accountScope)
       if (cached) return cached
     } catch {
       // Fall through to the journal blob store or thumbnail URL.
     }
   }
 
-  if (attachment.cachedPath?.startsWith('fs://')) {
+  if (attachment.cachedPath?.startsWith('fs://') && accountScope !== LOCAL_WORKSPACE_SCOPE) {
     const name = attachment.cachedPath.replace('fs://', '')
     const dir = await restoreCacheHandle()
     const dirWithPerm = dir ? (dir as FsDirectoryWithPerm) : null
@@ -1997,6 +2014,8 @@ async function readAttachmentBlob(
       // Older browsers or restricted private contexts can block IndexedDB.
     }
   }
+
+  if (accountScope === LOCAL_WORKSPACE_SCOPE) return null
 
   const url = attachmentUrls[attachment.id] ?? attachment.thumbnail
   if (url) {
@@ -2146,22 +2165,30 @@ function App() {
     ? new URLSearchParams(window.location.search).has('easylabModule')
     : false
   const devDrivePreview = isDevDrivePreviewMode()
+  const driveWorkspaceRequested = typeof window !== 'undefined'
+    ? new URLSearchParams(window.location.search).get('workspace') === 'google-drive'
+    : false
+  const localWorkspaceMode = !devDrivePreview && !driveWorkspaceRequested
   const bootDriveConnectionRef = useRef<DriveConnectionState | null>(null)
   if (!bootDriveConnectionRef.current) {
-    const storedDriveConnection = normalizeDriveConnection(loadJson<Partial<DriveConnectionState> | null>(CONNECTED_STORAGE_KEYS.drive, null))
-    bootDriveConnectionRef.current = devDrivePreview ? createDevDrivePreviewConnection(storedDriveConnection) : storedDriveConnection
+    const storedDriveConnection = localWorkspaceMode
+      ? normalizeDriveConnection(null)
+      : normalizeDriveConnection(loadJson<Partial<DriveConnectionState> | null>(CONNECTED_STORAGE_KEYS.drive, null))
+    bootDriveConnectionRef.current = devDrivePreview
+      ? createDevDrivePreviewConnection(storedDriveConnection)
+      : driveWorkspaceRequested
+        ? storedDriveConnection
+        : normalizeDriveConnection(null)
   }
   const bootDriveConnection = bootDriveConnectionRef.current
   const bootAccount = bootDriveConnection.connectedAccount
-  // A connected account must hydrate its scoped database before any sample
-  // data can be persisted. Seed refreshes are local/preview-only.
-  const resetSeed = devDrivePreview || (!bootAccount && shouldResetSeed())
+  const resetSeed = devDrivePreview
   const labStoragePath = sampleData.labs[0]?.storageConfig.path ?? ''
-  const storedPaths = readStoredPaths()
+  const storedPaths = localWorkspaceMode ? null : readStoredPaths()
   const [appPaths, setAppPaths] = useState<AppPaths>(() => storedPaths ?? suggestedPaths)
   const [setupOpen, setSetupOpen] = useState(() => {
-    if (devDrivePreview) return false
-    if (isSetupComplete() || storedPaths) return false
+    if (localWorkspaceMode || devDrivePreview) return false
+    if (isSetupComplete(localWorkspaceMode) || storedPaths) return false
     return !shouldAutoBootstrapMobileSetup()
   })
   const [appInfo, setAppInfo] = useState<{ name: string; version: string; platform: string } | null>(null)
@@ -2170,7 +2197,7 @@ function App() {
     try {
       const parsed = readAccountScopedJson<Project[] | null>('labnote.projects', null, bootAccount)
       if (parsed) {
-        if (bootAccount) return parsed
+        if (bootAccount || localWorkspaceMode) return parsed
         const byId = new Map(parsed.map((p) => [p.id, p]))
         for (const seeded of sampleData.projects) {
           if (!byId.has(seeded.id)) byId.set(seeded.id, seeded)
@@ -2180,14 +2207,14 @@ function App() {
     } catch (err) {
       console.warn('Unable to read cached projects', err)
     }
-    return bootAccount ? [] : sampleData.projects
+    return bootAccount || localWorkspaceMode ? [] : sampleData.projects
   })
   const [experiments, setExperiments] = useState<Experiment[]>(() => {
     if (typeof window === 'undefined' || resetSeed) return sampleData.experiments
     try {
       const parsed = readAccountScopedJson<Experiment[] | null>('labnote.experiments', null, bootAccount)
       if (parsed) {
-        if (bootAccount) return parsed
+        if (bootAccount || localWorkspaceMode) return parsed
         const byId = new Map(parsed.map((ex) => [ex.id, ex]))
         for (const seeded of sampleData.experiments) {
           if (!byId.has(seeded.id)) byId.set(seeded.id, seeded)
@@ -2197,7 +2224,7 @@ function App() {
     } catch (err) {
       console.warn('Unable to read cached experiments', err)
     }
-    return bootAccount ? [] : sampleData.experiments
+    return bootAccount || localWorkspaceMode ? [] : sampleData.experiments
   })
   const [entryDrafts, setEntryDrafts] = useState<Record<string, Entry>>(() => {
     if (typeof window === 'undefined' || resetSeed) {
@@ -2213,7 +2240,7 @@ function App() {
     } catch (err) {
       console.warn('Unable to read cached entries', err)
     }
-    return bootAccount
+    return bootAccount || localWorkspaceMode
       ? {}
       : Object.fromEntries(sampleData.entries.map((e) => [e.id, normalizeEntryForLoad(e)]))
   })
@@ -2225,7 +2252,7 @@ function App() {
     } catch (err) {
       console.warn('Unable to read cached protocols', err)
     }
-    return bootAccount ? [] : sampleData.protocols
+    return bootAccount || localWorkspaceMode ? [] : sampleData.protocols
   })
   const entryList = useMemo(() => {
     const entries = Object.values(entryDrafts)
@@ -2249,7 +2276,7 @@ function App() {
     return (
       entries.find((entry) => entry.dateBucket === todaySeed)?.id ??
       entries.sort((a, b) => entrySortTimestamp(b) - entrySortTimestamp(a))[0]?.id ??
-      (!bootAccount ? sampleData.entries[0]?.id : undefined) ??
+      (!bootAccount && !localWorkspaceMode ? sampleData.entries[0]?.id : undefined) ??
       ''
     )
   })
@@ -2276,7 +2303,7 @@ function App() {
     readAccountScopedJson<TombstoneRecord[]>('labnote.tombstones', [], bootAccount)
   )
   const [driveConnection, setDriveConnection] = useState<DriveConnectionState>(() => bootDriveConnection)
-  const journalAccountScope = googleAccountStorageId(driveConnection.connectedAccount)
+  const journalAccountScope = googleAccountStorageId(driveConnection.connectedAccount) || (localWorkspaceMode ? LOCAL_WORKSPACE_SCOPE : '')
   const journalRepositoryOptions = useMemo(
     () => journalAccountScope ? { accountScope: journalAccountScope } : undefined,
     [journalAccountScope]
@@ -2285,14 +2312,18 @@ function App() {
   const [attachmentsStore, setAttachmentsStore] = useState<Attachment[]>(() => {
     if (typeof window === 'undefined' || resetSeed) return sampleData.attachments
     try {
-      return readAccountScopedJson<Attachment[]>('labnote.attachments', bootAccount ? [] : sampleData.attachments, bootAccount)
+      return readAccountScopedJson<Attachment[]>('labnote.attachments', bootAccount || localWorkspaceMode ? [] : sampleData.attachments, bootAccount)
     } catch (err) {
       console.warn('Unable to read cached attachments', err)
     }
-    return bootAccount ? [] : sampleData.attachments
+    return bootAccount || localWorkspaceMode ? [] : sampleData.attachments
   })
   const [backupStatus, setBackupStatus] = useState<BackupStatus>(null)
   const [migrationNoticeOpen, setMigrationNoticeOpen] = useState(false)
+  const [cachedNotebookSources, setCachedNotebookSources] = useState<CachedNotebookSource[]>([])
+  const [cachedSourcesLoaded, setCachedSourcesLoaded] = useState(false)
+  const [selectedCachedSourceId, setSelectedCachedSourceId] = useState('')
+  const [cachedSourceStatus, setCachedSourceStatus] = useState('')
   const [openEntryIds, setOpenEntryIds] = useState<string[]>(() => (selectedEntryId ? [selectedEntryId] : []))
   const dailySeededRef = useRef(false)
   const openEntries = useMemo(
@@ -2416,9 +2447,9 @@ function App() {
       status: status === 'syncing' ? 'needs-auth' : status,
       lastError,
     }
-    saveJson(CONNECTED_STORAGE_KEYS.drive, persistedConnection)
+    if (!localWorkspaceMode) saveJson(CONNECTED_STORAGE_KEYS.drive, persistedConnection)
     writeAccountScopedJson(CONNECTED_STORAGE_KEYS.drive, persistedConnection, driveConnection.connectedAccount)
-  }, [driveConnection])
+  }, [driveConnection, localWorkspaceMode])
 
   useEffect(() => {
     if (journalCoreHydratedRef.current || resetSeed) {
@@ -2444,11 +2475,40 @@ function App() {
             accountScope: journalAccountScope || undefined,
           }
         )
+        let hydratedEntries = result.snapshot.entries
+        let hydratedAttachments = result.snapshot.attachments
+        if (localWorkspaceMode && result.source === 'indexeddb') {
+          const deletedEntryIds = new Set(result.snapshot.tombstones
+            .filter((tombstone) => tombstone.entityKind === 'entry')
+            .map((tombstone) => tombstone.entityId))
+          const mergedEntries = { ...result.snapshot.entries }
+          Object.entries(entryDrafts).forEach(([id, localEntry]) => {
+            if (deletedEntryIds.has(id)) return
+            const indexedEntry = mergedEntries[id]
+            const indexedEditTime = Date.parse(indexedEntry?.lastEditedDatetime ?? '') || 0
+            const localEditTime = Date.parse(localEntry.lastEditedDatetime ?? '') || 0
+            if (!indexedEntry || localEditTime >= indexedEditTime) mergedEntries[id] = localEntry
+          })
+          hydratedEntries = mergedEntries
+
+          const deletedAttachmentIds = new Set(result.snapshot.tombstones
+            .filter((tombstone) => tombstone.entityKind === 'attachment')
+            .map((tombstone) => tombstone.entityId))
+          const mergedAttachments = new Map(result.snapshot.attachments.map((attachment) => [attachment.id, attachment]))
+          attachmentsStore.forEach((localAttachment) => {
+            if (deletedAttachmentIds.has(localAttachment.id)) return
+            const indexedAttachment = mergedAttachments.get(localAttachment.id)
+            const indexedTime = Date.parse(indexedAttachment?.updatedAt ?? indexedAttachment?.createdAt ?? '') || 0
+            const localTime = Date.parse(localAttachment.updatedAt ?? localAttachment.createdAt ?? '') || 0
+            if (!indexedAttachment || localTime > indexedTime) mergedAttachments.set(localAttachment.id, localAttachment)
+          })
+          hydratedAttachments = Array.from(mergedAttachments.values())
+        }
         const normalizedEntries = Object.fromEntries(
-          Object.entries(result.snapshot.entries).map(([id, entry]) => [id, normalizeEntryForLoad(entry)])
+          Object.entries(hydratedEntries).map(([id, entry]) => [id, normalizeEntryForLoad(entry)])
         )
         setEntryDrafts(normalizedEntries)
-        setAttachmentsStore(result.snapshot.attachments)
+        setAttachmentsStore(hydratedAttachments)
         setFileBoxItems(result.snapshot.fileBoxItems)
         setTransferRecords(result.snapshot.transfers)
         setSyncConflicts(result.snapshot.conflicts)
@@ -2487,6 +2547,7 @@ function App() {
   useEffect(() => {
     const shouldProbeSharedApi = (() => {
       if (typeof window === 'undefined') return false
+      if (localWorkspaceMode) return false
       if (window.location.protocol !== 'http:' && window.location.protocol !== 'https:') return false
       const params = new URLSearchParams(window.location.search)
       if (params.get('sharedApi') === '1') return true
@@ -2512,7 +2573,7 @@ function App() {
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [localWorkspaceMode])
 
   const addProjectTagOption = useCallback((value: string) => {
     const cleaned = normalizeTag(value)
@@ -2577,13 +2638,13 @@ function App() {
   const handleSetupComplete = useCallback(
     (paths: AppPaths) => {
       setAppPaths(paths)
-      writeStoredPaths(paths)
+      writeStoredPaths(paths, localWorkspaceMode)
       if (paths.syncRoot) {
         setMasterSyncPath(paths.syncRoot)
       }
       setSetupOpen(false)
     },
-    [setMasterSyncPath]
+    [localWorkspaceMode, setMasterSyncPath]
   )
 
   const handleEditSetup = useCallback(() => {
@@ -2606,7 +2667,7 @@ function App() {
   )
 
   const [diskSyncEnabled, setDiskSyncEnabled] = useState(() => {
-    if (typeof window === 'undefined') return false
+    if (typeof window === 'undefined' || localWorkspaceMode) return false
     try {
       return window.localStorage.getItem('labnote.diskSync') === '1'
     } catch (err) {
@@ -2616,34 +2677,17 @@ function App() {
   })
 
   useEffect(() => {
+    if (localWorkspaceMode) return
     if (!shouldAutoBootstrapMobileSetup()) return
     if (isSetupComplete()) return
-    writeStoredPaths(appPaths)
+    writeStoredPaths(appPaths, localWorkspaceMode)
     setSetupOpen(false)
-  }, [appPaths])
+  }, [appPaths, localWorkspaceMode])
 
   useEffect(() => {
     if (typeof window === 'undefined') return
-    if (resetSeed) {
-      try {
-        window.localStorage.removeItem('labnote.entries')
-        window.localStorage.removeItem('labnote.attachments')
-        window.localStorage.removeItem('labnote.projects')
-        window.localStorage.removeItem('labnote.experiments')
-        window.localStorage.removeItem('labnote.protocols')
-        window.localStorage.removeItem('labnote.projectTags')
-        window.localStorage.removeItem('labnote.experimentTags')
-        window.localStorage.removeItem('labnote.masterSyncPath')
-      } catch (err) {
-        console.warn('Unable to clear stored seed data', err)
-      }
-    }
-    try {
-      window.localStorage.setItem(SEED_VERSION_KEY, seedVersion)
-    } catch (err) {
-      console.warn('Unable to persist seed version', err)
-    }
-  }, [resetSeed])
+    if (resetSeed) writeAccountScopedJson(SEED_VERSION_KEY, seedVersion, bootAccount)
+  }, [resetSeed, bootAccount])
 
   useEffect(() => {
     if (!isDriveWorkspaceReady(driveConnection)) return
@@ -2661,12 +2705,13 @@ function App() {
 
   useEffect(() => {
     if (typeof window === 'undefined') return
+    if (localWorkspaceMode) return
     try {
       window.localStorage.setItem('labnote.diskSync', diskSyncEnabled ? '1' : '0')
     } catch (err) {
       console.warn('Unable to cache disk sync flag', err)
     }
-  }, [diskSyncEnabled])
+  }, [diskSyncEnabled, localWorkspaceMode])
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -2779,8 +2824,9 @@ function App() {
 
   useEffect(() => {
     // Warm attempt to restore filesystem handle silently (no permission prompts)
+    if (localWorkspaceMode) return
     void refreshFsState()
-  }, [refreshFsState])
+  }, [localWorkspaceMode, refreshFsState])
 
   const handlePromptFs = useCallback(async () => {
     try {
@@ -2909,7 +2955,9 @@ function App() {
     selectedExperiment !== 'all' && selectedExperiment !== 'none'
       ? experiments.find((ex) => ex.id === selectedExperiment)
       : undefined
-  const fallbackProjectId = sampleData.users[1]?.settings.defaultProjectId ?? projects[0]?.id ?? ''
+  const fallbackProjectId = localWorkspaceMode
+    ? projects[0]?.id ?? ''
+    : sampleData.users[1]?.settings.defaultProjectId ?? projects[0]?.id ?? ''
   const defaultProjectIdForEntry =
     selectedProject !== 'all'
       ? selectedProject
@@ -2932,10 +2980,10 @@ function App() {
         const newEntry: Entry = {
           id: entryId,
           experimentId,
-          projectId: defaultProjectIdForEntry,
+          projectId: defaultProjectIdForEntry || undefined,
           createdDatetime: nowIso,
           lastEditedDatetime: nowIso,
-          authorId: sampleData.users[1]?.id ?? sampleData.users[0]?.id ?? 'me',
+          authorId: localWorkspaceMode ? 'local-user' : sampleData.users[1]?.id ?? sampleData.users[0]?.id ?? 'me',
           title: dateOnly.format(date),
           dateBucket,
           isDaily: true,
@@ -2962,7 +3010,7 @@ function App() {
       if (opts?.autoEdit) setAutoEditEntryId(entry.id)
       return entry.id
     },
-    [defaultProjectIdForEntry, entryList, handleSelectDate, selectedExperiment]
+    [defaultProjectIdForEntry, entryList, handleSelectDate, localWorkspaceMode, selectedExperiment]
   )
 
   const handleCreateEntryForDate = useCallback(
@@ -2978,6 +3026,7 @@ function App() {
   }, [openDailyEntry])
 
   useEffect(() => {
+    if (journalCoreStatus === 'loading') return
     const today = new Date()
     const todayBucket = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(
       today.getDate()
@@ -2991,7 +3040,7 @@ function App() {
       dailySeededRef.current = true
     }, 0)
     return () => window.clearTimeout(timer)
-  }, [activePane, entryList, openDailyEntry])
+  }, [activePane, entryList, journalCoreStatus, openDailyEntry])
 
   const handleCreateProtocol = useCallback(
     (opts: { title?: string; templateId: EntryTemplateId }) => {
@@ -3315,7 +3364,7 @@ function App() {
         writeAccountScopedJson('labnote.attachments', mergedAttachments, driveConnection.connectedAccount)
         writeAccountScopedJson('labnote.projects', mergedProjects, driveConnection.connectedAccount)
         writeAccountScopedJson('labnote.experiments', mergedExperiments, driveConnection.connectedAccount)
-        if (opts?.enableDiskSync ?? false) {
+        if (!localWorkspaceMode && (opts?.enableDiskSync ?? false)) {
           window.localStorage.setItem('labnote.diskSync', '1')
         }
       } catch (err) {
@@ -3329,7 +3378,7 @@ function App() {
       }
 
       await refreshFsState()
-      if (opts?.enableDiskSync ?? false) setDiskSyncEnabled(true)
+      if (!localWorkspaceMode && (opts?.enableDiskSync ?? false)) setDiskSyncEnabled(true)
 
       return {
         ok: true,
@@ -3341,6 +3390,7 @@ function App() {
       driveConnection.connectedAccount,
       entryDrafts,
       experiments,
+      localWorkspaceMode,
       projects,
       refreshFsState,
     ]
@@ -3472,7 +3522,7 @@ function App() {
   }, [applyLegacyData])
 
   const persistDiskState = useCallback(async () => {
-    if (!diskSyncEnabled) return
+    if (localWorkspaceMode || !diskSyncEnabled) return
     const dir = await getWritableCacheDir()
     if (!dir) return
     const payload = {
@@ -3487,17 +3537,22 @@ function App() {
       'labnote-state.json',
       new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json;charset=utf-8' })
     )
-  }, [attachmentsStore, entryDrafts, experiments, projects, diskSyncEnabled])
+  }, [attachmentsStore, entryDrafts, experiments, projects, diskSyncEnabled, localWorkspaceMode])
 
   useEffect(() => {
+    if (localWorkspaceMode) return
     if (typeof window === 'undefined') return
     const id = window.setTimeout(() => {
       void persistDiskState()
     }, 600)
     return () => window.clearTimeout(id)
-  }, [persistDiskState])
+  }, [localWorkspaceMode, persistDiskState])
 
   useEffect(() => {
+    if (localWorkspaceMode) {
+      setAutoImportAttempted(true)
+      return
+    }
     if (autoImportAttempted) return
     if (typeof window === 'undefined') return
 
@@ -3520,7 +3575,7 @@ function App() {
     }
 
     void run()
-  }, [autoImportAttempted, applyLegacyImport])
+  }, [autoImportAttempted, applyLegacyImport, localWorkspaceMode])
 
   // Persist drafts to localStorage for quick offline reloads
   useEffect(() => {
@@ -3647,14 +3702,33 @@ function App() {
           : file.type === 'application/pdf'
             ? 'pdf'
             : 'file'
+        let localFileCopy: Blob | null = null
+        if (localWorkspaceMode) {
+          try {
+            // Materialize a byte copy while the selected source file is still
+            // available; some browsers keep File-backed blobs tied to the path.
+            localFileCopy = new Blob([await file.arrayBuffer()], { type: file.type })
+          } catch (err) {
+            console.warn('Unable to copy attachment bytes into the local workspace', err)
+          }
+        }
         let sha256 = ''
         try {
-          sha256 = await hashBlobSha256(file)
+          sha256 = await hashBlobSha256(localFileCopy ?? file)
         } catch (err) {
           console.warn('Unable to hash attachment; sync will use generated id only', err)
         }
 
-        if (sharedApiAvailable) {
+        let portablePackage: Attachment['portablePackage']
+        if (file.name.toLowerCase().endsWith('.easylab.json') || file.name.toLowerCase().endsWith('.qpcr-planner.json')) {
+          try {
+            portablePackage = extractPortablePackageMetadata(JSON.parse(await file.text()))
+          } catch {
+            // Keep the selected package bytes even when metadata is unavailable.
+          }
+        }
+
+        if (!localWorkspaceMode && sharedApiAvailable) {
           try {
             const dataUrl = await readFileAsDataUrl(file)
             const uploadResponse = await fetch(SHARED_API_UPLOAD_URL, {
@@ -3697,35 +3771,47 @@ function App() {
 
         let cachePath = ''
         let cacheKey = ''
-        try {
-          // Try filesystem cache first; fallback to IndexedDB.
-          const fsPath = await writeFileToCache(file)
-          if (fsPath) {
-            cachePath = fsPath
-            cacheKey = fsPath.replace('fs://', '')
-            setFsEnabled(true)
-          } else {
-            const key = await cacheFile(file, journalAccountScope || undefined)
-            cachePath = `idb://${key}`
-            cacheKey = key
+        if (localWorkspaceMode) {
+          try {
+            if (!localFileCopy) throw new Error('Could not read the selected file into local storage.')
+            cacheKey = `attachment-${id}`
+            await writeAttachmentBlobToJournalCore(cacheKey, localFileCopy, journalAccountScope)
+          } catch (err) {
+            cacheKey = ''
+            console.warn('Unable to save local attachment copy', err)
           }
-        } catch (err) {
-          // Mobile/private contexts can block IndexedDB or FS APIs.
-          // Keep metadata so the upload still appears in-note immediately.
-          console.warn('Attachment cache failed; keeping metadata-only attachment', err)
-        }
+        } else {
+          try {
+            // The connected workspace may keep a convenient filesystem copy.
+            const fsPath = await writeFileToCache(file)
+            if (fsPath) {
+              cachePath = fsPath
+              cacheKey = fsPath.replace('fs://', '')
+              setFsEnabled(true)
+            } else {
+              const key = await cacheFile(file, journalAccountScope || undefined)
+              cachePath = `idb://${key}`
+              cacheKey = key
+            }
+          } catch (err) {
+            // Keep metadata if a connected workspace cannot cache the upload.
+            console.warn('Attachment cache failed; keeping metadata-only attachment', err)
+          }
 
-        try {
-          const journalBlobKey = cacheKey || `attachment-${id}`
-          await writeAttachmentBlobToJournalCore(journalBlobKey, file, journalAccountScope || undefined)
-          cacheKey = journalBlobKey
-        } catch (err) {
-          console.warn('Journal blob cache failed; Drive sync will try legacy attachment cache', err)
+          try {
+            const journalBlobKey = cacheKey || `attachment-${id}`
+            await writeAttachmentBlobToJournalCore(journalBlobKey, file, journalAccountScope || undefined)
+            cacheKey = journalBlobKey
+          } catch (err) {
+            console.warn('Journal blob cache failed; Drive sync will try legacy attachment cache', err)
+          }
         }
 
         const exportName = `${id}-${safeFileName(file.name)}`
         const relativePath = `${bundleFolder}/attachments/${exportName}`
-        const storagePath = syncRoot ? resolveRelativePath(syncRoot, relativePath) : cachePath || file.name
+        const storagePath = localWorkspaceMode
+          ? `local://${relativePath}`
+          : syncRoot ? resolveRelativePath(syncRoot, relativePath) : cachePath || file.name
 
         saved.push({
           id,
@@ -3737,12 +3823,14 @@ function App() {
           storagePath,
           cachedPath: cachePath,
           cacheKey,
-          pinnedOffline: type === 'image',
-          thumbnail: type === 'image' ? URL.createObjectURL(file) : undefined,
+          portablePackage,
+          offlineUnavailable: localWorkspaceMode && !cacheKey,
+          pinnedOffline: localWorkspaceMode || type === 'image',
+          thumbnail: !localWorkspaceMode && type === 'image' ? URL.createObjectURL(file) : undefined,
           contentType: file.type,
           mimeType: file.type,
           sha256,
-          syncStatus: 'queued',
+          syncStatus: localWorkspaceMode ? 'local' : 'queued',
           createdAt,
           updatedAt: createdAt,
         })
@@ -3766,7 +3854,7 @@ function App() {
 
       return saved
     },
-    [entryDrafts, journalAccountScope, masterSyncPath, sharedApiAvailable]
+    [entryDrafts, journalAccountScope, localWorkspaceMode, masterSyncPath, sharedApiAvailable]
   )
 
   const queueFileBoxFiles = useCallback(
@@ -3774,6 +3862,7 @@ function App() {
       if (!files.length) return
       const saved = await addAttachments(entryId, files)
       if (!saved.length) return
+      if (localWorkspaceMode) return
 
       const nextItems = saved.map((attachment) =>
         makeFileBoxItem({
@@ -3801,7 +3890,7 @@ function App() {
       setFileBoxItems((prev) => [...nextItems, ...prev])
       setTransferRecords((prev) => [...nextTransfers, ...prev])
     },
-    [addAttachments, deviceProfile]
+    [addAttachments, deviceProfile, localWorkspaceMode]
   )
 
   const attachFileBoxItem = useCallback(
@@ -3869,11 +3958,11 @@ function App() {
   }, [])
 
   const prepareJournalCoreSnapshotForAccount = useCallback(async (
-    account: GoogleAccountProfile,
+    account: GoogleAccountProfile | string,
     sourceSnapshot: JournalSnapshot
   ) => {
-    const accountScope = googleAccountStorageId(account)
-    if (!accountScope) throw new Error('A verified Google account is required before opening a notebook.')
+    const accountScope = typeof account === 'string' ? account : googleAccountStorageId(account)
+    if (!accountScope) throw new Error('A local workspace or verified Google account is required before opening a notebook.')
     const repositories = await createJournalRepositories({ accountScope })
     const blobStore = new IndexedDbBlobStore(repositories)
     const preparedAttachments = await Promise.all(sourceSnapshot.attachments.map(async (attachment) => {
@@ -3904,9 +3993,9 @@ function App() {
   }, [attachmentUrls])
 
   const prepareJournalCoreSnapshot = useCallback(async () => {
-    const account = driveConnection.connectedAccount
-    if (!account) throw new Error('Connect Google Drive before opening this notebook.')
-    return prepareJournalCoreSnapshotForAccount(account, {
+    const accountScope = googleAccountStorageId(driveConnection.connectedAccount) || journalAccountScope
+    if (!accountScope) throw new Error('The local workspace is not ready yet.')
+    return prepareJournalCoreSnapshotForAccount(accountScope, {
       entries: entryDrafts,
       attachments: attachmentsStore,
       fileBoxItems,
@@ -3921,6 +4010,7 @@ function App() {
     driveConnection.connectedAccount,
     entryDrafts,
     fileBoxItems,
+    journalAccountScope,
     prepareJournalCoreSnapshotForAccount,
     syncConflicts,
     tombstones,
@@ -3928,6 +4018,7 @@ function App() {
   ])
 
   const runGoogleDriveSync = useCallback(async (options: { silent?: boolean } = {}) => {
+    if (localWorkspaceMode) return
     if (devDrivePreview) {
       setDriveConnection((prev) => ({
         ...createDevDrivePreviewConnection(prev),
@@ -4114,6 +4205,7 @@ function App() {
     deviceProfile,
     devDrivePreview,
     driveConnection,
+    localWorkspaceMode,
     prepareJournalCoreSnapshot,
     prepareJournalCoreSnapshotForAccount,
   ])
@@ -4235,6 +4327,7 @@ function App() {
 
   const downloadAttachmentFromDrive = useCallback(
     async (attachmentId: string) => {
+      if (localWorkspaceMode) return null
       const attachment = attachmentsStore.find((candidate) => candidate.id === attachmentId)
       if (!attachment) return null
 
@@ -4327,15 +4420,16 @@ function App() {
         return null
       }
     },
-    [attachmentsStore, driveConnection, entryDrafts, journalRepositoryOptions]
+    [attachmentsStore, driveConnection, entryDrafts, journalRepositoryOptions, localWorkspaceMode]
   )
 
   const openAttachment = useCallback(
     async (attachmentId: string) => {
       const existing = attachmentsStore.find((candidate) => candidate.id === attachmentId)
+      if (localWorkspaceMode && existing?.offlineUnavailable) return
       const attachment = existing && (await readAttachmentBlob(existing, attachmentUrls, journalAccountScope || undefined))
         ? existing
-        : await downloadAttachmentFromDrive(attachmentId)
+        : localWorkspaceMode ? null : await downloadAttachmentFromDrive(attachmentId)
       if (!attachment) return
 
       const blob = await readAttachmentBlob(attachment, attachmentUrls, journalAccountScope || undefined)
@@ -4349,7 +4443,7 @@ function App() {
       downloadBlob(attachment.filename, blob)
       window.setTimeout(() => URL.revokeObjectURL(url), 500)
     },
-    [attachmentUrls, attachmentsStore, downloadAttachmentFromDrive, journalAccountScope]
+    [attachmentUrls, attachmentsStore, downloadAttachmentFromDrive, journalAccountScope, localWorkspaceMode]
   )
 
   const removeLocalAttachmentCopy = useCallback(
@@ -4363,9 +4457,10 @@ function App() {
           await blobStore.delete(attachment.cacheKey)
         }
         if (attachment.cachedPath?.startsWith('idb://')) {
-          await deleteCachedFile(attachment.cachedPath.replace('idb://', ''), journalAccountScope || undefined)
+          const deleteCopy = localWorkspaceMode ? deleteCachedFileFromScope : deleteCachedFile
+          await deleteCopy(attachment.cachedPath.replace('idb://', ''), journalAccountScope || undefined)
         }
-        if (attachment.cachedPath?.startsWith('fs://')) {
+        if (!localWorkspaceMode && attachment.cachedPath?.startsWith('fs://')) {
           const handle = await restoreCacheHandle()
           if (handle?.removeEntry) {
             await handle.removeEntry(attachment.cachedPath.replace('fs://', ''))
@@ -4397,8 +4492,113 @@ function App() {
         return next
       })
     },
-    [attachmentsStore, journalAccountScope, journalRepositoryOptions]
+    [attachmentsStore, journalAccountScope, journalRepositoryOptions, localWorkspaceMode]
   )
+
+  const previewCachedNotebooks = useCallback(async () => {
+    setCachedSourceStatus('Checking saved notebook copies on this device…')
+    try {
+      const sources = await readCachedNotebookSources(window.localStorage)
+      setCachedNotebookSources(sources)
+      setSelectedCachedSourceId((current) => sources.some((source) => source.id === current) ? current : sources[0]?.id ?? '')
+      setCachedSourcesLoaded(true)
+      setCachedSourceStatus(sources.length
+        ? `Found ${sources.length} saved notebook ${sources.length === 1 ? 'copy' : 'copies'}. Previewing did not change them.`
+        : 'No previous cached notes were found on this device.')
+    } catch (error) {
+      setCachedSourcesLoaded(true)
+      setCachedSourceStatus(error instanceof Error ? error.message : 'Unable to read saved notebook copies.')
+    }
+  }, [])
+
+  const copyCachedNotebook = useCallback(async (sourceId: string) => {
+    const source = cachedNotebookSources.find((candidate) => candidate.id === sourceId)
+    if (!source) return
+    setCachedSourceStatus('Copying notes and available attachments into this local notebook…')
+
+    const entryIds = new Map<string, string>()
+    Object.entries(source.snapshot.entries).forEach(([key, entry]) => {
+      const copiedId = newId('entry-copy-')
+      entryIds.set(key, copiedId)
+      entryIds.set(entry.id, copiedId)
+    })
+    const projectIds = new Map(source.projects.map((project) => [project.id, newId('project-copy-')]))
+    const experimentIds = new Map(source.experiments.map((experiment) => [experiment.id, newId('experiment-copy-')]))
+    const protocolIds = new Map(source.protocols.map((protocol) => [protocol.id, newId('protocol-copy-')]))
+    const attachmentIds = new Map(source.snapshot.attachments.map((attachment) => [attachment.id, newId('attachment-copy-')]))
+    let copiedBlobs = 0
+    let unavailableBlobs = 0
+
+    const copiedAttachments: Array<Attachment | null> = await Promise.all(source.snapshot.attachments.map(async (attachment): Promise<Attachment | null> => {
+      const id = attachmentIds.get(attachment.id) as string
+      const entryId = entryIds.get(attachment.entryId)
+      if (!entryId) return null
+      const blob = await readCachedAttachmentBlob(attachment, source.accountScope).catch(() => null)
+      let cacheKey: string | undefined
+      if (blob) {
+        try {
+          cacheKey = `attachment-${id}`
+          await writeAttachmentBlobToJournalCore(cacheKey, blob, LOCAL_WORKSPACE_SCOPE)
+          copiedBlobs += 1
+        } catch {
+          cacheKey = undefined
+        }
+      }
+      if (!cacheKey) unavailableBlobs += 1
+      const copy: Attachment = {
+        ...attachment,
+        id,
+        entryId,
+        storagePath: cacheKey ? `local://${safeFileName(attachment.filename)}` : `unavailable://${safeFileName(attachment.filename)}`,
+        cachedPath: undefined,
+        cacheKey,
+        thumbnail: undefined,
+        driveFileId: undefined,
+        offlineUnavailable: !cacheKey,
+        syncStatus: 'local' as const,
+      }
+      return copy
+    }))
+
+    const attachmentCopies = copiedAttachments.filter((attachment): attachment is Attachment => attachment !== null)
+    const copiedEntries = Object.fromEntries(Object.entries(source.snapshot.entries).map(([key, entry]) => {
+      const id = entryIds.get(key) as string
+      const content = entry.content.map((block) => {
+        if (block.type !== 'image' && block.type !== 'file') return block
+        return { ...block, attachmentId: attachmentIds.get(block.attachmentId) ?? block.attachmentId }
+      })
+      return [id, {
+        ...entry,
+        id,
+        projectId: entry.projectId ? projectIds.get(entry.projectId) ?? entry.projectId : undefined,
+        experimentId: entry.experimentId ? experimentIds.get(entry.experimentId) ?? entry.experimentId : undefined,
+        linkedFiles: entry.linkedFiles.map((attachmentId) => attachmentIds.get(attachmentId) ?? attachmentId),
+        content,
+      }]
+    }))
+    const copiedProjects = source.projects.map((project) => ({ ...project, id: projectIds.get(project.id) as string }))
+    const copiedExperiments = source.experiments.map((experiment) => ({
+      ...experiment,
+      id: experimentIds.get(experiment.id) as string,
+      projectId: projectIds.get(experiment.projectId) ?? experiment.projectId,
+    }))
+    const copiedProtocols = source.protocols.map((protocol) => ({ ...protocol, id: protocolIds.get(protocol.id) as string }))
+
+    setProjects((current) => [...copiedProjects, ...current])
+    setExperiments((current) => [...copiedExperiments, ...current])
+    setProtocols((current) => [...copiedProtocols, ...current])
+    if (copiedProtocols[0]) setSelectedProtocolId(copiedProtocols[0].id)
+    setAttachmentsStore((current) => [...attachmentCopies, ...current])
+    setEntryDrafts((current) => ({ ...copiedEntries, ...current }))
+    const firstCopiedEntry = Object.values(copiedEntries).sort((a, b) => entrySortTimestamp(b) - entrySortTimestamp(a))[0]
+    if (firstCopiedEntry) {
+      setSelectedEntryId(firstCopiedEntry.id)
+      setOpenEntryIds((current) => [firstCopiedEntry.id, ...current.filter((id) => id !== firstCopiedEntry.id)].slice(0, 5))
+      setActivePane('entries')
+    }
+    const copiedNoteCount = Object.keys(copiedEntries).length
+    setCachedSourceStatus(`Copied ${copiedNoteCount} note${copiedNoteCount === 1 ? '' : 's'} and ${copiedBlobs} attachment files. ${unavailableBlobs ? `${unavailableBlobs} attachment${unavailableBlobs === 1 ? '' : 's'} could not be found offline and are flagged in the notes.` : 'The saved source was left unchanged.'}`)
+  }, [cachedNotebookSources])
 
   const exportLocalBackup = useCallback(async () => {
     setBackupStatus(null)
@@ -4428,7 +4628,13 @@ function App() {
       const repositories = await createJournalRepositories(journalRepositoryOptions)
       const blobStore = new IndexedDbBlobStore(repositories)
       const store = await createIndexedDbJournalStore(deviceProfile, repositories)
-      const result = await restoreJournalBackup({ backup, store, blobStore, device: deviceProfile })
+      const result = await restoreJournalBackup({
+        backup,
+        store,
+        blobStore,
+        device: deviceProfile,
+        localWorkspace: localWorkspaceMode,
+      })
       const restored = await store.getSnapshot()
       const normalizedEntries = Object.fromEntries(
         Object.entries(restored.entries).map(([id, entry]) => [id, normalizeEntryForLoad(entry)])
@@ -4460,7 +4666,7 @@ function App() {
     } catch (err) {
       setBackupStatus({ ok: false, message: err instanceof Error ? err.message : String(err) })
     }
-  }, [deviceProfile, journalRepositoryOptions, todaySeed])
+  }, [deviceProfile, journalRepositoryOptions, localWorkspaceMode, todaySeed])
 
   const resolveSyncConflict = useCallback(async (conflictId: string, action: ConflictResolutionAction) => {
     try {
@@ -4541,6 +4747,7 @@ function App() {
 
   const autoSaveEntryBundle = useCallback(
     async (entryId: string, content: Block[]) => {
+      if (localWorkspaceMode) return
       const current = entryDrafts[entryId]
       if (!current) return
 
@@ -4595,7 +4802,7 @@ function App() {
         await writeBlobToDir(attachmentsDir, name, blob)
       }
     },
-    [attachmentsStore, attachmentUrls, entryDrafts, projects, experiments, journalAccountScope, sharedApiAvailable]
+    [attachmentsStore, attachmentUrls, entryDrafts, projects, experiments, journalAccountScope, localWorkspaceMode, sharedApiAvailable]
   )
 
   // Hydrate cached attachment thumbnails/URLs from IndexedDB and fs handles
@@ -4603,7 +4810,7 @@ function App() {
     let cancelled = false
     const load = async () => {
       const urlMap: Record<string, string> = {}
-      const fsDir = await restoreCacheHandle()
+      const fsDir = localWorkspaceMode ? null : await restoreCacheHandle()
       const fsDirWithPerm = fsDir ? (fsDir as FsDirectoryWithPerm) : null
       const fsCanRead =
         !fsDirWithPerm?.queryPermission
@@ -4615,14 +4822,16 @@ function App() {
         if (att.cachedPath?.startsWith('idb://')) {
           const key = att.cachedPath.replace('idb://', '')
           try {
-            const blob = await getCachedFile(key, journalAccountScope || undefined)
+            const blob = localWorkspaceMode
+              ? await getCachedFileReadonly(key, journalAccountScope)
+              : await getCachedFile(key, journalAccountScope || undefined)
             if (blob) {
               urlMap[att.id] = URL.createObjectURL(blob)
             }
           } catch (err) {
             console.warn('Unable to load cached file', att.id, err)
           }
-        } else if (att.cachedPath?.startsWith('fs://')) {
+        } else if (!localWorkspaceMode && att.cachedPath?.startsWith('fs://')) {
           const name = att.cachedPath.replace('fs://', '')
           if (fsDir && fsCanRead) {
             try {
@@ -4666,7 +4875,7 @@ function App() {
       Object.values(attachmentUrls).forEach((url) => URL.revokeObjectURL(url))
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [attachmentsStore])
+  }, [attachmentsStore, localWorkspaceMode, journalAccountScope, journalRepositoryOptions])
 
   const exportExperiment = useCallback(
     async (experimentId: string, format: 'markdown' | 'pdf') => {
@@ -4878,13 +5087,15 @@ function App() {
         if (att.cachedPath?.startsWith('idb://')) {
           const key = att.cachedPath.replace('idb://', '')
           try {
-            return (await getCachedFile(key, journalAccountScope || undefined)) ?? null
+            return (localWorkspaceMode
+              ? await getCachedFileReadonly(key, journalAccountScope)
+              : await getCachedFile(key, journalAccountScope || undefined)) ?? null
           } catch {
             return null
           }
         }
 
-	        if (att.cachedPath?.startsWith('fs://')) {
+        if (!localWorkspaceMode && att.cachedPath?.startsWith('fs://')) {
 	          const name = att.cachedPath.replace('fs://', '')
 	          const dir = await restoreCacheHandle()
 	          if (!dir) return null
@@ -4907,6 +5118,7 @@ function App() {
 	        }
 
         if (url) {
+          if (localWorkspaceMode && !url.startsWith('blob:') && !url.startsWith('data:')) return null
           try {
             const res = await fetch(url)
             if (!res.ok) return null
@@ -4971,7 +5183,7 @@ function App() {
 	        window.alert('Export failed. Check console for details.')
 	      }
     },
-    [attachmentsStore, attachmentUrls, entryList, experiments, journalAccountScope, projects]
+    [attachmentsStore, attachmentUrls, entryList, experiments, journalAccountScope, localWorkspaceMode, projects]
 	  )
 
   const filteredEntries = useMemo(() => {
@@ -5159,7 +5371,7 @@ function App() {
     return () => root.removeEventListener('wheel', handleSuiteShellWheel, true)
   }, [handleSuiteShellWheel, isSuiteShell])
 
-  if (!isDriveWorkspaceReady(driveConnection)) {
+  if (!localWorkspaceMode && !isDriveWorkspaceReady(driveConnection)) {
     return (
       <AuthGate
         driveConnection={driveConnection}
@@ -5188,6 +5400,7 @@ function App() {
           mode={activePane}
           onModeChange={setActivePane}
           deviceName={deviceProfile.name}
+          localWorkspace={localWorkspaceMode}
           fileBoxCount={fileBoxItems.filter((item) => item.status !== 'attached' && item.status !== 'rejected').length}
           driveStatus={driveConnection.status}
           driveAccount={driveConnection.connectedAccount}
@@ -5291,6 +5504,7 @@ function App() {
           />
         ) : activePane === 'settings' ? (
           <MobileSettingsPane
+            localWorkspace={localWorkspaceMode}
             appInfo={appInfo}
             driveConnection={driveConnection}
             onDisconnectDrive={disconnectGoogleDrive}
@@ -5300,6 +5514,14 @@ function App() {
           />
         ) : activePane === 'sync' ? (
           <SyncPane
+            localWorkspace={localWorkspaceMode}
+            cachedNotebookSources={cachedNotebookSources}
+            cachedSourcesLoaded={cachedSourcesLoaded}
+            selectedCachedSourceId={selectedCachedSourceId}
+            cachedSourceStatus={cachedSourceStatus}
+            onPreviewCachedNotebooks={previewCachedNotebooks}
+            onSelectCachedSource={setSelectedCachedSourceId}
+            onCopyCachedNotebook={(sourceId) => void copyCachedNotebook(sourceId)}
             driveConnection={driveConnection}
             onDriveConnectionChange={setDriveConnection}
             onRunDriveSync={runGoogleDriveSync}
@@ -5329,6 +5551,7 @@ function App() {
             entry={entry}
             project={project}
             experiment={experiment}
+            localWorkspace={localWorkspaceMode}
             driveConnected={isDriveWorkspaceReady(driveConnection)}
             openEntries={openEntries}
             allEntries={entryList}
@@ -5536,6 +5759,7 @@ interface SidebarProps {
   mode: AppPane
   onModeChange: (val: AppPane) => void
   deviceName: string
+  localWorkspace: boolean
   fileBoxCount: number
   driveStatus: DriveConnectionState['status']
   driveAccount?: GoogleAccountProfile
@@ -5585,6 +5809,7 @@ function Sidebar({
   mode,
   onModeChange,
   deviceName,
+  localWorkspace,
   fileBoxCount,
   driveStatus,
   driveAccount,
@@ -5637,7 +5862,7 @@ function Sidebar({
   const selectedDateHasEntry = selectedDate ? entryDateSet.has(selectedDate) : false
   const selectedDateLabel = selectedDate ? dateOnly.format(dateFromBucket(selectedDate)) : ''
   const driveReady = driveStatus === 'ready'
-  const driveLabel = driveReady ? 'Connected' : driveStatus === 'syncing' ? 'Syncing' : 'Needs sign-in'
+  const driveLabel = localWorkspace ? 'Local' : driveReady ? 'Connected' : driveStatus === 'syncing' ? 'Syncing' : 'Needs sign-in'
   const entrySearchLabel = entrySearchQuery.trim()
     ? `Matching "${entrySearchQuery.trim()}"`
     : `Showing ${entries.length} item${entries.length === 1 ? '' : 's'}`
@@ -5761,7 +5986,7 @@ function Sidebar({
             <span className="icon"><UiIcon name={collapsed ? 'chevronRight' : 'chevronLeft'} /></span>
             <span className="icon-label">{collapsed ? 'Show sidebar' : 'Hide sidebar'}</span>
           </button>
-          <div className={`status-chip ${driveReady ? 'success' : driveStatus === 'syncing' ? 'warning' : 'danger'}`}>{driveLabel}</div>
+          <div className={`status-chip ${localWorkspace || driveReady ? 'success' : driveStatus === 'syncing' ? 'warning' : 'danger'}`}>{driveLabel}</div>
           <button className="pill soft icon-button mobile-close-sidebar" onClick={onCloseMobile} type="button">
             <span className="icon"><UiIcon name="x" /></span>
             <span className="icon-label">Close</span>
@@ -5789,7 +6014,7 @@ function Sidebar({
             <div className="eyebrow">Notebook</div>
             <h2 className="title-sm lab-title">{activeLab?.name ?? 'Research journal'}</h2>
             <div className="muted tiny">
-              {driveAccount?.email ? `Signed in as ${driveAccount.email}` : 'Google Drive notebook'}
+              {localWorkspace ? 'Saved in this browser' : driveAccount?.email ? `Signed in as ${driveAccount.email}` : 'Google Drive notebook'}
             </div>
             <div className="lab-card-meta">
               <div className="pill ghost-pill">{entries.length} entries</div>
@@ -5848,16 +6073,16 @@ function Sidebar({
               className={`pill soft ${mode === 'sync' ? 'active-pill' : ''}`}
               type="button"
               role="tab"
-              aria-label="Sync"
-              title="Sync"
+              aria-label={localWorkspace ? 'Storage' : 'Sync'}
+              title={localWorkspace ? 'Storage' : 'Sync'}
               aria-selected={mode === 'sync'}
               onClick={() => {
                 onModeChange('sync')
                 onCloseMobile()
               }}
             >
-              <UiIcon name="refresh" />
-              <span>Sync</span>
+              <UiIcon name={localWorkspace ? 'device' : 'refresh'} />
+              <span>{localWorkspace ? 'Storage' : 'Sync'}</span>
             </button>
           </div>
 
@@ -6457,6 +6682,7 @@ function MobileCaptureAction({
 }
 
 function MobileSettingsPane({
+  localWorkspace,
   appInfo,
   driveConnection,
   onDisconnectDrive,
@@ -6464,6 +6690,7 @@ function MobileSettingsPane({
   onRunDriveSync,
   syncing,
 }: {
+  localWorkspace: boolean
   appInfo: { name: string; version: string; platform: string } | null
   driveConnection: DriveConnectionState
   onDisconnectDrive: () => void
@@ -6486,31 +6713,31 @@ function MobileSettingsPane({
         <div>
           <div className="eyebrow">Settings</div>
           <h1>Notebook settings</h1>
-          <p>Account, Drive, and offline writing.</p>
+          <p>{localWorkspace ? 'Local notebook and offline writing.' : 'Account, Drive, and offline writing.'}</p>
         </div>
-        <button className="accent" type="button" onClick={() => void onRunDriveSync()} disabled={syncing}>
+        {!localWorkspace && <button className="accent" type="button" onClick={() => void onRunDriveSync()} disabled={syncing}>
           <UiIcon name="refresh" />
           {syncing ? 'Syncing' : 'Sync now'}
-        </button>
+        </button>}
       </div>
 
       <section className="mobile-settings-list" aria-label="Notebook settings">
         <div className="mobile-settings-card account">
-          <div className="drive-avatar">{account?.picture ? <img src={account.picture} alt="" /> : accountName.slice(0, 1).toUpperCase()}</div>
+          <div className="drive-avatar">{localWorkspace ? <UiIcon name="note" /> : account?.picture ? <img src={account.picture} alt="" /> : accountName.slice(0, 1).toUpperCase()}</div>
           <div>
-            <span>Signed in</span>
-            <strong>{accountName}</strong>
-            <small>{accountEmail}</small>
+            <span>{localWorkspace ? 'Workspace' : 'Signed in'}</span>
+            <strong>{localWorkspace ? 'Local notebook' : accountName}</strong>
+            <small>{localWorkspace ? 'Saved in this browser' : accountEmail}</small>
           </div>
-          <button className="ghost danger-text" type="button" onClick={onDisconnectDrive}>Sign out</button>
+          {!localWorkspace && <button className="ghost danger-text" type="button" onClick={onDisconnectDrive}>Sign out</button>}
         </div>
 
         <div className="mobile-settings-card">
-          <UiIcon name="drive" />
+          <UiIcon name={localWorkspace ? 'device' : 'drive'} />
           <div>
-            <span>Drive notebook</span>
-            <strong>{driveConnection.folderName || DRIVE_ROOT_FOLDER}</strong>
-            <small>{driveConnection.status === 'ready' ? 'Connected' : driveConnection.status}</small>
+            <span>{localWorkspace ? 'Workspace identity' : 'Drive notebook'}</span>
+            <strong>{localWorkspace ? `Local notebook · ${LOCAL_WORKSPACE_SCOPE}` : driveConnection.folderName || DRIVE_ROOT_FOLDER}</strong>
+            <small>{localWorkspace ? 'Available offline' : driveConnection.status === 'ready' ? 'Connected' : driveConnection.status}</small>
           </div>
         </div>
 
@@ -6526,9 +6753,9 @@ function MobileSettingsPane({
         <div className="mobile-settings-card">
           <UiIcon name="refresh" />
           <div>
-            <span>Last sync</span>
-            <strong>{lastSyncLabel}</strong>
-            <small>Saved to Google Drive.</small>
+            <span>{localWorkspace ? 'Cloud sync' : 'Last sync'}</span>
+            <strong>{localWorkspace ? 'Off' : lastSyncLabel}</strong>
+            <small>{localWorkspace ? 'This workspace makes no cloud requests.' : 'Saved to Google Drive.'}</small>
           </div>
         </div>
 
@@ -6552,6 +6779,7 @@ interface EditorPaneProps {
   entry?: Entry
   project?: Project
   experiment?: Experiment
+  localWorkspace: boolean
   driveConnected: boolean
   openEntries: Entry[]
   allEntries: Entry[]
@@ -6601,6 +6829,7 @@ function EditorPane({
   entry,
   project,
   experiment,
+  localWorkspace,
   driveConnected,
   openEntries,
   allEntries,
@@ -6769,6 +6998,9 @@ function EditorPane({
   const blankCameraInputRef = useRef<HTMLInputElement | null>(null)
   const blankFileInputRef = useRef<HTMLInputElement | null>(null)
   const entryFilesInputRef = useRef<HTMLInputElement | null>(null)
+  const experimentRevisionInputRef = useRef<HTMLInputElement | null>(null)
+  const figuresInputRef = useRef<HTMLInputElement | null>(null)
+  const [packageAttachStatus, setPackageAttachStatus] = useState('')
 
   const addBlankNoteFiles = useCallback((files: File[]) => {
     if (!entry || !files.length) return
@@ -7621,10 +7853,24 @@ function EditorPane({
                     : 'Add images, PDFs, spreadsheets, or documents to this entry.'}
                 </div>
               </div>
-              <button className="accent icon-btn files-add-action" type="button" onClick={() => entryFilesInputRef.current?.click()}>
-                <UiIcon name="plus" />
-                Add evidence
-              </button>
+              <div className="settings-actions files-add-actions">
+                <button className="accent icon-btn files-add-action" type="button" onClick={() => entryFilesInputRef.current?.click()}>
+                  <UiIcon name="plus" />
+                  Add evidence
+                </button>
+                {localWorkspace && (
+                  <>
+                    <button className="ghost icon-btn" type="button" onClick={() => experimentRevisionInputRef.current?.click()}>
+                      <UiIcon name="file" />
+                      Attach EasyLab package
+                    </button>
+                    <button className="ghost icon-btn" type="button" onClick={() => figuresInputRef.current?.click()}>
+                      <UiIcon name="image" />
+                      Add figures (optional)
+                    </button>
+                  </>
+                )}
+              </div>
               <input
                 ref={entryFilesInputRef}
                 type="file"
@@ -7635,6 +7881,50 @@ function EditorPane({
                   event.currentTarget.value = ''
                 }}
               />
+              {localWorkspace && (
+                <>
+                  <input
+                    ref={experimentRevisionInputRef}
+                    type="file"
+                    accept=".easylab.json,.qpcr-planner.json,application/json"
+                    hidden
+                    data-testid="experiment-revision-input"
+                    onChange={(event) => {
+                      const file = event.currentTarget.files?.[0]
+                      event.currentTarget.value = ''
+                      if (!file) return
+                      void (async () => {
+                        try {
+                          const [saved] = await onAddAttachments(entry.id, [file])
+                          const metadata = saved?.portablePackage
+                          setPackageAttachStatus(metadata
+                            ? `Attached a copy of ${metadata.system}: ${metadata.name || file.name}${metadata.revision ? `, revision ${metadata.revision}` : ''}.`
+                            : `Attached a copy of ${file.name}. Its bytes are saved; package details were not recognized.`)
+                        } catch (error) {
+                          setPackageAttachStatus(error instanceof Error ? error.message : 'Could not attach this package.')
+                        }
+                      })()
+                    }}
+                  />
+                  <input
+                    ref={figuresInputRef}
+                    type="file"
+                    accept="image/*,.pdf"
+                    multiple
+                    hidden
+                    data-testid="experiment-figures-input"
+                    onChange={(event) => {
+                      const files = Array.from(event.currentTarget.files ?? [])
+                      event.currentTarget.value = ''
+                      if (!files.length) return
+                      void onAddAttachments(entry.id, files).then(() => {
+                        setPackageAttachStatus(`Added ${files.length} figure ${files.length === 1 ? 'file' : 'files'} to this note.`)
+                      })
+                    }}
+                  />
+                </>
+              )}
+              {packageAttachStatus && <div className="muted tiny" role="status" style={{ marginTop: 8 }}>{packageAttachStatus}</div>}
             </div>
             {attachments.length === 0 && (
               <div className="file-drop-empty">
@@ -7647,7 +7937,9 @@ function EditorPane({
                 {attachments.map((file) => {
                   const localUrl = attachmentUrls[file.id]
                   const isRemoteOnly = attachmentIsRemoteAvailable(file, localUrl)
-                  const availabilityLabel = isRemoteOnly
+                  const availabilityLabel = file.offlineUnavailable
+                    ? 'Unavailable offline'
+                    : isRemoteOnly
                     ? 'Drive only'
                     : file.cacheKey || file.cachedPath || localUrl
                       ? 'Available offline'
@@ -7659,6 +7951,12 @@ function EditorPane({
                     <div className="attachment-icon"><UiIcon name="paperclip" /></div>
                     <div className="attachment-body">
                       <div className="title-sm">{file.filename}</div>
+                      {file.portablePackage && (
+                        <div className="muted tiny" data-testid="experiment-revision-label">
+                          EasyLab {file.portablePackage.system} · {file.portablePackage.name || file.filename}
+                          {file.portablePackage.revision ? ` · revision ${file.portablePackage.revision}` : ''}
+                        </div>
+                      )}
                       <div className="attachment-row-meta">
                         <span>{file.type.toUpperCase()} · {file.filesize}</span>
                         <span>{file.source ? `Added from ${file.source}` : 'Added manually'}</span>
@@ -7668,7 +7966,9 @@ function EditorPane({
                       {availabilityLabel}
                     </span>
                     <div className="attachment-actions">
-                      {isRemoteOnly ? (
+                      {file.offlineUnavailable ? (
+                        <button className="pill soft" type="button" disabled aria-label={`Unavailable offline: ${file.filename}`}>Unavailable</button>
+                      ) : isRemoteOnly ? (
                         <button className="pill soft" type="button" onClick={() => onDownloadAttachment(file.id)}>
                           Download
                         </button>
@@ -8644,6 +8944,14 @@ function AuthGate({
 }
 
 function SyncPane({
+  localWorkspace,
+  cachedNotebookSources,
+  cachedSourcesLoaded,
+  selectedCachedSourceId,
+  cachedSourceStatus,
+  onPreviewCachedNotebooks,
+  onSelectCachedSource,
+  onCopyCachedNotebook,
   driveConnection,
   onDriveConnectionChange,
   onRunDriveSync,
@@ -8661,6 +8969,14 @@ function SyncPane({
   onImportBackup,
   onResolveConflict,
 }: {
+  localWorkspace: boolean
+  cachedNotebookSources: CachedNotebookSource[]
+  cachedSourcesLoaded: boolean
+  selectedCachedSourceId: string
+  cachedSourceStatus: string
+  onPreviewCachedNotebooks: () => Promise<void>
+  onSelectCachedSource: (sourceId: string) => void
+  onCopyCachedNotebook: (sourceId: string) => void
   driveConnection: DriveConnectionState
   onDriveConnectionChange: React.Dispatch<React.SetStateAction<DriveConnectionState>>
   onRunDriveSync: () => Promise<void>
@@ -8776,6 +9092,138 @@ function SyncPane({
     storageHealth.supported &&
     typeof navigator !== 'undefined' &&
     typeof navigator.storage?.persist === 'function'
+
+  if (localWorkspace) {
+    const selectedCachedSource = cachedNotebookSources.find((source) => source.id === selectedCachedSourceId)
+    const cachedEntries = selectedCachedSource
+      ? Object.values(selectedCachedSource.snapshot.entries).sort((a, b) => entrySortTimestamp(b) - entrySortTimestamp(a))
+      : []
+    const unavailableAttachments = selectedCachedSource
+      ? selectedCachedSource.snapshot.attachments.length - selectedCachedSource.availableAttachmentIds.length
+      : 0
+
+    return (
+      <main className="panel editor connected-workspace local-workspace-pane" data-testid="sync-pane">
+        <div className="connected-page-head">
+          <div>
+            <div className="eyebrow">Notebook storage</div>
+            <h1>Local notebook</h1>
+            <p className="muted">Notes and copied files stay in this browser’s local storage. The workspace identity remains stable when you close and reopen it.</p>
+          </div>
+        </div>
+        <section className="connected-card" data-testid="local-workspace-card">
+          <div className="section-title">This device</div>
+          <div className="connected-table">
+            <div className="connected-table-row"><span>Workspace</span><strong data-testid="local-workspace-identity" data-workspace-scope={LOCAL_WORKSPACE_SCOPE}>This browser</strong></div>
+            <div className="connected-table-row"><span>Saved notes</span><strong>{manifest.entryCount}</strong></div>
+            <div className="connected-table-row"><span>Copied attachments</span><strong>{manifest.attachmentCount}</strong></div>
+            <div className="connected-table-row"><span>Cloud requests</span><strong>Off while using this workspace</strong></div>
+          </div>
+        </section>
+
+        <section className="connected-card" data-testid="cached-notes-preview">
+          <div className="section-title">Previously saved notes</div>
+          <p className="muted">Preview an existing on-device notebook cache first. Copying creates new local records and leaves that saved notebook untouched.</p>
+          <div className="settings-actions" style={{ marginTop: 10 }}>
+            <button className="ghost icon-btn" type="button" onClick={() => void onPreviewCachedNotebooks()}>
+              <span className="icon"><UiIcon name="search" /></span>
+              {cachedSourcesLoaded ? 'Refresh preview' : 'Preview saved notes'}
+            </button>
+          </div>
+          {cachedSourceStatus && <div className="muted tiny" role="status" style={{ marginTop: 10 }}>{cachedSourceStatus}</div>}
+          {cachedNotebookSources.length > 0 && (
+            <>
+              <label className="field" style={{ marginTop: 12 }}>
+                <span>Saved notebook</span>
+                <select value={selectedCachedSourceId} onChange={(event) => onSelectCachedSource(event.currentTarget.value)}>
+                  {cachedNotebookSources.map((source) => (
+                    <option key={source.id} value={source.id}>{source.label}</option>
+                  ))}
+                </select>
+              </label>
+              {selectedCachedSource && (
+                <>
+                  <div className="connected-table" style={{ marginTop: 12 }}>
+                    <div className="connected-table-row"><span>Notes</span><strong>{cachedEntries.length}</strong></div>
+                    <div className="connected-table-row"><span>Attachments available to copy</span><strong>{selectedCachedSource.availableAttachmentIds.length}</strong></div>
+                    <div className="connected-table-row"><span>Attachments unavailable</span><strong>{unavailableAttachments}</strong></div>
+                  </div>
+                  <ul className="connected-list" data-testid="cached-note-list">
+                    {cachedEntries.slice(0, 8).map((entry) => (
+                      <li key={entry.id} className="connected-list-item">
+                        <span>{entry.dateBucket}</span>
+                        <strong>{entry.title || 'Untitled note'}</strong>
+                      </li>
+                    ))}
+                  </ul>
+                  <button
+                    className="accent icon-btn"
+                    type="button"
+                    onClick={() => onCopyCachedNotebook(selectedCachedSource.id)}
+                    disabled={journalCoreStatus === 'loading'}
+                  >
+                    <span className="icon"><UiIcon name="download" /></span>
+                    Copy these notes here
+                  </button>
+                </>
+              )}
+            </>
+          )}
+        </section>
+
+        <div className="connected-grid two">
+          <section className="connected-card" data-testid="storage-health-card">
+            <div className="section-title">Local storage</div>
+            <div className="connected-table storage-health-table">
+              <div className="connected-table-row"><span>Storage access</span><strong>{storageHealth.supported ? 'Available' : storageHealth.checked ? 'Not available' : 'Checking'}</strong></div>
+              <div className="connected-table-row"><span>Persistence</span><strong data-testid="storage-persistence-status">{persistenceLabel}</strong></div>
+              <div className="connected-table-row"><span>Estimated local usage</span><strong>{storageHealth.usage == null ? 'Unknown' : fileSizeLabel(storageHealth.usage)}</strong></div>
+              <div className="connected-table-row"><span>Estimated quota</span><strong>{storageHealth.quota == null ? 'Unknown' : fileSizeLabel(storageHealth.quota)}</strong></div>
+            </div>
+            <div className="settings-actions" style={{ marginTop: 10 }}>
+              <button className="ghost icon-btn" type="button" onClick={() => void requestPersistentStorage()} disabled={!canRequestPersistentStorage || storagePersisting} data-testid="storage-persist-button">
+                <span className="icon"><UiIcon name="save" /></span>
+                {storagePersisting ? 'Requesting…' : 'Keep offline copy'}
+              </button>
+            </div>
+            {storageHealth.error && <div className="settings-note warning-note">{storageHealth.error}</div>}
+          </section>
+          <section className="connected-card">
+            <div className="section-title">Backup and restore</div>
+            <p className="muted">The portable backup includes note data and the actual copied attachment files.</p>
+            <div className="settings-actions" style={{ marginTop: 10 }}>
+              <button className="ghost icon-btn" type="button" onClick={() => void onExportBackup()}>
+                <span className="icon"><UiIcon name="download" /></span>
+                Export backup
+              </button>
+              <button className="ghost icon-btn" type="button" onClick={() => backupInputRef.current?.click()}>
+                <span className="icon"><UiIcon name="folder" /></span>
+                Restore backup
+              </button>
+              <input ref={backupInputRef} type="file" accept="application/json,.json" style={{ display: 'none' }} data-testid="restore-backup-input" onChange={(event) => {
+                const file = event.currentTarget.files?.[0]
+                event.currentTarget.value = ''
+                if (file) void onImportBackup(file)
+              }} />
+            </div>
+            {backupStatus && <div className={backupStatus.ok ? 'settings-success' : 'settings-error'}>
+              {backupStatus.message}
+              {backupStatus.result && <span> Restored {backupStatus.result.entries} notes, {backupStatus.result.attachments} attachments, and {backupStatus.result.blobs} files.</span>}
+            </div>}
+          </section>
+        </div>
+        <section className="connected-card">
+          <div className="section-title">Notebook save status</div>
+          <div className="connected-table">
+            <div className="connected-table-row"><span>Local database</span><strong>{journalCoreStatus}</strong></div>
+            <div className="connected-table-row"><span>Saved from</span><strong>{journalCoreSource}</strong></div>
+            <div className="connected-table-row"><span>Waiting to save</span><strong>{journalCoreQueueCount}</strong></div>
+          </div>
+          {journalCoreError && <div className="settings-error">{journalCoreError}</div>}
+        </section>
+      </main>
+    )
+  }
 
   return (
     <main className="panel editor connected-workspace" data-testid="sync-pane">

@@ -217,6 +217,13 @@ export interface Attachment {
   sha256?: string
   cacheKey?: string
   driveFileId?: string
+  portablePackage?: {
+    system: 'qPCR analysis' | 'cDNA Calculator' | 'ELISA analysis' | 'qPCR Planner'
+    id?: string
+    name?: string
+    revision?: number
+  }
+  offlineUnavailable?: boolean
   syncStatus?: JournalSyncStatus
   createdAt?: string
   updatedAt?: string

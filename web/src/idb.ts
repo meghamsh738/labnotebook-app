@@ -85,6 +85,31 @@ async function readCachedFile(id: string, accountScope?: string): Promise<Blob |
   }
 }
 
+/** Read an existing attachment cache without claiming or modifying any legacy cache. */
+export async function getCachedFileReadonly(id: string, accountScope?: string): Promise<Blob | undefined> {
+  if (typeof indexedDB === 'undefined' || typeof indexedDB.databases !== 'function') return undefined
+  const dbName = scopedDbName(accountScope)
+  const databases = await indexedDB.databases()
+  if (!databases.some((database) => database.name === dbName)) return undefined
+
+  const db = await new Promise<IDBDatabase>((resolve, reject) => {
+    const request = indexedDB.open(dbName)
+    request.onsuccess = () => resolve(request.result)
+    request.onerror = () => reject(request.error)
+  })
+  try {
+    if (!db.objectStoreNames.contains(STORE)) return undefined
+    return await new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE, 'readonly')
+      const request = tx.objectStore(STORE).get(id)
+      request.onsuccess = () => resolve(request.result as Blob | undefined)
+      request.onerror = () => reject(request.error)
+    })
+  } finally {
+    db.close()
+  }
+}
+
 export async function getCachedFile(id: string, accountScope?: string): Promise<Blob | undefined> {
   const scoped = await readCachedFile(id, accountScope)
   if (scoped || !accountScope) return scoped
@@ -127,4 +152,9 @@ async function removeCachedFile(id: string, accountScope?: string): Promise<void
 export async function deleteCachedFile(id: string, accountScope?: string): Promise<void> {
   await removeCachedFile(id, accountScope)
   if (accountScope && canUseLegacyCache(accountScope)) await removeCachedFile(id)
+}
+
+/** Delete only from the requested cache namespace; never claim or touch legacy data. */
+export async function deleteCachedFileFromScope(id: string, accountScope?: string): Promise<void> {
+  await removeCachedFile(id, accountScope)
 }

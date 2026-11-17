@@ -1,7 +1,8 @@
 import path from 'node:path'
 import { defineConfig, devices } from '@playwright/test'
 
-const labnoteTestDataDir = path.join(process.cwd(), '.labnote-test-data')
+const labnoteTestDataDir = process.env.LABNOTE_DATA_DIR ?? path.join(process.cwd(), '.labnote-test-data')
+const previewPort = 18530
 
 export default defineConfig({
   testDir: './tests',
@@ -12,20 +13,20 @@ export default defineConfig({
   timeout: 30_000,
   expect: { timeout: 10_000 },
   use: {
-    baseURL: 'http://127.0.0.1:4173',
+    baseURL: `http://127.0.0.1:${previewPort}`,
     acceptDownloads: true,
     trace: 'on-first-retry',
     screenshot: 'only-on-failure',
     video: 'retain-on-failure',
   },
   webServer: {
-    command: 'npm run dev -- --host 127.0.0.1 --port 4173 --strictPort',
-    url: 'http://127.0.0.1:4173',
+    command: `npm run dev -- --host 127.0.0.1 --port ${previewPort} --strictPort`,
+    url: `http://127.0.0.1:${previewPort}`,
     env: {
       ...process.env,
       LABNOTE_DATA_DIR: labnoteTestDataDir,
     },
-    reuseExistingServer: true,
+    reuseExistingServer: false,
     timeout: 60_000,
   },
   projects: [
